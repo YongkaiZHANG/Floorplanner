@@ -1,5 +1,5 @@
 import React from 'react';
-import { FiX, FiCommand, FiMousePointer, FiLayers } from 'react-icons/fi';
+import { FiX, FiCommand, FiMousePointer, FiLayers, FiDownload } from 'react-icons/fi';
 
 interface TutorialModalProps {
   onClose: () => void;
@@ -8,10 +8,15 @@ interface TutorialModalProps {
 export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => {
   return (
     <div className="modal-overlay" style={{ zIndex: 1000 }}>
-      <div className="modal-content glass-panel" style={{ width: '600px', maxWidth: '90vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+      <div className="modal-content glass-panel" style={{ width: '650px', maxWidth: '90vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
         <div className="modal-header">
-          <h2 className="modal-title">Floorplanner Tutorial</h2>
-          <button className="modal-close-btn" onClick={onClose}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <h2 className="modal-title">Floorplanner Tutorial</h2>
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+              Designed & Developed by <strong>Yongkai Zhang</strong>
+            </span>
+          </div>
+          <button className="modal-close-btn" onClick={onClose} style={{ alignSelf: 'flex-start' }}>
             <FiX />
           </button>
         </div>
@@ -35,6 +40,16 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => {
               <li><strong>Pan (Move canvas):</strong> Click and drag the middle mouse button (or hold Space + Left click).</li>
               <li><strong>Zoom:</strong> Use your mouse wheel.</li>
             </ul>
+          </section>
+
+          <section style={{ marginBottom: '24px' }}>
+            <h3 style={{ color: '#38bdf8', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <FiDownload /> The Power of SVG Export
+            </h3>
+            <div style={{ background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.2)', padding: '12px 16px', borderRadius: '6px', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
+              Our SVG export is <strong>not just an image</strong>. When you click Export SVG, the entire floorplan layout, grid configurations, rulers, and metadata are seamlessly injected and embedded into the SVG file itself. <br/><br/>
+              This means you can drop the SVG into your design presentation, and later, simply click <strong>Import SVG</strong> to losslessly restore your complete, editable session right where you left off. It acts as both a visual asset and a project save file!
+            </div>
           </section>
 
           <section>
