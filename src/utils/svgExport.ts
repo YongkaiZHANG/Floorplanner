@@ -24,7 +24,16 @@ export const exportSVG = () => {
     updateBounds(r.endX * sf, r.endY * sf);
   });
   
-  const pad = 100;
+  state.instances.forEach((inst) => {
+    const m = state.masterCells[inst.cellId];
+    if (m) {
+       const radius = Math.max(m.width, m.height) * sf;
+       updateBounds(inst.x * sf - radius, inst.y * sf - radius);
+       updateBounds(inst.x * sf + radius, inst.y * sf + radius);
+    }
+  });
+  
+  const pad = Math.max(100, th * 0.1, tw * 0.1);
   minX -= pad; maxX += pad; minY -= pad; maxY += pad;
   
   const vbW = maxX - minX;
@@ -47,6 +56,17 @@ export const exportSVG = () => {
   
   // Top ASIC
   svg += `  <rect x="${-tw/2}" y="${-th/2}" width="${tw}" height="${th}" fill="#ffffff" stroke="#475569" stroke-width="2" stroke-dasharray="10,10" />\n`;
+  
+  // Top ASIC Labels
+  // Note: Since the parent group is inverted (scale(1, -1)), the text elements need to be inverted again
+  // to be readable, and their Y positions are inverted as well.
+  const labelY = -(th/2 + 25);
+  const blY = -(-th/2 - 10);
+  
+  svg += `  <text x="${-tw/2}" y="${labelY}" fill="#94a3b8" font-family="Inter, sans-serif" font-size="20" font-weight="600" dominant-baseline="auto" transform="scale(1, -1)">${state.topCellName} (${state.topWidth}um x ${state.topHeight}um)</text>\n`;
+  svg += `  <text x="${tw/2}" y="${labelY}" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="14" dominant-baseline="auto" text-anchor="end" transform="scale(1, -1)">TR: (${state.topWidth/2}, ${state.topHeight/2})</text>\n`;
+  svg += `  <text x="${-tw/2}" y="${blY}" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="14" dominant-baseline="hanging" transform="scale(1, -1)">BL: (${-state.topWidth/2}, ${-state.topHeight/2})</text>\n`;
+
   
   // Instances
   const sortedInstances = [...state.instances].sort((a, b) => {

@@ -9,7 +9,15 @@ const PRESET_COLORS = [
 ];
 
 export const Sidebar: React.FC = () => {
-  const { masterCells, instances, selectedInstanceId, setSelectedInstance, addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, showCreateModal, setShowCreateModal, showInstantiateModal, setShowInstantiateModal, setPlacement, leftSidebarPinned, setLeftSidebarPinned } = useStore();
+  const { 
+    topWidth, topHeight, topLibName, topCellName, 
+    setTopDimensions, setTopNames,
+    masterCells, instances, selectedInstanceId, setSelectedInstance, 
+    addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, 
+    showCreateModal, setShowCreateModal, 
+    showInstantiateModal, setShowInstantiateModal, 
+    setPlacement, leftSidebarPinned, setLeftSidebarPinned 
+  } = useStore();
   const [isHovered, setIsHovered] = useState(false);
   const hoverTimeout = useRef<number | null>(null);
   
@@ -21,6 +29,12 @@ export const Sidebar: React.FC = () => {
   const [newWidth, setNewWidth] = useState('10');
   const [newHeight, setNewHeight] = useState('10');
   const [newColor, setNewColor] = useState(PRESET_COLORS[0]);
+
+  const [showEditTopModal, setShowEditTopModal] = useState(false);
+  const [editTopLibName, setEditTopLibName] = useState(topLibName);
+  const [editTopCellName, setEditTopCellName] = useState(topCellName);
+  const [editTopWidth, setEditTopWidth] = useState(topWidth.toString());
+  const [editTopHeight, setEditTopHeight] = useState(topHeight.toString());
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,6 +86,30 @@ export const Sidebar: React.FC = () => {
       onMouseLeave={handleMouseLeave}
     >
       <div className="sidebar glass-panel">
+        <div className="sidebar-section">
+          <div className="section-header">
+            <h3 className="section-title"><FiLayers /> Top Cell</h3>
+            <button className="icon-btn" onClick={() => {
+              setEditTopLibName(topLibName);
+              setEditTopCellName(topCellName);
+              setEditTopWidth(topWidth.toString());
+              setEditTopHeight(topHeight.toString());
+              setShowEditTopModal(true);
+            }} title="Edit Top Cell">
+              <FiEdit2 />
+            </button>
+          </div>
+          <div style={{padding: '0 8px'}}>
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px'}}>
+              <span className="cell-name">{topCellName}</span>
+              <span className="lib-badge">{topLibName}</span>
+            </div>
+            <div className="size-badge" style={{display: 'inline-block'}}>
+              {topWidth.toFixed(1)}x{topHeight.toFixed(1)}
+            </div>
+          </div>
+        </div>
+
         <div className="sidebar-section">
           <div className="section-header">
             <h3 className="section-title"><FiLayers /> Master Cells</h3>
@@ -261,6 +299,48 @@ export const Sidebar: React.FC = () => {
             </div>
           </div>
         )}
+
+    {showEditTopModal && (
+      <div className="modal-overlay">
+        <div className="modal-content glass-panel">
+          <div className="modal-header">
+            <h2 className="modal-title">Edit Top Cell</h2>
+            <button type="button" className="modal-close-btn" onClick={() => setShowEditTopModal(false)}>
+              <FiX />
+            </button>
+          </div>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            setTopNames(editTopLibName, editTopCellName);
+            setTopDimensions(parseFloat(editTopWidth), parseFloat(editTopHeight));
+            setShowEditTopModal(false);
+          }}>
+            <div className="form-group">
+              <label className="label">Library Name</label>
+              <input className="input-field" value={editTopLibName} onChange={e => setEditTopLibName(e.target.value)} required />
+            </div>
+            <div className="form-group">
+              <label className="label">Cell Name</label>
+              <input className="input-field" value={editTopCellName} onChange={e => setEditTopCellName(e.target.value)} required />
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="label">Width (um)</label>
+                <input type="number" step="any" className="input-field" value={editTopWidth} onChange={e => setEditTopWidth(e.target.value)} required />
+              </div>
+              <div className="form-group">
+                <label className="label">Height (um)</label>
+                <input type="number" step="any" className="input-field" value={editTopHeight} onChange={e => setEditTopHeight(e.target.value)} required />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => setShowEditTopModal(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Save Changes</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
     </>
   );
 };

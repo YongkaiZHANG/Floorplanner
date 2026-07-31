@@ -33,6 +33,8 @@ type ProjectState = {
   
   topWidth: number;
   topHeight: number;
+  topLibName: string;
+  topCellName: string;
   
   masterCells: Record<string, Cell>;
   instances: Instance[];
@@ -52,6 +54,7 @@ type ProjectState = {
   setGridSize: (size: number) => void;
   setAppMode: (mode: 'select' | 'measure' | 'place') => void;
   setTopDimensions: (w: number, h: number) => void;
+  setTopNames: (lib: string, cell: string) => void;
   setShowCreateModal: (show: boolean) => void;
   setShowInstantiateModal: (show: boolean) => void;
   setLeftSidebarPinned: (pinned: boolean) => void;
@@ -146,6 +149,8 @@ export const useStore = create<ProjectState>((set) => ({
   
   topWidth: 100, 
   topHeight: 100,
+  topLibName: 'chip_lib',
+  topCellName: 'top_asic',
   
   masterCells: {},
   instances: [],
@@ -164,6 +169,7 @@ export const useStore = create<ProjectState>((set) => ({
   setGridSize: (size) => set({ gridSize: size }),
   setAppMode: (mode) => set({ appMode: mode }),
   setTopDimensions: (w, h) => set({ topWidth: w, topHeight: h }),
+  setTopNames: (lib, cell) => set({ topLibName: lib, topCellName: cell }),
   setShowCreateModal: (show) => set({ showCreateModal: show }),
   setShowInstantiateModal: (show) => set({ showInstantiateModal: show }),
   setLeftSidebarPinned: (pinned) => set({ leftSidebarPinned: pinned }),
@@ -288,6 +294,8 @@ export const useStore = create<ProjectState>((set) => ({
     gridSize: data.gridSize ?? state.gridSize,
     topWidth: data.topWidth ?? state.topWidth,
     topHeight: data.topHeight ?? state.topHeight,
+    topLibName: data.topLibName ?? state.topLibName,
+    topCellName: data.topCellName ?? state.topCellName,
     masterCells: data.masterCells ?? {},
     instances: data.instances ?? [],
     rulers: data.rulers ?? [],

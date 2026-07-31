@@ -30,6 +30,7 @@ export const FloorplanCanvas: React.FC = () => {
     setAppMode,
     topWidth,
     topHeight,
+    topCellName,
     masterCells, 
     instances,
     rulers,
@@ -652,7 +653,7 @@ export const FloorplanCanvas: React.FC = () => {
           <Line points={[-100000, 0, 100000, 0]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.8} />
           <Line points={[0, -100000, 0, 100000]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.8} />
           <Text
-            text={`top_asic (${topWidth}um x ${topHeight}um)`}
+            text={`${topCellName} (${topWidth}um x ${topHeight}um)`}
             x={-tw / 2}
             y={th / 2 + 25 / stageScale}
             fill="#94a3b8"
