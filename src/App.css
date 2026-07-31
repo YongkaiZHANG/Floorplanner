@@ -1,0 +1,27 @@
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background-color: var(--bg-main);
+  overflow: hidden;
+}
+
+.main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.sidebar-wrapper {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.properties-wrapper {
+  position: absolute;
+  right: 0;
+  top: 0;
+}
