@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiPlusSquare, FiEdit2, FiTrash2, FiX, FiPaperclip } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip } from 'react-icons/fi';
 import './Sidebar.css';
 
 const PRESET_COLORS = [
@@ -96,7 +96,7 @@ export const Sidebar: React.FC = () => {
               setEditTopHeight(topHeight.toString());
               setShowEditTopModal(true);
             }} title="Edit Top Cell">
-              <FiEdit2 />
+              <FiSettings />
             </button>
           </div>
           <div style={{padding: '0 8px'}}>
@@ -132,10 +132,10 @@ export const Sidebar: React.FC = () => {
                     {cell.width.toFixed(1)}x{cell.height.toFixed(1)}
                   </div>
                   <button className="icon-btn" onClick={() => openEditModal(cell)} title="Edit IP Definition">
-                    <FiEdit2 />
+                    <FiSettings />
                   </button>
                   <button className="icon-btn" style={{color: '#3b82f6'}} onClick={() => placeInstance(cell.id)} title="Instantiate">
-                    <FiPlusSquare />
+                    <FiCrosshair />
                   </button>
                 </div>
               </li>
