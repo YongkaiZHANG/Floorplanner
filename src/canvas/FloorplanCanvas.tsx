@@ -610,7 +610,7 @@ export const FloorplanCanvas: React.FC = () => {
             text={`top_asic (${topWidth}um x ${topHeight}um)`}
             x={-tw / 2}
             y={th / 2 + 25 / stageScale}
-            fill="#475569"
+            fill="#94a3b8"
             fontSize={16 / stageScale}
             fontFamily="Inter"
             scaleY={-1}
@@ -618,9 +618,11 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Top Right Coordinate */}
           <Text
             text={`(${topWidth/2}, ${topHeight/2})`}
-            x={tw / 2 - 60 / stageScale}
-            y={th / 2 - 10 / stageScale}
-            fill="#475569"
+            x={tw / 2 - 200 / stageScale}
+            y={th / 2 + 25 / stageScale}
+            width={200 / stageScale}
+            align="right"
+            fill="#94a3b8"
             fontSize={12 / stageScale}
             fontFamily="Inter"
             scaleY={-1}
@@ -628,9 +630,9 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Bottom Left Coordinate */}
           <Text
             text={`(${-topWidth/2}, ${-topHeight/2})`}
-            x={-tw / 2 + 10 / stageScale}
-            y={-th / 2 + 15 / stageScale}
-            fill="#475569"
+            x={-tw / 2}
+            y={-th / 2 - 10 / stageScale}
+            fill="#94a3b8"
             fontSize={12 / stageScale}
             fontFamily="Inter"
             scaleY={-1}
