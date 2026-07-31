@@ -54,7 +54,22 @@ export const exportSVG = () => {
   const vbW = maxX - minX;
   const vbH = maxY - minY;
   
+  // Embed full project state as metadata so it can be re-imported
+  const stateData = {
+    gridSize: state.gridSize,
+    topWidth: state.topWidth,
+    topHeight: state.topHeight,
+    topLibName: state.topLibName,
+    topCellName: state.topCellName,
+    masterCells: state.masterCells,
+    instances: state.instances,
+    rulers: state.rulers,
+  };
+
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${-maxY} ${vbW} ${vbH}" style="background-color: #f8fafc;">\n`;
+  svg += `<metadata class="floorplan-data">\n`;
+  svg += `<![CDATA[${JSON.stringify(stateData)}]]>\n`;
+  svg += `</metadata>\n`;
   svg += `<g transform="scale(1, -1)">\n`;
   
   // Top ASIC Boundary
