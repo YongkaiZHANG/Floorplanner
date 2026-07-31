@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
+import { exportSVG } from '../utils/svgExport';
 import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import './Topbar.css';
@@ -103,6 +104,9 @@ export const Topbar: React.FC = () => {
           <FiUpload /> Import SVG
           <input type="file" accept=".svg,.flp,.json" style={{ display: 'none' }} onChange={handleLoadProject} />
         </label>
+        <button className="btn" onClick={exportSVG} style={{ display: 'flex', alignItems: 'center', gap: '8px' }} title="Export SVG Project">
+          <FiDownload /> Export SVG
+        </button>
         
         <div className="vertical-divider" style={{ width: '1px', height: '24px', backgroundColor: 'var(--border-color)', margin: '0 8px' }}></div>
 
