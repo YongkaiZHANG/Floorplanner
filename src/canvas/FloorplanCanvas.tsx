@@ -21,6 +21,7 @@ export const FloorplanCanvas: React.FC = () => {
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [measureStart, setMeasureStart] = useState<{ x: number; y: number } | null>(null);
   const [currentRuler, setCurrentRuler] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
+  const [hoveredRulerId, setHoveredRulerId] = useState<string | null>(null);
   const [snapIndicator, setSnapIndicator] = useState<{ x: number; y: number } | null>(null);
 
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
@@ -40,6 +41,7 @@ export const FloorplanCanvas: React.FC = () => {
     setSelectedInstance,
     deleteInstance,
     addRuler,
+    deleteRuler,
     clearRulers,
     placementMasterId,
     placementOrientation,
@@ -392,15 +394,17 @@ export const FloorplanCanvas: React.FC = () => {
     updateInstancePosition(instanceId, umX, umY);
   };
 
-  const renderRuler = (r: { startX: number, startY: number, endX: number, endY: number }, key: string) => {
+  const renderRuler = (r: { id?: string; startX: number, startY: number, endX: number, endY: number }, key: string, onDelete?: () => void) => {
     const sx = r.startX * SCALE_FACTOR;
     const sy = r.startY * SCALE_FACTOR;
     const ex = r.endX * SCALE_FACTOR;
     const ey = r.endY * SCALE_FACTOR;
+    const isHovered = r.id != null && hoveredRulerId === r.id;
+    const rulerColor = isHovered ? '#fbbf24' : '#eab308';
     
     const dx = r.endX - r.startX;
     const dy = r.endY - r.startY;
-    const dist = Math.sqrt(dx*dx + dy*dy);
+    const dist = Math.hypot(dx, dy);
     
     const ticks = [];
     const texts = [];
@@ -443,7 +447,7 @@ export const FloorplanCanvas: React.FC = () => {
           <Line 
             key={`tick-line-${key}-${i}`}
             points={[tx - nx * tickLen, ty - ny * tickLen, tx + nx * tickLen, ty + ny * tickLen]} 
-            stroke="#eab308" 
+            stroke={rulerColor} 
             strokeWidth={1 / stageScale} 
           />
         );
@@ -456,7 +460,7 @@ export const FloorplanCanvas: React.FC = () => {
             x={tx + nx * 10 / stageScale}
             y={ty + ny * 10 / stageScale}
             text={strVal}
-            fill="#eab308"
+            fill={rulerColor}
             fontSize={12 / stageScale}
             fontFamily="monospace"
             scaleY={-1}
@@ -468,10 +472,10 @@ export const FloorplanCanvas: React.FC = () => {
       // Start and End perpendicular ticks (End markers)
       const endTickLen = 10 / stageScale;
       ticks.push(
-        <Line key={`start-tick-${key}`} points={[sx - nx * endTickLen, sy - ny * endTickLen, sx + nx * endTickLen, sy + ny * endTickLen]} stroke="#eab308" strokeWidth={1.5 / stageScale} />
+        <Line key={`start-tick-${key}`} points={[sx - nx * endTickLen, sy - ny * endTickLen, sx + nx * endTickLen, sy + ny * endTickLen]} stroke={rulerColor} strokeWidth={1.5 / stageScale} />
       );
       ticks.push(
-        <Line key={`end-tick-${key}`} points={[ex - nx * endTickLen, ey - ny * endTickLen, ex + nx * endTickLen, ey + ny * endTickLen]} stroke="#eab308" strokeWidth={1.5 / stageScale} />
+        <Line key={`end-tick-${key}`} points={[ex - nx * endTickLen, ey - ny * endTickLen, ex + nx * endTickLen, ey + ny * endTickLen]} stroke={rulerColor} strokeWidth={1.5 / stageScale} />
       );
 
       // Start text (0)
@@ -481,7 +485,7 @@ export const FloorplanCanvas: React.FC = () => {
           x={sx + nx * 10 / stageScale}
           y={sy + ny * 10 / stageScale}
           text="0"
-          fill="#eab308"
+          fill={rulerColor}
           fontSize={12 / stageScale}
           fontFamily="monospace"
           scaleY={-1}
@@ -515,7 +519,7 @@ export const FloorplanCanvas: React.FC = () => {
           x={ex + nx * 10 / stageScale}
           y={ey + ny * 10 / stageScale}
           text={endTextString}
-          fill="#eab308"
+          fill={rulerColor}
           fontSize={14 / stageScale}
           fontStyle="bold"
           fontFamily="monospace"
@@ -526,13 +530,47 @@ export const FloorplanCanvas: React.FC = () => {
     }
 
     return (
-      <Group key={key}>
+      <Group
+        key={key}
+        onMouseEnter={onDelete ? () => setHoveredRulerId(r.id ?? null) : undefined}
+        onMouseLeave={onDelete ? () => setHoveredRulerId(null) : undefined}
+        onClick={onDelete ? (e) => {
+          e.cancelBubble = true;
+          onDelete();
+          setHoveredRulerId(null);
+        } : undefined}
+      >
+        {/* Wide transparent hit area for easy clicking */}
+        {onDelete && (
+          <Line
+            points={[sx, sy, ex, ey]}
+            stroke="transparent"
+            strokeWidth={14 / stageScale}
+            hitStrokeWidth={14 / stageScale}
+          />
+        )}
         {/* Main Line */}
-        <Line points={[sx, sy, ex, ey]} stroke="#eab308" strokeWidth={1 / stageScale} />
+        <Line points={[sx, sy, ex, ey]} stroke={rulerColor} strokeWidth={isHovered ? 2 / stageScale : 1 / stageScale} listening={false} />
         {/* Ticks and Markers */}
         {ticks}
         {/* Texts */}
         {texts}
+        {/* Delete hint on hover */}
+        {isHovered && onDelete && (
+          <Text
+            x={(sx + ex) / 2}
+            y={(sy + ey) / 2}
+            text="✕ click to delete"
+            fill="#fbbf24"
+            fontSize={11 / stageScale}
+            fontFamily="Inter"
+            scaleY={-1}
+            offsetY={-5 / stageScale}
+            offsetX={0}
+            align="center"
+            listening={false}
+          />
+        )}
       </Group>
     );
   };
@@ -802,7 +840,7 @@ export const FloorplanCanvas: React.FC = () => {
           })}
 
           {/* Rulers */}
-          {rulers.map(r => renderRuler(r, r.id))}
+          {rulers.map(r => renderRuler(r, r.id, () => deleteRuler(r.id)))}
           {isMeasuring && currentRuler && renderRuler(currentRuler, 'temp_ruler')}
 
           {/* Snap Indicator */}

@@ -72,6 +72,7 @@ type ProjectState = {
   deleteInstance: (id: string) => void;
   
   addRuler: (startX: number, startY: number, endX: number, endY: number) => void;
+  deleteRuler: (id: string) => void;
   clearRulers: () => void;
   
   undo: () => void;
@@ -270,7 +271,10 @@ export const useStore = create<ProjectState>((set) => ({
     pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
     rulers: [...state.rulers, { id: uuidv4(), startX, startY, endX, endY }]
   })),
-
+  deleteRuler: (id) => set((state) => ({
+    pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
+    rulers: state.rulers.filter(r => r.id !== id)
+  })),
   clearRulers: () => set((state) => ({ 
     pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
     rulers: [] 
