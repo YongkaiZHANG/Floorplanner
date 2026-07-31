@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
-import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiHelpCircle } from 'react-icons/fi';
+import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import './Topbar.css';
 
@@ -120,8 +120,8 @@ export const Topbar: React.FC = () => {
           />
         </div>
         <div className="vertical-divider" style={{ width: '1px', height: '24px', backgroundColor: 'var(--border-color)', margin: '0 4px' }}></div>
-        <button className="icon-btn" onClick={() => setShowTutorial(true)} title="Tutorial & Shortcuts">
-          <FiHelpCircle />
+        <button className="btn" onClick={() => setShowTutorial(true)} style={{ backgroundColor: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+          <FiBookOpen /> Shortcuts
         </button>
         <button className="btn preview-btn" onClick={handlePreview} style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
           <FiCode /> Preview Code
@@ -177,10 +177,6 @@ export const Topbar: React.FC = () => {
               </pre>
             </div>
             <div className="modal-actions">
-              <button className="icon-btn" onClick={() => setShowTutorial(true)} title="Tutorial & Shortcuts">
-                <FiHelpCircle />
-              </button>
-              <div className="divider"></div>
               <button className="btn" onClick={() => setShowCodePreview(false)}>Close</button>
               <button className="btn" onClick={() => { 
                 navigator.clipboard.writeText(generatedCode);
