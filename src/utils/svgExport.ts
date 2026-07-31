@@ -7,6 +7,11 @@ export const exportSVG = () => {
   const tw = state.topWidth * sf;
   const th = state.topHeight * sf;
   
+  // Base font size for readability
+  const baseFS = Math.max(tw, th) * 0.015;
+  const smallFS = baseFS * 0.7;
+  const largeFS = baseFS * 1.5;
+
   let minX = -tw/2;
   let maxX = tw/2;
   let minY = -th/2;
@@ -32,42 +37,37 @@ export const exportSVG = () => {
        updateBounds(inst.x * sf + radius, inst.y * sf + radius);
     }
   });
+
+  // SVG Data Table computation
+  const tableStartY = minY - baseFS * 4;
+  const rowHeight = baseFS * 2;
+  const tableRows = state.instances.length + 3; // + header + topcell + spacing
+  const tableHeight = tableRows * rowHeight;
   
-  const pad = Math.max(100, th * 0.1, tw * 0.1);
+  // Ensure the bounding box includes the table
+  updateBounds(minX, tableStartY - tableHeight - rowHeight);
+  updateBounds(minX + tw, tableStartY - tableHeight - rowHeight);
+  
+  const pad = Math.max(tw * 0.1, th * 0.1, baseFS * 5);
   minX -= pad; maxX += pad; minY -= pad; maxY += pad;
   
   const vbW = maxX - minX;
   const vbH = maxY - minY;
   
-  const stateData = {
-    gridSize: state.gridSize,
-    topWidth: state.topWidth,
-    topHeight: state.topHeight,
-    masterCells: state.masterCells,
-    instances: state.instances,
-    rulers: state.rulers,
-  };
-
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${-maxY} ${vbW} ${vbH}">\n`;
-  svg += `<metadata class="floorplan-data">\n`;
-  svg += `<![CDATA[${JSON.stringify(stateData)}]]>\n`;
-  svg += `</metadata>\n`;
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${-maxY} ${vbW} ${vbH}" style="background-color: #111111;">\n`;
   svg += `<g transform="scale(1, -1)">\n`;
   
-  // Top ASIC
-  svg += `  <rect x="${-tw/2}" y="${-th/2}" width="${tw}" height="${th}" fill="#ffffff" stroke="#475569" stroke-width="2" stroke-dasharray="10,10" vector-effect="non-scaling-stroke" />\n`;
+  // Top ASIC Boundary
+  svg += `  <rect x="${-tw/2}" y="${-th/2}" width="${tw}" height="${th}" fill="#000000" stroke="#475569" stroke-width="2" stroke-dasharray="10,10" vector-effect="non-scaling-stroke" />\n`;
   
   // Top ASIC Labels
-  // Note: Since the parent group is inverted (scale(1, -1)), the text elements need to be inverted again
-  // to be readable, and their Y positions are inverted as well.
-  const labelY = -(th/2 + 25);
-  const blY = -(-th/2 - 10);
+  const labelY = -(th/2 + baseFS*1.5);
+  const blY = -(-th/2 - baseFS);
   
-  svg += `  <text x="${-tw/2}" y="${labelY}" fill="#94a3b8" font-family="Inter, sans-serif" font-size="20" font-weight="600" dominant-baseline="auto" transform="scale(1, -1)">${state.topCellName} (${state.topWidth}um x ${state.topHeight}um)</text>\n`;
-  svg += `  <text x="${tw/2}" y="${labelY}" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="14" dominant-baseline="auto" text-anchor="end" transform="scale(1, -1)">TR: (${state.topWidth/2}, ${state.topHeight/2})</text>\n`;
-  svg += `  <text x="${-tw/2}" y="${blY}" fill="#cbd5e1" font-family="Inter, sans-serif" font-size="14" dominant-baseline="hanging" transform="scale(1, -1)">BL: (${-state.topWidth/2}, ${-state.topHeight/2})</text>\n`;
+  svg += `  <text x="${-tw/2}" y="${labelY}" fill="#e2e8f0" font-family="Inter, sans-serif" font-size="${largeFS}" font-weight="600" dominant-baseline="auto" transform="scale(1, -1)">${state.topCellName} (${state.topWidth}um x ${state.topHeight}um)</text>\n`;
+  svg += `  <text x="${tw/2}" y="${labelY}" fill="#94a3b8" font-family="Inter, sans-serif" font-size="${baseFS}" dominant-baseline="auto" text-anchor="end" transform="scale(1, -1)">TR: (${state.topWidth/2}, ${state.topHeight/2})</text>\n`;
+  svg += `  <text x="${-tw/2}" y="${blY}" fill="#94a3b8" font-family="Inter, sans-serif" font-size="${baseFS}" dominant-baseline="hanging" transform="scale(1, -1)">BL: (${-state.topWidth/2}, ${-state.topHeight/2})</text>\n`;
 
-  
   // Instances
   const sortedInstances = [...state.instances].sort((a, b) => {
     const mA = state.masterCells[a.cellId];
@@ -98,11 +98,11 @@ export const exportSVG = () => {
     
     const transform = `translate(${x} ${y}) rotate(${rot}) scale(${scaleX} ${scaleY})`;
     svg += `  <g transform="${transform}">\n`;
-    svg += `    <rect width="${w}" height="${h}" fill="${m.color}" fill-opacity="0.5" stroke="#334155" stroke-width="1" vector-effect="non-scaling-stroke" />\n`;
+    svg += `    <rect width="${w}" height="${h}" fill="${m.color}" fill-opacity="0.8" stroke="#f8fafc" stroke-width="1" vector-effect="non-scaling-stroke" />\n`;
     
-    const fontSize = Math.min(w * 0.15, h * 0.25, 40);
-    svg += `    <text x="${w/2}" y="${h/2 - fontSize*0.6}" fill="rgba(15, 23, 42, 0.9)" font-family="Inter, sans-serif" font-weight="bold" font-size="${fontSize}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${m.cellName}</text>\n`;
-    svg += `    <text x="${w/2}" y="${h/2 + fontSize*0.6}" fill="rgba(15, 23, 42, 0.7)" font-family="Inter, sans-serif" font-weight="normal" font-size="${fontSize * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${m.width}x${m.height}</text>\n`;
+    const instFS = Math.min(w * 0.15, h * 0.25, baseFS * 2);
+    svg += `    <text x="${w/2}" y="${h/2 - instFS*0.6}" fill="#0f172a" font-family="Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${m.cellName}</text>\n`;
+    svg += `    <text x="${w/2}" y="${h/2 + instFS*0.6}" fill="#1e293b" font-family="Inter, sans-serif" font-weight="normal" font-size="${instFS * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${m.width}x${m.height}</text>\n`;
     svg += `  </g>\n`;
   });
   
@@ -113,7 +113,7 @@ export const exportSVG = () => {
     const ex = r.endX * sf;
     const ey = r.endY * sf;
     
-    svg += `  <line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#eab308" stroke-width="1" vector-effect="non-scaling-stroke" />\n`;
+    svg += `  <line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#eab308" stroke-width="2" vector-effect="non-scaling-stroke" />\n`;
     
     const dx = ex - sx;
     const dy = ey - sy;
@@ -122,10 +122,10 @@ export const exportSVG = () => {
     if(dist > 0) {
       const ux = dx/dist, uy = dy/dist;
       const nx = -uy, ny = ux;
-      const tickLen = 10;
+      const tickLen = baseFS * 0.5;
       
-      svg += `  <line x1="${sx - nx*tickLen}" y1="${sy - ny*tickLen}" x2="${sx + nx*tickLen}" y2="${sy + ny*tickLen}" stroke="#eab308" stroke-width="1.5" vector-effect="non-scaling-stroke" />\n`;
-      svg += `  <line x1="${ex - nx*tickLen}" y1="${ey - ny*tickLen}" x2="${ex + nx*tickLen}" y2="${ey + ny*tickLen}" stroke="#eab308" stroke-width="1.5" vector-effect="non-scaling-stroke" />\n`;
+      svg += `  <line x1="${sx - nx*tickLen}" y1="${sy - ny*tickLen}" x2="${sx + nx*tickLen}" y2="${sy + ny*tickLen}" stroke="#eab308" stroke-width="2" vector-effect="non-scaling-stroke" />\n`;
+      svg += `  <line x1="${ex - nx*tickLen}" y1="${ey - ny*tickLen}" x2="${ex + nx*tickLen}" y2="${ey + ny*tickLen}" stroke="#eab308" stroke-width="2" vector-effect="non-scaling-stroke" />\n`;
       
       const absDx = Math.abs(dx);
       const absDy = Math.abs(dy);
@@ -137,22 +137,74 @@ export const exportSVG = () => {
         const finalDy = parseFloat((Math.round(absDy/sf/state.gridSize)*state.gridSize).toFixed(4)).toString();
         endTextString += ` | dX: ${finalDx} | dY: ${finalDy}`;
         
-        svg += `  <line x1="${sx}" y1="${sy}" x2="${ex}" y2="${sy}" stroke="#eab308" stroke-width="1" stroke-dasharray="4,4" opacity="0.5" vector-effect="non-scaling-stroke" />\n`;
-        svg += `  <line x1="${ex}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#eab308" stroke-width="1" stroke-dasharray="4,4" opacity="0.5" vector-effect="non-scaling-stroke" />\n`;
+        svg += `  <line x1="${sx}" y1="${sy}" x2="${ex}" y2="${sy}" stroke="#eab308" stroke-width="1.5" stroke-dasharray="8,8" opacity="0.8" vector-effect="non-scaling-stroke" />\n`;
+        svg += `  <line x1="${ex}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#eab308" stroke-width="1.5" stroke-dasharray="8,8" opacity="0.8" vector-effect="non-scaling-stroke" />\n`;
       }
       
-      svg += `  <text x="${sx + nx*15}" y="${- (sy + ny*15)}" fill="#eab308" font-family="monospace" font-size="12" dominant-baseline="middle" transform="scale(1, -1)">0</text>\n`;
-      svg += `  <text x="${ex + nx*15}" y="${- (ey + ny*15)}" fill="#eab308" font-family="monospace" font-size="14" font-weight="bold" dominant-baseline="middle" transform="scale(1, -1)">${endTextString}</text>\n`;
+      svg += `  <text x="${sx + nx*baseFS}" y="${- (sy + ny*baseFS)}" fill="#eab308" font-family="monospace" font-size="${smallFS}" dominant-baseline="middle" transform="scale(1, -1)">0</text>\n`;
+      svg += `  <text x="${ex + nx*baseFS}" y="${- (ey + ny*baseFS)}" fill="#eab308" font-family="monospace" font-size="${baseFS}" font-weight="bold" dominant-baseline="middle" transform="scale(1, -1)">${endTextString}</text>\n`;
     }
   });
+
+  // ==========================================
+  // Draw Data Table
+  // ==========================================
+  let curY = tableStartY;
+  const colW = [tw * 0.2, tw * 0.2, tw * 0.15, tw * 0.15, tw * 0.15, tw * 0.15];
+  let cx = -tw/2;
+
+  // Title
+  svg += `  <text x="${cx}" y="${-curY}" fill="#e2e8f0" font-family="Inter, sans-serif" font-size="${largeFS}" font-weight="bold" dominant-baseline="auto" transform="scale(1, -1)">Floorplan Data Summary</text>\n`;
+  curY -= rowHeight * 1.5;
+
+  // Header Background
+  svg += `  <rect x="${-tw/2}" y="${curY - rowHeight}" width="${tw}" height="${rowHeight}" fill="#334155" />\n`;
   
+  const headers = ["Instance Name", "Master Cell", "X (um)", "Y (um)", "Orientation", "Size (um)"];
+  cx = -tw/2;
+  headers.forEach((h, i) => {
+    svg += `  <text x="${cx + baseFS}" y="${-(curY - rowHeight/2)}" fill="#f8fafc" font-family="Inter, sans-serif" font-size="${baseFS}" font-weight="bold" dominant-baseline="middle" transform="scale(1, -1)">${h}</text>\n`;
+    cx += colW[i];
+  });
+  curY -= rowHeight;
+
+  // Rows
+  sortedInstances.forEach((inst, idx) => {
+    const m = state.masterCells[inst.cellId];
+    if (!m) return;
+    
+    const bgColor = idx % 2 === 0 ? "#1e293b" : "#0f172a";
+    svg += `  <rect x="${-tw/2}" y="${curY - rowHeight}" width="${tw}" height="${rowHeight}" fill="${bgColor}" />\n`;
+    
+    cx = -tw/2;
+    const rowData = [
+      inst.name,
+      m.cellName,
+      inst.x.toFixed(3),
+      inst.y.toFixed(3),
+      inst.orientation,
+      `${m.width} x ${m.height}`
+    ];
+    
+    rowData.forEach((d, i) => {
+      svg += `  <text x="${cx + baseFS}" y="${-(curY - rowHeight/2)}" fill="#cbd5e1" font-family="monospace" font-size="${baseFS}" dominant-baseline="middle" transform="scale(1, -1)">${d}</text>\n`;
+      cx += colW[i];
+    });
+    
+    curY -= rowHeight;
+  });
+  
+  // Table border
+  const totalTableHeight = tableStartY - 1.5*rowHeight - curY;
+  svg += `  <rect x="${-tw/2}" y="${curY}" width="${tw}" height="${totalTableHeight}" fill="none" stroke="#475569" stroke-width="2" vector-effect="non-scaling-stroke" />\n`;
+
   svg += `</g>\n</svg>`;
   
   const blob = new Blob([svg], { type: 'image/svg+xml' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'floorplan.svg';
+  a.download = `${state.topCellName}_floorplan.svg`;
   a.click();
   URL.revokeObjectURL(url);
 };
