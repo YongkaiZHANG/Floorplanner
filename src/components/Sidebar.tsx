@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiPlusSquare, FiChevronRight, FiChevronLeft, FiEdit2, FiTrash2, FiX } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiPlusSquare, FiEdit2, FiTrash2, FiX, FiPaperclip } from 'react-icons/fi';
 import './Sidebar.css';
 
 const PRESET_COLORS = [
@@ -9,8 +9,10 @@ const PRESET_COLORS = [
 ];
 
 export const Sidebar: React.FC = () => {
-  const { masterCells, instances, selectedInstanceId, setSelectedInstance, addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, showCreateModal, setShowCreateModal, showInstantiateModal, setShowInstantiateModal, setPlacement } = useStore();
-  const [isCollapsed, setIsCollapsed] = useState(true);
+  const { masterCells, instances, selectedInstanceId, setSelectedInstance, addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, showCreateModal, setShowCreateModal, showInstantiateModal, setShowInstantiateModal, setPlacement, leftSidebarPinned, setLeftSidebarPinned } = useStore();
+  const [isHovered, setIsHovered] = useState(false);
+  const hoverTimeout = useRef<number | null>(null);
+  
   const [instantiateSelection, setInstantiateSelection] = useState('');
   const [editingCellId, setEditingCellId] = useState<string | null>(null);
   
@@ -50,8 +52,24 @@ export const Sidebar: React.FC = () => {
     setShowCreateModal(true);
   };
 
+  const handleMouseEnter = () => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+    hoverTimeout.current = setTimeout(() => setIsHovered(true), 300);
+  };
+
+  const handleMouseLeave = () => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+    hoverTimeout.current = setTimeout(() => setIsHovered(false), 300);
+  };
+
+  const isOpen = leftSidebarPinned || isHovered;
+
   return (
-    <div className={`sidebar-wrapper ${isCollapsed ? 'collapsed' : ''}`}>
+    <div 
+      className={`sidebar-wrapper ${!isOpen ? 'collapsed' : ''}`}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
       <div className="sidebar glass-panel">
         <div className="sidebar-section">
           <div className="section-header">
@@ -235,11 +253,11 @@ export const Sidebar: React.FC = () => {
       </div>
       
       <button 
-        className="collapse-toggle left-toggle" 
-        onClick={() => setIsCollapsed(!isCollapsed)}
-        title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+        className={`collapse-toggle left-toggle ${leftSidebarPinned ? 'pinned' : ''}`} 
+        onClick={() => setLeftSidebarPinned(!leftSidebarPinned)}
+        title={leftSidebarPinned ? "Unpin Sidebar" : "Pin Sidebar"}
       >
-        {isCollapsed ? <FiChevronRight /> : <FiChevronLeft />}
+        <FiPaperclip style={{ transform: leftSidebarPinned ? 'rotate(-45deg)' : 'none', transition: 'all 0.2s' }} />
       </button>
     </div>
   );

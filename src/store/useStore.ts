@@ -41,7 +41,8 @@ type ProjectState = {
   selectedInstanceId: string | null;
   showCreateModal: boolean;
   showInstantiateModal: boolean;
-  showPropertiesPanel: boolean;
+  leftSidebarPinned: boolean;
+  rightSidebarPinned: boolean;
   orthogonalRuler: boolean;
   
   placementMasterId: string | null;
@@ -53,7 +54,8 @@ type ProjectState = {
   setTopDimensions: (w: number, h: number) => void;
   setShowCreateModal: (show: boolean) => void;
   setShowInstantiateModal: (show: boolean) => void;
-  setShowPropertiesPanel: (show: boolean) => void;
+  setLeftSidebarPinned: (pinned: boolean) => void;
+  setRightSidebarPinned: (pinned: boolean) => void;
   setPlacement: (masterId: string | null, orientation?: string) => void;
   
   addMasterCell: (libName: string, cellName: string, w: number, h: number, color: string) => void;
@@ -151,7 +153,8 @@ export const useStore = create<ProjectState>((set) => ({
   selectedInstanceId: null,
   showCreateModal: false,
   showInstantiateModal: false,
-  showPropertiesPanel: false,
+  leftSidebarPinned: false,
+  rightSidebarPinned: false,
   
   placementMasterId: null,
   placementOrientation: 'R0',
@@ -163,7 +166,8 @@ export const useStore = create<ProjectState>((set) => ({
   setTopDimensions: (w, h) => set({ topWidth: w, topHeight: h }),
   setShowCreateModal: (show) => set({ showCreateModal: show }),
   setShowInstantiateModal: (show) => set({ showInstantiateModal: show }),
-  setShowPropertiesPanel: (show) => set({ showPropertiesPanel: show }),
+  setLeftSidebarPinned: (pinned) => set({ leftSidebarPinned: pinned }),
+  setRightSidebarPinned: (pinned) => set({ rightSidebarPinned: pinned }),
   setPlacement: (masterId, orientation = 'R0') => set({ placementMasterId: masterId, placementOrientation: orientation, appMode: masterId ? 'place' : 'select' }),
   
   addMasterCell: (libName, cellName, w, h, color) => set((state) => {

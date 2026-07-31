@@ -42,7 +42,7 @@ export const FloorplanCanvas: React.FC = () => {
     placementMasterId,
     placementOrientation,
     placeInstance,
-    showPropertiesPanel,
+    rightSidebarPinned,
     orthogonalRuler
   } = useStore();
 
@@ -120,7 +120,7 @@ export const FloorplanCanvas: React.FC = () => {
         case 'q':
           e.preventDefault();
           if (state.selectedInstanceId) {
-            state.setShowPropertiesPanel(!state.showPropertiesPanel);
+            state.setRightSidebarPinned(!state.rightSidebarPinned);
           }
           break;
         case 'k':
@@ -165,7 +165,7 @@ export const FloorplanCanvas: React.FC = () => {
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [appMode, selectedInstanceId, topWidth, topHeight, showPropertiesPanel]);
+  }, [appMode, selectedInstanceId, topWidth, topHeight, rightSidebarPinned]);
 
   const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();

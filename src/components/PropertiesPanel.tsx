@@ -1,24 +1,42 @@
 import React from 'react';
 import { useStore } from '../store/useStore';
-import { FiInfo, FiTrash2, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
+import { FiInfo, FiTrash2, FiPaperclip } from 'react-icons/fi';
 import './PropertiesPanel.css';
 
 const ORIENTATIONS = ['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'];
 
 export const PropertiesPanel: React.FC = () => {
-  const { masterCells, instances, selectedInstanceId, updateInstancePosition, updateInstanceOrientation, deleteInstance, showPropertiesPanel, setShowPropertiesPanel } = useStore();
+  const { masterCells, instances, selectedInstanceId, updateInstancePosition, updateInstanceOrientation, deleteInstance, rightSidebarPinned, setRightSidebarPinned } = useStore();
+  const [isHovered, setIsHovered] = React.useState(false);
+  const hoverTimeout = React.useRef<number | null>(null);
   
   const selectedInstance = instances.find(inst => inst.id === selectedInstanceId);
   const masterCell = selectedInstance ? masterCells[selectedInstance.cellId] : null;
 
+  const handleMouseEnter = () => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+    hoverTimeout.current = setTimeout(() => setIsHovered(true), 300);
+  };
+
+  const handleMouseLeave = () => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+    hoverTimeout.current = setTimeout(() => setIsHovered(false), 300);
+  };
+
+  const isOpen = rightSidebarPinned || isHovered;
+
   return (
-    <div className={`properties-wrapper ${!showPropertiesPanel ? 'collapsed' : ''}`}>
+    <div 
+      className={`properties-wrapper ${!isOpen ? 'collapsed' : ''}`}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
       <button 
-        className="collapse-toggle right-toggle" 
-        onClick={() => setShowPropertiesPanel(!showPropertiesPanel)}
-        title={!showPropertiesPanel ? "Expand Properties" : "Collapse Properties"}
+        className={`collapse-toggle right-toggle ${rightSidebarPinned ? 'pinned' : ''}`} 
+        onClick={() => setRightSidebarPinned(!rightSidebarPinned)}
+        title={rightSidebarPinned ? "Unpin Properties" : "Pin Properties"}
       >
-        {!showPropertiesPanel ? <FiChevronLeft /> : <FiChevronRight />}
+        <FiPaperclip style={{ transform: rightSidebarPinned ? 'rotate(45deg)' : 'none', transition: 'all 0.2s' }} />
       </button>
 
       <div className="properties-panel glass-panel">
