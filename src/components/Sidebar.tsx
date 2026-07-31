@@ -65,7 +65,8 @@ export const Sidebar: React.FC = () => {
   const isOpen = leftSidebarPinned || isHovered;
 
   return (
-    <div 
+    <>
+      <div 
       className={`sidebar-wrapper ${!isOpen ? 'collapsed' : ''}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
@@ -137,8 +138,18 @@ export const Sidebar: React.FC = () => {
             )}
           </ul>
         </div>
+      </div>
+      
+      <button 
+        className={`collapse-toggle left-toggle ${leftSidebarPinned ? 'pinned' : ''}`} 
+        onClick={() => setLeftSidebarPinned(!leftSidebarPinned)}
+        title={leftSidebarPinned ? "Unpin Sidebar" : "Pin Sidebar"}
+      >
+        <FiPaperclip style={{ transform: leftSidebarPinned ? 'rotate(-45deg)' : 'none', transition: 'all 0.2s' }} />
+      </button>
+    </div>
 
-        {showCreateModal && (
+    {showCreateModal && (
           <div className="modal-overlay">
             <div className="modal-content glass-panel">
               <div className="modal-header">
@@ -250,15 +261,6 @@ export const Sidebar: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
-      
-      <button 
-        className={`collapse-toggle left-toggle ${leftSidebarPinned ? 'pinned' : ''}`} 
-        onClick={() => setLeftSidebarPinned(!leftSidebarPinned)}
-        title={leftSidebarPinned ? "Unpin Sidebar" : "Pin Sidebar"}
-      >
-        <FiPaperclip style={{ transform: leftSidebarPinned ? 'rotate(-45deg)' : 'none', transition: 'all 0.2s' }} />
-      </button>
-    </div>
+    </>
   );
 };
