@@ -123,11 +123,8 @@ export const Topbar: React.FC = () => {
         <button className="btn" onClick={() => setShowTutorial(true)} style={{ backgroundColor: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
           <FiBookOpen /> Shortcuts
         </button>
-        <button className="btn preview-btn" onClick={handlePreview} style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
+        <button className="btn btn-primary preview-btn" onClick={handlePreview}>
           <FiCode /> Preview Code
-        </button>
-        <button className="btn btn-primary export-btn" onClick={handleExport}>
-          <FiDownload /> Export SKILL
         </button>
       </div>
 
