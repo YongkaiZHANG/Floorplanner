@@ -47,7 +47,8 @@ export const FloorplanCanvas: React.FC = () => {
     placementOrientation,
     placeInstance,
     rightSidebarPinned,
-    orthogonalRuler
+    orthogonalRuler,
+    showAutoDim,
   } = useStore();
 
   const fitView = () => {
@@ -388,10 +389,204 @@ export const FloorplanCanvas: React.FC = () => {
   };
 
   const handleDragEnd = (e: KonvaEventObject<DragEvent>, instanceId: string) => {
-    const node = e.target;
-    const umX = node.x() / SCALE_FACTOR;
-    const umY = node.y() / SCALE_FACTOR;
+    const stage = e.target.getStage();
+    if (!stage) return;
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
+    const transform = stage.getAbsoluteTransform().copy().invert();
+    const worldPos = transform.point(pos);
+    const umX = worldPos.x / SCALE_FACTOR;
+    const umY = worldPos.y / SCALE_FACTOR;
     updateInstancePosition(instanceId, umX, umY);
+  };
+
+  // ----------------------------------------------------------------
+  // Gap annotation helpers
+  // ----------------------------------------------------------------
+  type BBox = { minX: number; maxX: number; minY: number; maxY: number };
+
+  const computeInstanceBBox = (inst: typeof instances[0]): BBox | null => {
+    const m = masterCells[inst.cellId];
+    if (!m) return null;
+    const t = getTransformProps(inst.orientation);
+    const rad = t.rotation * Math.PI / 180;
+    const cos = Math.round(Math.cos(rad));
+    const sin = Math.round(Math.sin(rad));
+    const corners = [[0,0],[m.width,0],[m.width,m.height],[0,m.height]].map(([px,py]) => {
+      const sx = px * t.scaleX;
+      const sy = py * t.scaleY;
+      return { x: inst.x + sx*cos - sy*sin, y: inst.y + sx*sin + sy*cos };
+    });
+    return {
+      minX: Math.min(...corners.map(c=>c.x)),
+      maxX: Math.max(...corners.map(c=>c.x)),
+      minY: Math.min(...corners.map(c=>c.y)),
+      maxY: Math.max(...corners.map(c=>c.y)),
+    };
+  };
+
+  const renderGapAnnotations = (selectedId: string | null, autoMode: boolean) => {
+    const sf = SCALE_FACTOR;
+    const dimColor = '#38bdf8'; // sky blue - distinct from rulers (yellow)
+    const dimColorAuto = '#a78bfa'; // violet for auto-dim mode
+    const annotations: React.ReactNode[] = [];
+    const topBox: BBox = { minX: -topWidth/2, maxX: topWidth/2, minY: -topHeight/2, maxY: topHeight/2 };
+
+    const renderDimLine = (x1: number, y1: number, x2: number, y2: number, label: string, color: string, key: string) => {
+      const mx = (x1 + x2) / 2 * sf;
+      const my = (y1 + y2) / 2 * sf;
+      const isVert = Math.abs(x2 - x1) < 0.001;
+      const isHoriz = Math.abs(y2 - y1) < 0.001;
+      const tickLen = 6 / stageScale;
+      const textOffset = 10 / stageScale;
+      const fs = 11 / stageScale;
+
+      return (
+        <Group key={key} listening={false}>
+          {/* Main dim line */}
+          <Line
+            points={[x1*sf, y1*sf, x2*sf, y2*sf]}
+            stroke={color}
+            strokeWidth={1 / stageScale}
+            dash={[4/stageScale, 3/stageScale]}
+          />
+          {/* End ticks */}
+          {isHoriz && <>
+            <Line points={[x1*sf, y1*sf - tickLen, x1*sf, y1*sf + tickLen]} stroke={color} strokeWidth={1/stageScale} />
+            <Line points={[x2*sf, y2*sf - tickLen, x2*sf, y2*sf + tickLen]} stroke={color} strokeWidth={1/stageScale} />
+          </>}
+          {isVert && <>
+            <Line points={[x1*sf - tickLen, y1*sf, x1*sf + tickLen, y1*sf]} stroke={color} strokeWidth={1/stageScale} />
+            <Line points={[x2*sf - tickLen, y2*sf, x2*sf + tickLen, y2*sf]} stroke={color} strokeWidth={1/stageScale} />
+          </>}
+          {/* Label */}
+          <Text
+            x={mx + (isVert ? textOffset : 0)}
+            y={my + (isHoriz ? textOffset : 0)}
+            text={label}
+            fill={color}
+            fontSize={fs}
+            fontFamily="monospace"
+            fontStyle="bold"
+            scaleY={-1}
+            offsetY={isHoriz ? 0 : fs}
+            listening={false}
+          />
+        </Group>
+      );
+    };
+
+    const snapLabel = (v: number) => {
+      const snapped = Math.round(v / gridSize) * gridSize;
+      return parseFloat(snapped.toFixed(4)).toString();
+    };
+
+    if (selectedId) {
+      const sel = instances.find(i => i.id === selectedId);
+      if (sel) {
+        const selBox = computeInstanceBBox(sel);
+        if (selBox) {
+          // Compute gap in each direction: find nearest boundary (other IP or top_asic wall)
+          // Right gap: from selBox.maxX toward something
+          const others = instances.filter(i => i.id !== selectedId).map(i => ({ id: i.id, box: computeInstanceBBox(i) })).filter(x => x.box !== null) as { id: string; box: BBox }[];
+
+          // Right (positive X)
+          let rightGapEnd = topBox.maxX;
+          others.forEach(({ box: ob }) => {
+            if (ob.minX > selBox.maxX - 0.001 &&
+                ob.minY < selBox.maxY && ob.maxY > selBox.minY) {
+              if (ob.minX < rightGapEnd) rightGapEnd = ob.minX;
+            }
+          });
+          const rightGap = rightGapEnd - selBox.maxX;
+          if (rightGap > gridSize * 0.5) {
+            const midY = (selBox.minY + selBox.maxY) / 2;
+            annotations.push(renderDimLine(selBox.maxX, midY, rightGapEnd, midY, snapLabel(rightGap), dimColor, 'gap-right'));
+          }
+
+          // Left (negative X)
+          let leftGapStart = topBox.minX;
+          others.forEach(({ box: ob }) => {
+            if (ob.maxX < selBox.minX + 0.001 &&
+                ob.minY < selBox.maxY && ob.maxY > selBox.minY) {
+              if (ob.maxX > leftGapStart) leftGapStart = ob.maxX;
+            }
+          });
+          const leftGap = selBox.minX - leftGapStart;
+          if (leftGap > gridSize * 0.5) {
+            const midY = (selBox.minY + selBox.maxY) / 2;
+            annotations.push(renderDimLine(leftGapStart, midY, selBox.minX, midY, snapLabel(leftGap), dimColor, 'gap-left'));
+          }
+
+          // Up (positive Y)
+          let topGapEnd = topBox.maxY;
+          others.forEach(({ box: ob }) => {
+            if (ob.minY > selBox.maxY - 0.001 &&
+                ob.minX < selBox.maxX && ob.maxX > selBox.minX) {
+              if (ob.minY < topGapEnd) topGapEnd = ob.minY;
+            }
+          });
+          const topGap = topGapEnd - selBox.maxY;
+          if (topGap > gridSize * 0.5) {
+            const midX = (selBox.minX + selBox.maxX) / 2;
+            annotations.push(renderDimLine(midX, selBox.maxY, midX, topGapEnd, snapLabel(topGap), dimColor, 'gap-top'));
+          }
+
+          // Down (negative Y)
+          let botGapStart = topBox.minY;
+          others.forEach(({ box: ob }) => {
+            if (ob.maxY < selBox.minY + 0.001 &&
+                ob.minX < selBox.maxX && ob.maxX > selBox.minX) {
+              if (ob.maxY > botGapStart) botGapStart = ob.maxY;
+            }
+          });
+          const botGap = selBox.minY - botGapStart;
+          if (botGap > gridSize * 0.5) {
+            const midX = (selBox.minX + selBox.maxX) / 2;
+            annotations.push(renderDimLine(midX, botGapStart, midX, selBox.minY, snapLabel(botGap), dimColor, 'gap-bot'));
+          }
+        }
+      }
+    }
+
+    if (autoMode) {
+      // Auto-Dim: render all pairwise horizontal and vertical gaps between adjacent IPs
+      const allBoxes = instances.map(i => ({ id: i.id, box: computeInstanceBBox(i) })).filter(x => x.box !== null) as { id: string; box: BBox }[];
+      const seenPairs = new Set<string>();
+
+      allBoxes.forEach(({ id: idA, box: bA }) => {
+        // Horizontal: find IPs directly to the right with overlapping Y range
+        allBoxes.forEach(({ id: idB, box: bB }) => {
+          if (idA === idB) return;
+          const pairKey = [idA, idB].sort().join('|');
+          if (seenPairs.has(pairKey)) return;
+
+          const yOverlap = Math.min(bA.maxY, bB.maxY) - Math.max(bA.minY, bB.minY);
+          const xOverlap = Math.min(bA.maxX, bB.maxX) - Math.max(bA.minX, bB.minX);
+
+          // Horizontal gap (B is directly right of A)
+          if (bB.minX >= bA.maxX - 0.001 && yOverlap > 0) {
+            const gap = bB.minX - bA.maxX;
+            if (gap > gridSize * 0.5) {
+              seenPairs.add(pairKey);
+              const midY = (Math.max(bA.minY, bB.minY) + Math.min(bA.maxY, bB.maxY)) / 2;
+              annotations.push(renderDimLine(bA.maxX, midY, bB.minX, midY, snapLabel(gap), dimColorAuto, `auto-h-${pairKey}`));
+            }
+          }
+          // Vertical gap (B is directly above A)
+          else if (bB.minY >= bA.maxY - 0.001 && xOverlap > 0) {
+            const gap = bB.minY - bA.maxY;
+            if (gap > gridSize * 0.5) {
+              seenPairs.add(pairKey);
+              const midX = (Math.max(bA.minX, bB.minX) + Math.min(bA.maxX, bB.maxX)) / 2;
+              annotations.push(renderDimLine(midX, bA.maxY, midX, bB.minY, snapLabel(gap), dimColorAuto, `auto-v-${pairKey}`));
+            }
+          }
+        });
+      });
+    }
+
+    return annotations;
   };
 
   const renderRuler = (r: { id?: string; startX: number, startY: number, endX: number, endY: number }, key: string, onDelete?: () => void) => {
@@ -842,6 +1037,9 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Rulers */}
           {rulers.map(r => renderRuler(r, r.id, () => deleteRuler(r.id)))}
           {isMeasuring && currentRuler && renderRuler(currentRuler, 'temp_ruler')}
+
+          {/* Gap Annotations (selection-based + auto-dim) */}
+          {renderGapAnnotations(selectedInstanceId, showAutoDim)}
 
           {/* Snap Indicator */}
           {appMode === 'measure' && snapIndicator && (

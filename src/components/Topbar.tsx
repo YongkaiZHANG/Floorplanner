@@ -2,12 +2,12 @@ import React, { useState } from 'react';
 import { useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
 import { exportSVG } from '../utils/svgExport';
-import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen } from 'react-icons/fi';
+import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tempW, setTempW] = useState(topWidth.toString());
@@ -96,6 +96,14 @@ export const Topbar: React.FC = () => {
               <FiTrash2 /> Clear Rulers
             </button>
           )}
+          <button
+            className={`mode-btn${showAutoDim ? ' active' : ''}`}
+            onClick={toggleAutoDim}
+            title="Auto-Dimension: show all IP gaps (violet). Also, select any IP to see its gaps (blue)."
+            style={showAutoDim ? { color: '#a78bfa', borderColor: '#a78bfa' } : {}}
+          >
+            <FiGrid /> Auto-Dim
+          </button>
         </div>
       </div>
 

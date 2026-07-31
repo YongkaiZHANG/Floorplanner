@@ -46,6 +46,7 @@ type ProjectState = {
   leftSidebarPinned: boolean;
   rightSidebarPinned: boolean;
   orthogonalRuler: boolean;
+  showAutoDim: boolean;
   
   placementMasterId: string | null;
   placementOrientation: string;
@@ -77,6 +78,7 @@ type ProjectState = {
   
   undo: () => void;
   toggleOrthogonalRuler: () => void;
+  toggleAutoDim: () => void;
   loadProject: (data: Partial<ProjectState>) => void;
 };
 
@@ -166,6 +168,7 @@ export const useStore = create<ProjectState>((set) => ({
   placementOrientation: 'R0',
   pastStates: [],
   orthogonalRuler: false,
+  showAutoDim: false,
 
   setGridSize: (size) => set({ gridSize: size }),
   setAppMode: (mode) => set({ appMode: mode }),
@@ -292,6 +295,7 @@ export const useStore = create<ProjectState>((set) => ({
   }),
   
   toggleOrthogonalRuler: () => set((state) => ({ orthogonalRuler: !state.orthogonalRuler })),
+  toggleAutoDim: () => set((state) => ({ showAutoDim: !state.showAutoDim })),
 
   loadProject: (data: Partial<ProjectState>) => set((state) => ({
     ...state,
