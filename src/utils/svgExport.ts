@@ -55,7 +55,7 @@ export const exportSVG = () => {
   svg += `<g transform="scale(1, -1)">\n`;
   
   // Top ASIC
-  svg += `  <rect x="${-tw/2}" y="${-th/2}" width="${tw}" height="${th}" fill="#ffffff" stroke="#475569" stroke-width="2" stroke-dasharray="10,10" />\n`;
+  svg += `  <rect x="${-tw/2}" y="${-th/2}" width="${tw}" height="${th}" fill="#ffffff" stroke="#475569" stroke-width="2" stroke-dasharray="10,10" vector-effect="non-scaling-stroke" />\n`;
   
   // Top ASIC Labels
   // Note: Since the parent group is inverted (scale(1, -1)), the text elements need to be inverted again
@@ -98,7 +98,7 @@ export const exportSVG = () => {
     
     const transform = `translate(${x} ${y}) rotate(${rot}) scale(${scaleX} ${scaleY})`;
     svg += `  <g transform="${transform}">\n`;
-    svg += `    <rect width="${w}" height="${h}" fill="${m.color}" fill-opacity="0.5" stroke="#334155" stroke-width="1" />\n`;
+    svg += `    <rect width="${w}" height="${h}" fill="${m.color}" fill-opacity="0.5" stroke="#334155" stroke-width="1" vector-effect="non-scaling-stroke" />\n`;
     
     const fontSize = Math.min(w * 0.15, h * 0.25, 40);
     svg += `    <text x="${w/2}" y="${h/2 - fontSize*0.6}" fill="rgba(15, 23, 42, 0.9)" font-family="Inter, sans-serif" font-weight="bold" font-size="${fontSize}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${m.cellName}</text>\n`;
@@ -113,21 +113,36 @@ export const exportSVG = () => {
     const ex = r.endX * sf;
     const ey = r.endY * sf;
     
-    svg += `  <line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#eab308" stroke-width="1" />\n`;
+    svg += `  <line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#eab308" stroke-width="1" vector-effect="non-scaling-stroke" />\n`;
     
     const dx = ex - sx;
     const dy = ey - sy;
     const dist = Math.hypot(dx, dy);
+    
     if(dist > 0) {
       const ux = dx/dist, uy = dy/dist;
       const nx = -uy, ny = ux;
       const tickLen = 10;
       
-      svg += `  <line x1="${sx - nx*tickLen}" y1="${sy - ny*tickLen}" x2="${sx + nx*tickLen}" y2="${sy + ny*tickLen}" stroke="#eab308" stroke-width="1.5" />\n`;
-      svg += `  <line x1="${ex - nx*tickLen}" y1="${ey - ny*tickLen}" x2="${ex + nx*tickLen}" y2="${ey + ny*tickLen}" stroke="#eab308" stroke-width="1.5" />\n`;
+      svg += `  <line x1="${sx - nx*tickLen}" y1="${sy - ny*tickLen}" x2="${sx + nx*tickLen}" y2="${sy + ny*tickLen}" stroke="#eab308" stroke-width="1.5" vector-effect="non-scaling-stroke" />\n`;
+      svg += `  <line x1="${ex - nx*tickLen}" y1="${ey - ny*tickLen}" x2="${ex + nx*tickLen}" y2="${ey + ny*tickLen}" stroke="#eab308" stroke-width="1.5" vector-effect="non-scaling-stroke" />\n`;
       
-      svg += `  <text x="${sx + nx*15}" y="${- (sy + ny*15)}" fill="#eab308" font-family="monospace" font-size="12" dominant-baseline="middle">0</text>\n`;
-      svg += `  <text x="${ex + nx*15}" y="${- (ey + ny*15)}" fill="#eab308" font-family="monospace" font-size="14" font-weight="bold" dominant-baseline="middle">${parseFloat((Math.round(dist/sf/state.gridSize)*state.gridSize).toFixed(4))}</text>\n`;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+      const finalDist = parseFloat((Math.round(dist/sf/state.gridSize)*state.gridSize).toFixed(4)).toString();
+      
+      let endTextString = `L: ${finalDist}`;
+      if (absDx > 0.0001 && absDy > 0.0001) {
+        const finalDx = parseFloat((Math.round(absDx/sf/state.gridSize)*state.gridSize).toFixed(4)).toString();
+        const finalDy = parseFloat((Math.round(absDy/sf/state.gridSize)*state.gridSize).toFixed(4)).toString();
+        endTextString += ` | dX: ${finalDx} | dY: ${finalDy}`;
+        
+        svg += `  <line x1="${sx}" y1="${sy}" x2="${ex}" y2="${sy}" stroke="#eab308" stroke-width="1" stroke-dasharray="4,4" opacity="0.5" vector-effect="non-scaling-stroke" />\n`;
+        svg += `  <line x1="${ex}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#eab308" stroke-width="1" stroke-dasharray="4,4" opacity="0.5" vector-effect="non-scaling-stroke" />\n`;
+      }
+      
+      svg += `  <text x="${sx + nx*15}" y="${- (sy + ny*15)}" fill="#eab308" font-family="monospace" font-size="12" dominant-baseline="middle" transform="scale(1, -1)">0</text>\n`;
+      svg += `  <text x="${ex + nx*15}" y="${- (ey + ny*15)}" fill="#eab308" font-family="monospace" font-size="14" font-weight="bold" dominant-baseline="middle" transform="scale(1, -1)">${endTextString}</text>\n`;
     }
   });
   
