@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Stage, Layer, Rect, Text, Group, Line } from 'react-konva';
+import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
 import { useStore, getTransformProps } from '../store/useStore';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
@@ -21,6 +21,7 @@ export const FloorplanCanvas: React.FC = () => {
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [measureStart, setMeasureStart] = useState<{ x: number; y: number } | null>(null);
   const [currentRuler, setCurrentRuler] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
+  const [snapIndicator, setSnapIndicator] = useState<{ x: number; y: number } | null>(null);
 
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
 
@@ -240,28 +241,47 @@ export const FloorplanCanvas: React.FC = () => {
       let bestSnap: { x: number, y: number, dist: number } | null = null;
       const snapRadiusUm = 15 / (SCALE_FACTOR * stageScale); // 15 screen pixels radius
       
+      const segments: {a: {x:number, y:number}, b: {x:number, y:number}}[] = [];
+      
+      // top_asic boundary
+      const w2 = topWidth / 2;
+      const h2 = topHeight / 2;
+      const topAsicCorners = [
+        {x: -w2, y: -h2},
+        {x: w2, y: -h2},
+        {x: w2, y: h2},
+        {x: -w2, y: h2}
+      ];
+      for (let i=0; i<4; i++) {
+        segments.push({a: topAsicCorners[i], b: topAsicCorners[(i+1)%4]});
+      }
+
+      // instances
       for (const inst of instances) {
         const corners = getInstanceCorners(inst);
         if (!corners) continue;
         for (let i=0; i<4; i++) {
-          const a = corners[i];
-          const b = corners[(i+1)%4];
-          const closest = getClosestPointOnSegment({x: umX, y: umY}, a, b);
-          if (closest.dist < snapRadiusUm) {
-            if (!bestSnap || closest.dist < bestSnap.dist) {
-              bestSnap = closest;
-            }
+          segments.push({a: corners[i], b: corners[(i+1)%4]});
+        }
+      }
+
+      for (const seg of segments) {
+        const closest = getClosestPointOnSegment({x: umX, y: umY}, seg.a, seg.b);
+        if (closest.dist < snapRadiusUm) {
+          if (!bestSnap || closest.dist < bestSnap.dist) {
+            bestSnap = closest;
           }
         }
       }
+
       if (bestSnap) {
-        return { umX: bestSnap.x, umY: bestSnap.y };
+        return { umX: bestSnap.x, umY: bestSnap.y, isSnapped: true };
       }
     }
 
     umX = Math.round(umX / gridSize) * gridSize;
     umY = Math.round(umY / gridSize) * gridSize;
-    return { umX, umY };
+    return { umX, umY, isSnapped: false };
   };
 
   const handleMouseDown = () => {
@@ -271,9 +291,15 @@ export const FloorplanCanvas: React.FC = () => {
   const handleMouseMove = () => {
     const pointer = stageRef.current?.getPointerPosition();
     if (!pointer) return;
-    const { umX, umY } = getSnappedWorldPos(pointer, appMode === 'measure');
+    const { umX, umY, isSnapped } = getSnappedWorldPos(pointer, appMode === 'measure');
     
     setMousePos({ x: umX, y: umY });
+    
+    if (appMode === 'measure' && isSnapped) {
+      setSnapIndicator({ x: umX, y: umY });
+    } else {
+      setSnapIndicator(null);
+    }
 
     if (appMode === 'measure' && isMeasuring && measureStart) {
       let ex = umX;
@@ -463,12 +489,31 @@ export const FloorplanCanvas: React.FC = () => {
       );
 
       // End text (Total length)
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+      const finalDist = parseFloat((Math.round(dist / gridSize) * gridSize).toFixed(4)).toString();
+      
+      let endTextString = `L: ${finalDist}`;
+      if (absDx > 0.0001 && absDy > 0.0001) {
+        const finalDx = parseFloat((Math.round(absDx / gridSize) * gridSize).toFixed(4)).toString();
+        const finalDy = parseFloat((Math.round(absDy / gridSize) * gridSize).toFixed(4)).toString();
+        endTextString += ` | dX: ${finalDx} | dY: ${finalDy}`;
+        
+        // Draw right triangle dashed lines
+        ticks.push(
+          <Line key={`triangle-x-${key}`} points={[sx, sy, ex, sy]} stroke="#eab308" strokeWidth={1 / stageScale} dash={[4 / stageScale, 4 / stageScale]} opacity={0.5} />
+        );
+        ticks.push(
+          <Line key={`triangle-y-${key}`} points={[ex, sy, ex, ey]} stroke="#eab308" strokeWidth={1 / stageScale} dash={[4 / stageScale, 4 / stageScale]} opacity={0.5} />
+        );
+      }
+
       texts.push(
         <Text
           key={`end-text-${key}`}
           x={ex + nx * 10 / stageScale}
           y={ey + ny * 10 / stageScale}
-          text={parseFloat((Math.round(dist / gridSize) * gridSize).toFixed(4)).toString()}
+          text={endTextString}
           fill="#eab308"
           fontSize={14 / stageScale}
           fontStyle="bold"
@@ -718,6 +763,15 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Rulers */}
           {rulers.map(r => renderRuler(r, r.id))}
           {isMeasuring && currentRuler && renderRuler(currentRuler, 'temp_ruler')}
+
+          {/* Snap Indicator */}
+          {appMode === 'measure' && snapIndicator && (
+            <Group x={snapIndicator.x * SCALE_FACTOR} y={snapIndicator.y * SCALE_FACTOR}>
+              <Circle radius={4 / stageScale} stroke="#eab308" strokeWidth={1.5 / stageScale} />
+              <Line points={[-8 / stageScale, 0, 8 / stageScale, 0]} stroke="#eab308" strokeWidth={1 / stageScale} />
+              <Line points={[0, -8 / stageScale, 0, 8 / stageScale]} stroke="#eab308" strokeWidth={1 / stageScale} />
+            </Group>
+          )}
 
           {/* Ghost Placement Group */}
           {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && mousePos && (() => {
