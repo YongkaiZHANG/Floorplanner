@@ -17,12 +17,12 @@ export const Topbar: React.FC = () => {
   const [generatedCode, setGeneratedCode] = useState('');
 
   const handleExport = () => {
-    const skillCode = generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances);
+    const skillCode = generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize);
     downloadSkillFile(`${topCellName}.il`, skillCode);
   };
   
   const handlePreview = () => {
-    const code = generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances);
+    const code = generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize);
     setGeneratedCode(code);
     setShowCodePreview(true);
   };
