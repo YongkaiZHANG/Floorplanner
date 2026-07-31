@@ -389,14 +389,9 @@ export const FloorplanCanvas: React.FC = () => {
   };
 
   const handleDragEnd = (e: KonvaEventObject<DragEvent>, instanceId: string) => {
-    const stage = e.target.getStage();
-    if (!stage) return;
-    const pos = stage.getPointerPosition();
-    if (!pos) return;
-    const transform = stage.getAbsoluteTransform().copy().invert();
-    const worldPos = transform.point(pos);
-    const umX = worldPos.x / SCALE_FACTOR;
-    const umY = worldPos.y / SCALE_FACTOR;
+    const node = e.target;
+    const umX = node.x() / SCALE_FACTOR;
+    const umY = node.y() / SCALE_FACTOR;
     updateInstancePosition(instanceId, umX, umY);
   };
 
