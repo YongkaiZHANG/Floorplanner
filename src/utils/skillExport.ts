@@ -1,6 +1,8 @@
 import type { Cell, Instance } from '../store/useStore';
 
 export const generateSkillCode = (
+  topLibName: string,
+  topCellName: string,
   topWidth: number, 
   topHeight: number, 
   masterCells: Record<string, Cell>, 
@@ -30,15 +32,15 @@ export const generateSkillCode = (
     code += `  dbClose(cv)\n\n`;
   });
 
-  // Step 2: Assemble top_asic
+  // Step 2: Assemble Top Cell
   code += `  ; ==========================================\n`;
-  code += `  ; STEP 2: Assemble top_asic\n`;
+  code += `  ; STEP 2: Assemble ${topCellName}\n`;
   code += `  ; ==========================================\n`;
-  code += `  printf("Assembling Top ASIC...\\n")\n`;
-  code += `  cv = dbOpenCellViewByType("worklib" "top_asic" "layout" "maskLayout" "w")\n\n`;
+  code += `  printf("Assembling Top Cell...\\n")\n`;
+  code += `  cv = dbOpenCellViewByType("${topLibName}" "${topCellName}" "layout" "maskLayout" "w")\n\n`;
   
   // Draw Top Boundary
-  code += `  ; Draw top_asic boundary\n`;
+  code += `  ; Draw ${topCellName} boundary\n`;
   code += `  dbCreateRect(cv list("text" "drawing") list(${-topWidth / 2}:${-topHeight / 2} ${topWidth / 2}:${topHeight / 2}))\n\n`;
 
   if (instances.length === 0) {
@@ -61,7 +63,7 @@ export const generateSkillCode = (
 
   code += `  dbSave(cv)\n`;
   code += `  dbClose(cv)\n`;
-  code += `  printf("Successfully completed top_asic generation!\\n")\n`;
+  code += `  printf("Successfully completed ${topCellName} generation!\\n")\n`;
   code += `)\n`;
 
   return code;

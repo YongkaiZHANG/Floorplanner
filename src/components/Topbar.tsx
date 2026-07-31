@@ -7,7 +7,7 @@ import { TutorialModal } from './TutorialModal';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tempW, setTempW] = useState(topWidth.toString());
@@ -17,12 +17,12 @@ export const Topbar: React.FC = () => {
   const [generatedCode, setGeneratedCode] = useState('');
 
   const handleExport = () => {
-    const skillCode = generateSkillCode(topWidth, topHeight, masterCells, instances);
-    downloadSkillFile(`top_asic.il`, skillCode);
+    const skillCode = generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances);
+    downloadSkillFile(`${topCellName}.il`, skillCode);
   };
   
   const handlePreview = () => {
-    const code = generateSkillCode(topWidth, topHeight, masterCells, instances);
+    const code = generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances);
     setGeneratedCode(code);
     setShowCodePreview(true);
   };
