@@ -728,32 +728,72 @@ export const FloorplanCanvas: React.FC = () => {
                   strokeWidth={isSelected ? 3 / stageScale : 1 / stageScale}
                 />
                 
-                {(h * stageScale > 15 && w * stageScale > 30) && (() => {
-                  const fontSize = Math.min(w * 0.15, h * 0.25, 40);
+                {(() => {
+                  // Compute a fontSize that is always readable:
+                  // - In world-space (before stage scale) we want ~10% of the shorter side
+                  // - Clamp so it's never smaller than 8 screen-px or larger than 30% of cell
+                  const shortSide = Math.min(w, h);
+                  const longSide = Math.max(w, h);
+                  const fontSizeWorld = Math.min(shortSide * 0.18, longSide * 0.1);
+                  // Only render if the cell is big enough on screen
+                  const screenH = h * stageScale;
+                  const screenW = w * stageScale;
+                  if (screenH < 24 || screenW < 30) return null;
+
+                  const nameFS = fontSizeWorld;
+                  const subFS = fontSizeWorld * 0.65;
+                  const instFS = fontSizeWorld * 0.6;
+                  const totalTextH = nameFS + subFS * 1.3 + instFS * 1.3;
+                  const startY = (h - totalTextH) / 2;
+
                   return (
                     <Group scaleY={-1} offsetY={h}>
+                      {/* Instance name (top, smaller, secondary) */}
+                      {screenH > 48 && (
+                        <Text
+                          text={inst.name}
+                          x={0}
+                          y={startY}
+                          width={w}
+                          align="center"
+                          fill="rgba(10, 20, 40, 0.55)"
+                          fontSize={instFS}
+                          fontFamily="Inter"
+                          fontStyle="normal"
+                          ellipsis={true}
+                          wrap="none"
+                        />
+                      )}
+                      {/* Cell name (main label, bold) */}
                       <Text
                         text={masterCell.cellName}
                         x={0}
-                        y={h/2 - fontSize}
+                        y={startY + (screenH > 48 ? instFS * 1.3 : 0)}
                         width={w}
                         align="center"
-                        fill="rgba(15, 23, 42, 0.9)"
-                        fontSize={fontSize}
+                        fill="rgba(10, 20, 40, 0.9)"
+                        fontSize={nameFS}
                         fontFamily="Inter"
                         fontStyle="bold"
+                        ellipsis={true}
+                        wrap="none"
                       />
-                      <Text
-                        text={`${masterCell.width}x${masterCell.height}`}
-                        x={0}
-                        y={h/2 + fontSize * 0.2}
-                        width={w}
-                        align="center"
-                        fill="rgba(15, 23, 42, 0.7)"
-                        fontSize={fontSize * 0.7}
-                        fontFamily="Inter"
-                        fontStyle="normal"
-                      />
+                      {/* Size (sub-label) */}
+                      {screenH > 36 && (
+                        <Text
+                          text={`${masterCell.width} × ${masterCell.height} um`}
+                          x={0}
+                          y={startY + (screenH > 48 ? instFS * 1.3 : 0) + nameFS * 1.3}
+                          width={w}
+                          align="center"
+                          fill="rgba(10, 20, 40, 0.6)"
+                          fontSize={subFS}
+                          fontFamily="Inter"
+                          fontStyle="normal"
+                          ellipsis={true}
+                          wrap="none"
+                        />
+                      )}
                     </Group>
                   );
                 })()}
@@ -797,34 +837,48 @@ export const FloorplanCanvas: React.FC = () => {
                   dash={[5 / stageScale, 5 / stageScale]}
                   opacity={0.5}
                 />
-                {(m.height * SCALE_FACTOR * stageScale > 15 && m.width * SCALE_FACTOR * stageScale > 30) && (() => {
+                {(() => {
                   const w = m.width * SCALE_FACTOR;
                   const h = m.height * SCALE_FACTOR;
-                  const fontSize = Math.min(w * 0.15, h * 0.25, 40);
+                  const screenH = h * stageScale;
+                  const screenW = w * stageScale;
+                  if (screenH < 24 || screenW < 30) return null;
+                  const shortSide = Math.min(w, h);
+                  const longSide = Math.max(w, h);
+                  const nameFS = Math.min(shortSide * 0.18, longSide * 0.1);
+                  const subFS = nameFS * 0.65;
+                  const totalTextH = nameFS + subFS * 1.3;
+                  const startY = (h - totalTextH) / 2;
                   return (
                     <Group scaleY={-1} offsetY={h}>
                       <Text
-                        text={`(New) ${m.cellName}`}
+                        text={m.cellName}
                         x={0}
-                        y={h/2 - fontSize}
+                        y={startY}
                         width={w}
                         align="center"
-                        fill="rgba(15, 23, 42, 0.9)"
-                        fontSize={fontSize}
+                        fill="rgba(10, 20, 40, 0.9)"
+                        fontSize={nameFS}
                         fontFamily="Inter"
                         fontStyle="bold"
+                        ellipsis={true}
+                        wrap="none"
                       />
-                      <Text
-                        text={`${m.width}x${m.height}`}
-                        x={0}
-                        y={h/2 + fontSize * 0.2}
-                        width={w}
-                        align="center"
-                        fill="rgba(15, 23, 42, 0.7)"
-                        fontSize={fontSize * 0.7}
-                        fontFamily="Inter"
-                        fontStyle="normal"
-                      />
+                      {screenH > 36 && (
+                        <Text
+                          text={`${m.width} × ${m.height} um`}
+                          x={0}
+                          y={startY + nameFS * 1.3}
+                          width={w}
+                          align="center"
+                          fill="rgba(10, 20, 40, 0.6)"
+                          fontSize={subFS}
+                          fontFamily="Inter"
+                          fontStyle="normal"
+                          ellipsis={true}
+                          wrap="none"
+                        />
+                      )}
                     </Group>
                   );
                 })()}
