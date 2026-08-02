@@ -49,7 +49,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             <li><span>1</span><div><strong>Configure the Top Cell</strong><p>Set its Cadence library, cell name, width, height, and placement grid.</p></div></li>
             <li><span>2</span><div><strong>Create Master IPs</strong><p>Use the left sidebar’s + button to define reusable blocks, dimensions, and planning colors.</p></div></li>
             <li><span>3</span><div><strong>Place instances</strong><p>Click a master’s crosshair or press <kbd>i</kbd>, then click the canvas. Press <kbd>Esc</kbd> when finished.</p></div></li>
-            <li><span>4</span><div><strong>Arrange and inspect</strong><p>Shift-click blocks, choose the amber primary reference, then use Align. Measure remaining gaps with Auto-Dim or rulers.</p></div></li>
+            <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select the IP to move, open Align, and choose Align by two edges. Then click its edge and the fixed target edge. Use Auto-Dim or rulers to inspect spacing.</p></div></li>
             <li><span>5</span><div><strong>Save and export</strong><p>Save an editable `.flp`, preview SKILL, then export only after checking destination libraries.</p></div></li>
           </ol>
         </section>
@@ -63,15 +63,15 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiRotateCw />
-              <div><strong>Rotate safely</strong><p>Drag the blue handle above a single selection. Rotation snaps to legal Cadence quarter turns and preserves its center.</p></div>
+              <div><strong>Rotate safely</strong><p>Right-click an IP to rotate it 90° clockwise; Shift-right-click rotates counterclockwise. You can also use r / Shift+r or the Properties panel.</p></div>
             </article>
             <article className="tutorial-card">
               <FiAlignLeft />
-              <div><strong>Align to a reference</strong><p>The amber block is fixed. Plain-click another already-selected block to make it primary, then align all blue blocks to its chosen edge or center.</p></div>
+              <div><strong>Align by edges</strong><p>Select the moving source IP, choose Align by two edges, click its amber edge, then click a green edge on the fixed target. Enter a signed offset if needed and Apply.</p></div>
             </article>
             <article className="tutorial-card">
               <FiLayers />
-              <div><strong>Read Auto-Dim</strong><p>Violet dimensions show nearest visible gaps and name both IPs. Hover one dimension to fade the others. Blue dimensions belong to the selected IP.</p></div>
+              <div><strong>Read Auto-Dim</strong><p>With no selection, violet lines give the nearest-gap overview. Selecting an IP hides that network and shows only its focused blue dimensions, so labels do not compete.</p></div>
             </article>
             <article className="tutorial-card">
               <FiSave />

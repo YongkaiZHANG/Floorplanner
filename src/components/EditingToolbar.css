@@ -98,6 +98,33 @@
   color: var(--text-secondary);
 }
 
+.editing-toolbar__menu-item--primary {
+  min-height: 52px;
+  background: rgba(14, 165, 233, 0.1);
+}
+
+.editing-toolbar__menu-item--primary span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.editing-toolbar__menu-item--primary small {
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.editing-toolbar__menu-section {
+  margin: 6px 4px 2px;
+  padding: 7px 5px 4px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.45px;
+  text-transform: uppercase;
+}
+
 .editing-toolbar__vertical-icon {
   transform: rotate(90deg);
 }

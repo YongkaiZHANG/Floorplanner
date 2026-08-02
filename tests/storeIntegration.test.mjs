@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getPhysicalBounds } from '../src/utils/alignment.ts';
-import { rotateOrientationByQuarterTurns, useStore } from '../src/store/useStore.ts';
+import { getProjectSnapshot, rotateOrientationByQuarterTurns, useStore } from '../src/store/useStore.ts';
 
 const emptyProject = {
   gridSize: 0.005,
@@ -74,4 +74,85 @@ test('quarter-turn rotation preserves the displayed center and mirrored family',
   assert.equal(rotateOrientationByQuarterTurns('MXR90', 1), 'MY');
   assert.equal(rotateOrientationByQuarterTurns('MY', 1), 'MYR90');
   assert.equal(rotateOrientationByQuarterTurns('MYR90', 1), 'MX');
+});
+
+test('edge alignment moves only the source and is one undoable store action', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'edgeBlock', 10, 5, '#ffffff');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -30, 0, 'R90');
+  useStore.getState().placeInstance(master.id, 20, 10, 'MY');
+  const [sourceBefore, targetBefore] = structuredClone(useStore.getState().instances);
+  const selectionBefore = {
+    selectedInstanceId: useStore.getState().selectedInstanceId,
+    selectedInstanceIds: [...useStore.getState().selectedInstanceIds],
+  };
+  const historyLength = useStore.getState().history.past.length;
+
+  useStore.getState().alignInstanceEdges(sourceBefore.id, targetBefore.id, 'right', 'left', -5);
+  const [sourceAfter, targetAfter] = useStore.getState().instances;
+  const sourceBounds = getPhysicalBounds({ ...sourceAfter, width: master.width, height: master.height });
+  const targetBounds = getPhysicalBounds({ ...targetAfter, width: master.width, height: master.height });
+  assert.equal(sourceBounds.right, targetBounds.left - 5);
+  assert.deepEqual(targetAfter, targetBefore);
+  assert.deepEqual({
+    selectedInstanceId: useStore.getState().selectedInstanceId,
+    selectedInstanceIds: useStore.getState().selectedInstanceIds,
+  }, selectionBefore);
+  assert.equal(useStore.getState().history.past.length, historyLength + 1);
+
+  useStore.getState().undo();
+  assert.deepEqual(useStore.getState().instances, [sourceBefore, targetBefore]);
+});
+
+test('interactive edge-alignment session is transient and applies as one history entry', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'sessionBlock', 10, 5, '#ffffff');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -30, 0, 'R0');
+  useStore.getState().placeInstance(master.id, 20, 0, 'R0');
+  const [source, target] = structuredClone(useStore.getState().instances);
+  const historyLength = useStore.getState().history.past.length;
+
+  useStore.getState().startEdgeAlignment(source.id);
+  useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
+  useStore.getState().setEdgeAlignmentEdge(target.id, 'left');
+  useStore.getState().setEdgeAlignmentOffset('-5');
+  assert.equal(useStore.getState().history.past.length, historyLength);
+  assert.equal(Object.hasOwn(getProjectSnapshot(useStore.getState()), 'edgeAlignmentSession'), false);
+
+  useStore.getState().applyEdgeAlignment();
+  assert.equal(useStore.getState().edgeAlignmentSession, null);
+  assert.equal(useStore.getState().history.past.length, historyLength + 1);
+  const [moved, fixed] = useStore.getState().instances;
+  assert.equal(
+    getPhysicalBounds({ ...moved, width: master.width, height: master.height }).right,
+    getPhysicalBounds({ ...fixed, width: master.width, height: master.height }).left - 5,
+  );
+  assert.deepEqual(fixed, target);
+
+  useStore.getState().undo();
+  assert.deepEqual(useStore.getState().instances, [source, target]);
+  useStore.getState().redo();
+  assert.deepEqual(useStore.getState().instances, [moved, fixed]);
+});
+
+test('invalid interactive edge alignment keeps its session and does not add history', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'invalidSessionBlock', 10, 5, '#ffffff');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -20, 0);
+  useStore.getState().placeInstance(master.id, 20, 0);
+  const [source, target] = useStore.getState().instances;
+  const historyLength = useStore.getState().history.past.length;
+
+  useStore.getState().startEdgeAlignment(source.id);
+  useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
+  useStore.getState().setEdgeAlignmentEdge(target.id, 'top');
+  assert.throws(() => useStore.getState().applyEdgeAlignment(), /same axis/);
+  assert.ok(useStore.getState().edgeAlignmentSession);
+  assert.equal(useStore.getState().history.past.length, historyLength);
+
+  useStore.getState().deleteInstance(target.id);
+  assert.equal(useStore.getState().edgeAlignmentSession, null);
 });

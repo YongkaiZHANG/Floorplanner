@@ -12,11 +12,11 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v2') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v3') !== 'yes';
     } catch {
       return true;
     }
@@ -146,7 +146,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v2', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v3', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -193,7 +193,7 @@ export const Topbar: React.FC = () => {
           <button
             className={`mode-btn${showAutoDim ? ' active' : ''}`}
             onClick={toggleAutoDim}
-            title="Auto-Dimension: show nearest visible IP gaps with named endpoints. Hover a dimension to isolate it."
+            title="Auto-Dimension: show a nearest-gap overview, then select one IP to focus only its local gaps."
             style={showAutoDim ? { color: '#a78bfa', borderColor: '#a78bfa' } : {}}
           >
             <FiGrid /> Auto-Dim
@@ -210,6 +210,11 @@ export const Topbar: React.FC = () => {
           onUndo={undo}
           onRedo={redo}
           onAlign={handleAlignment}
+          onStartEdgeAlign={() => {
+            if (!selectedInstanceId) return;
+            setAppMode('select');
+            startEdgeAlignment(selectedInstanceId);
+          }}
         />
 
         <button className="btn" onClick={handleSaveProject} title="Save Project (Ctrl/Cmd+S)">

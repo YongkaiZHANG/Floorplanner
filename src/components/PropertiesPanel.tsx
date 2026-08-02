@@ -162,7 +162,7 @@ export const PropertiesPanel: React.FC = () => {
                     <FiRotateCcw /> +90°
                   </button>
                 </div>
-                <p className="rotation-hint">You can also drag the blue rotate handle above the selected block.</p>
+                <p className="rotation-hint">Mouse shortcut: right-click the block to rotate clockwise; Shift-right-click rotates counterclockwise.</p>
               </div>
             </div>
 

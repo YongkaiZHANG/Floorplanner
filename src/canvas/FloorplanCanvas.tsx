@@ -1,7 +1,8 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, getTransformProps, clampInstancePosition, rotateOrientationByQuarterTurns } from '../store/useStore';
-import { getPhysicalBounds } from '../utils/alignment';
+import { useStore, getTransformProps, rotateOrientationByQuarterTurns } from '../store/useStore';
+import { getAlignmentEdgeAxis } from '../utils/alignment';
+import type { AlignmentEdge } from '../utils/alignment';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import './FloorplanCanvas.css';
@@ -13,7 +14,8 @@ export const FloorplanCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  // Konva cannot draw a zero-sized backing canvas during the first layout pass.
+  const [dimensions, setDimensions] = useState({ width: 1, height: 1 });
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 }); 
   const [stageScale, setStageScale] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
@@ -24,15 +26,10 @@ export const FloorplanCanvas: React.FC = () => {
   const [currentRuler, setCurrentRuler] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
   const [hoveredRulerId, setHoveredRulerId] = useState<string | null>(null);
   const [hoveredAutoDimKey, setHoveredAutoDimKey] = useState<string | null>(null);
+  const [hoveredAlignEdge, setHoveredAlignEdge] = useState<string | null>(null);
   const [snapIndicator, setSnapIndicator] = useState<{ x: number; y: number } | null>(null);
 
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
-  const [rotationDrag, setRotationDrag] = useState<{
-    instanceId: string;
-    startAngle: number;
-    startOrientation: string;
-    previewOrientation: string;
-  } | null>(null);
 
   const { 
     appMode,
@@ -45,7 +42,6 @@ export const FloorplanCanvas: React.FC = () => {
     rulers,
     gridSize, 
     updateInstancePosition,
-    updateInstanceOrientation,
     selectedInstanceId,
     selectedInstanceIds,
     setSelectedInstance,
@@ -59,6 +55,11 @@ export const FloorplanCanvas: React.FC = () => {
     setRightSidebarPinned,
     orthogonalRuler,
     showAutoDim,
+    edgeAlignmentSession,
+    setEdgeAlignmentEdge,
+    setEdgeAlignmentOffset,
+    cancelEdgeAlignment,
+    applyEdgeAlignment,
   } = useStore();
 
   const fitView = useCallback(() => {
@@ -196,7 +197,9 @@ export const FloorplanCanvas: React.FC = () => {
           }
           break;
         case 'escape':
-          if (state.appMode === 'place') {
+          if (state.edgeAlignmentSession) {
+            state.cancelEdgeAlignment();
+          } else if (state.appMode === 'place') {
             state.setPlacement(null);
           } else if (appMode === 'measure') {
             setAppMode('select');
@@ -338,28 +341,6 @@ export const FloorplanCanvas: React.FC = () => {
     if (!pointer) return;
     const { umX, umY, isSnapped } = getSnappedWorldPos(pointer, appMode === 'measure');
 
-    if (rotationDrag) {
-      const instance = instances.find(item => item.id === rotationDrag.instanceId);
-      if (instance) {
-        const bounds = computeInstanceBBox(instance);
-        if (bounds) {
-          const centerX = (bounds.minX + bounds.maxX) / 2;
-          const centerY = (bounds.minY + bounds.maxY) / 2;
-          const angle = Math.atan2(umY - centerY, umX - centerX);
-          const delta = Math.atan2(
-            Math.sin(angle - rotationDrag.startAngle),
-            Math.cos(angle - rotationDrag.startAngle),
-          );
-          const quarterTurns = Math.round(delta / (Math.PI / 2));
-          const previewOrientation = rotateOrientationByQuarterTurns(rotationDrag.startOrientation, quarterTurns);
-          if (previewOrientation !== rotationDrag.previewOrientation) {
-            setRotationDrag(current => current ? { ...current, previewOrientation } : null);
-          }
-        }
-      }
-      return;
-    }
-    
     setMousePos({ x: umX, y: umY });
     
     if (appMode === 'measure' && isSnapped) {
@@ -388,34 +369,6 @@ export const FloorplanCanvas: React.FC = () => {
 
   const handleMouseLeave = () => {
     setMousePos(null);
-    if (rotationDrag) handleMouseUp();
-  };
-
-  const handleMouseUp = () => {
-    if (!rotationDrag) return;
-    if (rotationDrag.previewOrientation !== rotationDrag.startOrientation) {
-      updateInstanceOrientation(rotationDrag.instanceId, rotationDrag.previewOrientation);
-    }
-    setRotationDrag(null);
-  };
-
-  const startRotation = (instanceId: string, pointer: { x: number; y: number }) => {
-    const instance = instances.find(item => item.id === instanceId);
-    if (!instance) return;
-    const bounds = computeInstanceBBox(instance);
-    if (!bounds) return;
-    const centerX = (bounds.minX + bounds.maxX) / 2;
-    const centerY = (bounds.minY + bounds.maxY) / 2;
-    const worldX = (pointer.x - stagePos.x) / stageScale / SCALE_FACTOR;
-    const worldY = (pointer.y - stagePos.y) / -stageScale / SCALE_FACTOR;
-    stageRef.current?.stopDrag();
-    setIsPanning(false);
-    setRotationDrag({
-      instanceId,
-      startAngle: Math.atan2(worldY - centerY, worldX - centerX),
-      startOrientation: instance.orientation,
-      previewOrientation: instance.orientation,
-    });
   };
 
   // Drag bound logic: compute physical bounds, clamp them in real-time, then snap to grid
@@ -525,9 +478,9 @@ export const FloorplanCanvas: React.FC = () => {
     ) => {
       const isHoriz = Math.abs(y2 - y1) < 0.0001;
       const isVert  = Math.abs(x2 - x1) < 0.0001;
-      const tickLen = 8 / stageScale;
-      const labelGap = 14 / stageScale;
-      const fs = 11 / stageScale;
+      const tickLen = 6 / stageScale;
+      const labelGap = 12 / stageScale;
+      const fs = 10.5 / stageScale;
 
       // midpoint in canvas px
       const mx = ((x1 + x2) / 2) * sf;
@@ -541,13 +494,13 @@ export const FloorplanCanvas: React.FC = () => {
       if (perpDir === 'left')  lx = mx - labelGap;
       const isHovered = interactive && hoveredAutoDimKey === key;
       const isMuted = interactive && hoveredAutoDimKey !== null && !isHovered;
-      const strokeWidth = (isHovered ? 2.6 : 1.5) / stageScale;
+      const strokeWidth = (isHovered ? 1.5 : 0.9) / stageScale;
 
       return (
         <Group
           key={key}
           listening={interactive}
-          opacity={isMuted ? 0.2 : 1}
+          opacity={isMuted ? 0.14 : interactive && !isHovered ? 0.72 : 1}
           onMouseEnter={interactive ? () => setHoveredAutoDimKey(key) : undefined}
           onMouseLeave={interactive ? () => setHoveredAutoDimKey(null) : undefined}
         >
@@ -556,21 +509,17 @@ export const FloorplanCanvas: React.FC = () => {
             points={[x1*sf, y1*sf, x2*sf, y2*sf]}
             stroke={color}
             strokeWidth={strokeWidth}
-            dash={[5/stageScale, 3/stageScale]}
+            dash={[4/stageScale, 4/stageScale]}
             hitStrokeWidth={interactive ? 14 / stageScale : undefined}
           />
           {/* Perpendicular end ticks */}
           {isHoriz && <>
-            <Line points={[x1*sf, y1*sf - tickLen, x1*sf, y1*sf + tickLen]} stroke={color} strokeWidth={1.5/stageScale} />
-            <Line points={[x2*sf, y2*sf - tickLen, x2*sf, y2*sf + tickLen]} stroke={color} strokeWidth={1.5/stageScale} />
+            <Line points={[x1*sf, y1*sf - tickLen, x1*sf, y1*sf + tickLen]} stroke={color} strokeWidth={1/stageScale} />
+            <Line points={[x2*sf, y2*sf - tickLen, x2*sf, y2*sf + tickLen]} stroke={color} strokeWidth={1/stageScale} />
           </>}
           {isVert && <>
-            <Line points={[x1*sf - tickLen, y1*sf, x1*sf + tickLen, y1*sf]} stroke={color} strokeWidth={1.5/stageScale} />
-            <Line points={[x2*sf - tickLen, y2*sf, x2*sf + tickLen, y2*sf]} stroke={color} strokeWidth={1.5/stageScale} />
-          </>}
-          {interactive && <>
-            <Circle x={x1*sf} y={y1*sf} radius={(isHovered ? 4 : 2.5)/stageScale} fill={color} />
-            <Circle x={x2*sf} y={y2*sf} radius={(isHovered ? 4 : 2.5)/stageScale} fill={color} />
+            <Line points={[x1*sf - tickLen, y1*sf, x1*sf + tickLen, y1*sf]} stroke={color} strokeWidth={1/stageScale} />
+            <Line points={[x2*sf - tickLen, y2*sf, x2*sf + tickLen, y2*sf]} stroke={color} strokeWidth={1/stageScale} />
           </>}
           {/* Label — rendered with scaleY=-1 to flip text upright */}
           <Text
@@ -578,12 +527,12 @@ export const FloorplanCanvas: React.FC = () => {
             y={ly}
             text={label}
             fill={color}
-            stroke="rgba(15, 23, 42, 0.92)"
-            strokeWidth={(isHovered ? 5 : 3.5) / stageScale}
+            stroke="rgba(15, 23, 42, 0.78)"
+            strokeWidth={1.25 / stageScale}
             lineJoin="round"
             fontSize={fs}
-            fontFamily="monospace"
-            fontStyle="bold"
+            fontFamily="Inter"
+            fontStyle="normal"
             scaleY={-1}
             offsetY={isHoriz ? -fs * 0.2 : fs * 0.5}
             align={isHoriz ? 'center' : 'left'}
@@ -740,7 +689,9 @@ export const FloorplanCanvas: React.FC = () => {
       }
     }
 
-    if (autoMode) {
+    // A selected block already has focused dimensions. Suppress the global layer
+    // until selection is cleared so local relationships remain easy to scan.
+    if (autoMode && !selectedId) {
       const allBoxes = instances
         .map(i => ({ id: i.id, name: i.name, box: computeInstanceBBox(i) }))
         .filter(x => x.box !== null) as { id: string; name: string; box: BBox }[];
@@ -873,12 +824,12 @@ export const FloorplanCanvas: React.FC = () => {
       }
       
       // Start and End perpendicular ticks (End markers)
-      const endTickLen = 10 / stageScale;
+      const endTickLen = 9 / stageScale;
       ticks.push(
-        <Line key={`start-tick-${key}`} points={[sx - nx * endTickLen, sy - ny * endTickLen, sx + nx * endTickLen, sy + ny * endTickLen]} stroke={rulerColor} strokeWidth={1.5 / stageScale} />
+        <Line key={`start-tick-${key}`} points={[sx - nx * endTickLen, sy - ny * endTickLen, sx + nx * endTickLen, sy + ny * endTickLen]} stroke={rulerColor} strokeWidth={1 / stageScale} />
       );
       ticks.push(
-        <Line key={`end-tick-${key}`} points={[ex - nx * endTickLen, ey - ny * endTickLen, ex + nx * endTickLen, ey + ny * endTickLen]} stroke={rulerColor} strokeWidth={1.5 / stageScale} />
+        <Line key={`end-tick-${key}`} points={[ex - nx * endTickLen, ey - ny * endTickLen, ex + nx * endTickLen, ey + ny * endTickLen]} stroke={rulerColor} strokeWidth={1 / stageScale} />
       );
 
       // Start text (0)
@@ -923,8 +874,8 @@ export const FloorplanCanvas: React.FC = () => {
           y={ey + ny * 10 / stageScale}
           text={endTextString}
           fill={rulerColor}
-          fontSize={14 / stageScale}
-          fontStyle="bold"
+          fontSize={12 / stageScale}
+          fontStyle="normal"
           fontFamily="monospace"
           scaleY={-1}
           offsetY={-7 / stageScale}
@@ -987,12 +938,11 @@ export const FloorplanCanvas: React.FC = () => {
         width={dimensions.width}
         height={dimensions.height}
         onWheel={handleWheel}
-        draggable={appMode === 'select' && !rotationDrag}
+        draggable={appMode === 'select' && !edgeAlignmentSession}
         onDragStart={() => setIsPanning(true)}
         onDragEnd={() => setIsPanning(false)}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
         x={stagePos.x}
         y={stagePos.y}
@@ -1037,13 +987,13 @@ export const FloorplanCanvas: React.FC = () => {
             }
           } else if (appMode === 'place' && placementMasterId && snapped) {
             placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation);
-          } else if (appMode === 'select' && (e.target === e.target.getStage() || e.target.name() === 'bg' || e.target.name() === 'overlay')) {
+          } else if (appMode === 'select' && !edgeAlignmentSession && (e.target === e.target.getStage() || e.target.name() === 'bg' || e.target.name() === 'overlay')) {
             if (!e.evt.shiftKey) setSelectedInstance(null);
           }
         }}
         ref={stageRef}
         style={{ 
-          cursor: rotationDrag ? 'grabbing' : appMode === 'measure' ? 'crosshair' : (isPanning ? 'grabbing' : 'grab')
+          cursor: edgeAlignmentSession ? 'crosshair' : appMode === 'measure' ? 'crosshair' : (isPanning ? 'grabbing' : 'grab')
         }}
       >
         <Layer>
@@ -1121,47 +1071,35 @@ export const FloorplanCanvas: React.FC = () => {
             const isSelected = selectedInstanceIds.includes(inst.id);
             const isPrimarySelection = selectedInstanceId === inst.id;
 
-            const displayOrientation = rotationDrag?.instanceId === inst.id
-              ? rotationDrag.previewOrientation
-              : inst.orientation;
-            let displayX = inst.x;
-            let displayY = inst.y;
-            if (displayOrientation !== inst.orientation) {
-              const currentBounds = getPhysicalBounds({ ...inst, width: masterCell.width, height: masterCell.height });
-              const nextLocalBounds = getPhysicalBounds({ ...inst, x: 0, y: 0, orientation: displayOrientation, width: masterCell.width, height: masterCell.height });
-              const centered = clampInstancePosition(
-                currentBounds.centerX - nextLocalBounds.centerX,
-                currentBounds.centerY - nextLocalBounds.centerY,
-                displayOrientation,
-                masterCell.width,
-                masterCell.height,
-                topWidth,
-                topHeight,
-                gridSize,
-              );
-              displayX = centered.x;
-              displayY = centered.y;
-            }
-
-            const t = getTransformProps(displayOrientation);
+            const t = getTransformProps(inst.orientation);
 
             return (
               <Group
                 key={inst.id}
                 id={inst.id}
-                x={displayX * SCALE_FACTOR}
-                y={displayY * SCALE_FACTOR}
+                x={inst.x * SCALE_FACTOR}
+                y={inst.y * SCALE_FACTOR}
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
-                draggable={appMode === 'select'}
+                draggable={appMode === 'select' && !edgeAlignmentSession}
                 dragBoundFunc={(pos) => dragBoundFunc(pos, inst.cellId, inst.orientation)}
                 onDragEnd={(e) => handleDragEnd(e, inst.id)}
                 onClick={(e) => {
                   e.cancelBubble = true;
-                  if (appMode === 'select') {
+                  if (appMode === 'select' && !edgeAlignmentSession) {
                     setSelectedInstance(inst.id, e.evt.shiftKey);
                   }
+                }}
+                onContextMenu={(e) => {
+                  e.evt.preventDefault();
+                  e.cancelBubble = true;
+                  if (appMode !== 'select' || edgeAlignmentSession) return;
+                  setSelectedInstance(inst.id);
+                  useStore.getState().updateInstanceOrientation(
+                    inst.id,
+                    rotateOrientationByQuarterTurns(inst.orientation, e.evt.shiftKey ? -1 : 1),
+                  );
                 }}
               >
                 <Rect
@@ -1246,60 +1184,51 @@ export const FloorplanCanvas: React.FC = () => {
             );
           })}
 
-          {/* Mouse rotation handle: drag around the block center, snapping to 90-degree Cadence orientations. */}
-          {appMode === 'select' && selectedInstanceIds.length === 1 && (() => {
-            const instance = instances.find(item => item.id === selectedInstanceIds[0]);
-            if (!instance) return null;
-            const bounds = computeInstanceBBox(instance);
-            if (!bounds) return null;
-            const centerX = (bounds.minX + bounds.maxX) / 2 * SCALE_FACTOR;
-            const topY = bounds.maxY * SCALE_FACTOR;
-            const handleY = topY + 28 / stageScale;
-            const radius = 10 / stageScale;
-            const beginRotation = (event: KonvaEventObject<MouseEvent | TouchEvent>) => {
-              event.cancelBubble = true;
-              const pointer = stageRef.current?.getPointerPosition();
-              if (pointer) startRotation(instance.id, pointer);
+          {/* Cadence-style edge picker: source edge first, then a fixed target edge. */}
+          {edgeAlignmentSession && (() => {
+            const session = edgeAlignmentSession;
+            const sourceAxis = session.sourceEdge ? getAlignmentEdgeAxis(session.sourceEdge) : null;
+            const edgeLine = (box: BBox, edge: AlignmentEdge) => {
+              if (edge === 'left') return [box.minX, box.minY, box.minX, box.maxY];
+              if (edge === 'right') return [box.maxX, box.minY, box.maxX, box.maxY];
+              if (edge === 'bottom') return [box.minX, box.minY, box.maxX, box.minY];
+              return [box.minX, box.maxY, box.maxX, box.maxY];
             };
 
-            return (
-              <Group key={`rotate-${instance.id}`}>
-                <Line
-                  points={[centerX, topY, centerX, handleY - radius]}
-                  stroke="#0ea5e9"
-                  strokeWidth={1.5 / stageScale}
-                  dash={[3 / stageScale, 3 / stageScale]}
-                  listening={false}
-                />
-                <Group
-                  x={centerX}
-                  y={handleY}
-                  onMouseDown={beginRotation}
-                  onTouchStart={beginRotation}
-                >
-                  <Circle
-                    radius={radius}
-                    fill={rotationDrag ? '#0284c7' : '#0ea5e9'}
-                    stroke="#ffffff"
-                    strokeWidth={2 / stageScale}
-                    shadowColor="rgba(15,23,42,0.35)"
-                    shadowBlur={5 / stageScale}
+            return instances.flatMap(instance => {
+              const box = computeInstanceBBox(instance);
+              if (!box) return [];
+              const isSource = instance.id === session.sourceId;
+              if (!isSource && !sourceAxis) return [];
+              const edges: AlignmentEdge[] = isSource
+                ? (session.sourceEdge ? [session.sourceEdge] : ['left', 'right', 'bottom', 'top'])
+                : sourceAxis === 'horizontal' ? ['left', 'right'] : ['bottom', 'top'];
+
+              return edges.map(edge => {
+                const key = `${instance.id}-${edge}`;
+                const chosen = (isSource && session.sourceEdge === edge)
+                  || (!isSource && session.targetId === instance.id && session.targetEdge === edge);
+                const color = isSource ? '#f59e0b' : '#10b981';
+                const points = edgeLine(box, edge).map(value => value * SCALE_FACTOR);
+                return (
+                  <Line
+                    key={`align-edge-${key}`}
+                    points={points}
+                    stroke={color}
+                    strokeWidth={(chosen || hoveredAlignEdge === key ? 5 : 3) / stageScale}
+                    opacity={chosen || hoveredAlignEdge === key ? 1 : 0.78}
+                    hitStrokeWidth={18 / stageScale}
+                    lineCap="round"
+                    onMouseEnter={() => setHoveredAlignEdge(key)}
+                    onMouseLeave={() => setHoveredAlignEdge(null)}
+                    onClick={(event) => {
+                      event.cancelBubble = true;
+                      setEdgeAlignmentEdge(instance.id, edge);
+                    }}
                   />
-                  <Text
-                    text="↻"
-                    x={-radius}
-                    y={-radius * 0.72}
-                    width={radius * 2}
-                    align="center"
-                    fill="#ffffff"
-                    fontSize={radius * 1.35}
-                    fontStyle="bold"
-                    scaleY={-1}
-                    listening={false}
-                  />
-                </Group>
-              </Group>
-            );
+                );
+              });
+            });
           })()}
 
           {/* Rulers */}
@@ -1307,7 +1236,10 @@ export const FloorplanCanvas: React.FC = () => {
           {isMeasuring && currentRuler && renderRuler(currentRuler, 'temp_ruler')}
 
           {/* Gap Annotations (selection-based + auto-dim) */}
-          {renderGapAnnotations(selectedInstanceId, showAutoDim)}
+          {renderGapAnnotations(
+            edgeAlignmentSession ? null : selectedInstanceId,
+            showAutoDim && !edgeAlignmentSession,
+          )}
 
           {/* Snap Indicator */}
           {appMode === 'measure' && snapIndicator && (
@@ -1404,9 +1336,63 @@ export const FloorplanCanvas: React.FC = () => {
       {showAutoDim && appMode !== 'measure' && (
         <div className="autodim-legend">
           <span className="autodim-legend__swatch" />
-          Nearest visible gaps only · labels identify both IPs · hover a dimension to isolate it
+          Nearest visible gaps · select a block to focus its local dimensions
         </div>
       )}
+      {edgeAlignmentSession && (() => {
+        const source = instances.find(instance => instance.id === edgeAlignmentSession.sourceId);
+        const target = instances.find(instance => instance.id === edgeAlignmentSession.targetId);
+        const ready = Boolean(edgeAlignmentSession.sourceEdge && target && edgeAlignmentSession.targetEdge);
+        const step = !edgeAlignmentSession.sourceEdge
+          ? `Click one highlighted edge of ${source?.name ?? 'the source block'}`
+          : !target
+            ? 'Click a green edge on the fixed target block'
+            : 'Enter an optional signed offset, then apply';
+
+        return (
+          <div className={`edge-align-panel${ready ? '' : ' edge-align-panel--picking'}`} role="dialog" aria-label="Align by edges">
+            <div className="edge-align-panel__header">
+              <div><strong>Align by edges</strong><span>{step}</span></div>
+              <button type="button" onClick={cancelEdgeAlignment} aria-label="Cancel edge alignment">×</button>
+            </div>
+            <div className="edge-align-panel__status">
+              <span className="edge-align-panel__source">Source</span>
+              <code>{source?.name ?? '—'}.{edgeAlignmentSession.sourceEdge ?? '?'}</code>
+              <span>→</span>
+              <span className="edge-align-panel__target">Fixed target</span>
+              <code>{target?.name ?? '—'}.{edgeAlignmentSession.targetEdge ?? '?'}</code>
+            </div>
+            {ready && <>
+              <label>
+                Signed offset (µm)
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={edgeAlignmentSession.offset}
+                  onChange={event => setEdgeAlignmentOffset(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === 'Escape') cancelEdgeAlignment();
+                    if (event.key === 'Enter') {
+                      try { applyEdgeAlignment(); } catch (error) { alert(error instanceof Error ? error.message : 'Unable to align edges.'); }
+                    }
+                  }}
+                />
+              </label>
+              <p>0 aligns the chosen edges. Positive moves the source right or up; negative moves it left or down.</p>
+              <div className="edge-align-panel__actions">
+                <button type="button" onClick={cancelEdgeAlignment}>Cancel</button>
+                <button
+                  type="button"
+                  className="edge-align-panel__apply"
+                  onClick={() => {
+                    try { applyEdgeAlignment(); } catch (error) { alert(error instanceof Error ? error.message : 'Unable to align edges.'); }
+                  }}
+                >Apply alignment</button>
+              </div>
+            </>}
+          </div>
+        );
+      })()}
     </div>
   );
 };

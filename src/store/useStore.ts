@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { alignInstances, distributeInstances, getPhysicalBounds } from '../utils/alignment.ts';
-import type { AlignmentOperation, DistributionAxis } from '../utils/alignment.ts';
+import { alignInstanceToTarget, alignInstances, distributeInstances, getPhysicalBounds } from '../utils/alignment.ts';
+import type { AlignmentEdge, AlignmentOperation, DistributionAxis } from '../utils/alignment.ts';
 import type { ProjectSnapshot } from './projectDocument.ts';
 import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
 import type { ProjectHistory } from './projectHistory.ts';
@@ -32,6 +32,15 @@ export type Ruler = {
   endY: number;
 };
 
+export type EdgeAlignmentSession = {
+  sourceId: string;
+  sourceEdge: AlignmentEdge | null;
+  targetId: string | null;
+  targetEdge: AlignmentEdge | null;
+  /** Kept as text so intermediate numeric input such as "-" remains editable. */
+  offset: string;
+};
+
 export type ProjectState = {
   gridSize: number;
   appMode: 'select' | 'measure' | 'place';
@@ -57,6 +66,7 @@ export type ProjectState = {
   placementMasterId: string | null;
   placementOrientation: string;
   history: ProjectHistory;
+  edgeAlignmentSession: EdgeAlignmentSession | null;
   
   setGridSize: (size: number) => void;
   setAppMode: (mode: 'select' | 'measure' | 'place') => void;
@@ -87,6 +97,12 @@ export type ProjectState = {
   undo: () => void;
   redo: () => void;
   alignSelectedInstances: (operation: AlignmentOperation) => void;
+  alignInstanceEdges: (sourceId: string, targetId: string, sourceEdge: AlignmentEdge, targetEdge: AlignmentEdge, offset?: number) => void;
+  startEdgeAlignment: (sourceId: string) => void;
+  setEdgeAlignmentEdge: (instanceId: string, edge: AlignmentEdge) => void;
+  setEdgeAlignmentOffset: (value: string) => void;
+  cancelEdgeAlignment: () => void;
+  applyEdgeAlignment: () => void;
   distributeSelectedInstances: (axis: DistributionAxis) => void;
   toggleOrthogonalRuler: () => void;
   toggleAutoDim: () => void;
@@ -210,6 +226,50 @@ const selectionAfterInstancesChange = (state: ProjectState, instances: Instance[
   return { selectedInstanceId, selectedInstanceIds };
 };
 
+const edgeAlignmentAfterInstancesChange = (state: ProjectState, instances: Instance[]) => {
+  const session = state.edgeAlignmentSession;
+  if (!session) return null;
+  const existingIds = new Set(instances.map(instance => instance.id));
+  return existingIds.has(session.sourceId) && (!session.targetId || existingIds.has(session.targetId))
+    ? session
+    : null;
+};
+
+const edgeAlignmentPatch = (
+  state: ProjectState,
+  sourceId: string,
+  targetId: string,
+  sourceEdge: AlignmentEdge,
+  targetEdge: AlignmentEdge,
+  offset: number,
+) => {
+  if (sourceId === targetId) throw new Error('Source and target must be different instances');
+  const source = state.instances.find(instance => instance.id === sourceId);
+  const target = state.instances.find(instance => instance.id === targetId);
+  if (!source || !target) throw new Error('The source or target instance no longer exists');
+  const sourceMaster = state.masterCells[source.cellId];
+  const targetMaster = state.masterCells[target.cellId];
+  if (!sourceMaster || !targetMaster) throw new Error('The source or target master cell no longer exists');
+
+  const position = alignInstanceToTarget(
+    { ...source, width: sourceMaster.width, height: sourceMaster.height },
+    { ...target, width: targetMaster.width, height: targetMaster.height },
+    sourceEdge,
+    targetEdge,
+    offset,
+    { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize },
+  );
+  const instances = state.instances.map(instance => (
+    instance.id === sourceId ? { ...instance, x: position.x, y: position.y } : instance
+  ));
+  const offsetLabel = offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`;
+  return commitProjectPatch(
+    state,
+    `Align ${source.name}.${sourceEdge} to ${target.name}.${targetEdge}${offsetLabel}`,
+    { instances },
+  );
+};
+
 export const useStore = create<ProjectState>((set) => ({
   gridSize: 0.005,
   appMode: 'select',
@@ -232,11 +292,12 @@ export const useStore = create<ProjectState>((set) => ({
   placementMasterId: null,
   placementOrientation: 'R0',
   history: { past: [], future: [] },
+  edgeAlignmentSession: null,
   orthogonalRuler: false,
   showAutoDim: false,
 
   setGridSize: (size) => set((state) => commitProjectPatch(state, 'Change grid', { gridSize: size })),
-  setAppMode: (mode) => set({ appMode: mode }),
+  setAppMode: (mode) => set({ appMode: mode, edgeAlignmentSession: null }),
   setTopDimensions: (w, h) => set((state) => {
     const instances = state.instances.map(instance => {
       const master = state.masterCells[instance.cellId];
@@ -251,7 +312,7 @@ export const useStore = create<ProjectState>((set) => ({
   setShowInstantiateModal: (show) => set({ showInstantiateModal: show }),
   setLeftSidebarPinned: (pinned) => set({ leftSidebarPinned: pinned }),
   setRightSidebarPinned: (pinned) => set({ rightSidebarPinned: pinned }),
-  setPlacement: (masterId, orientation = 'R0') => set({ placementMasterId: masterId, placementOrientation: orientation, appMode: masterId ? 'place' : 'select' }),
+  setPlacement: (masterId, orientation = 'R0') => set({ placementMasterId: masterId, placementOrientation: orientation, appMode: masterId ? 'place' : 'select', edgeAlignmentSession: null }),
   
   addMasterCell: (libName, cellName, w, h, color) => set((state) => {
     const existing = Object.values(state.masterCells).find(c => c.cellName === cellName && c.libName === libName);
@@ -292,6 +353,7 @@ export const useStore = create<ProjectState>((set) => ({
         instances: newInstances,
       }),
       ...selectionAfterInstancesChange(state, newInstances),
+      edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, newInstances),
     };
   }),
 
@@ -377,6 +439,7 @@ export const useStore = create<ProjectState>((set) => ({
     return {
       ...commitProjectPatch(state, `Delete ${state.instances.find(instance => instance.id === id)?.name ?? 'instance'}`, { instances }),
       ...selectionAfterInstancesChange(state, instances),
+      edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, instances),
     };
   }),
 
@@ -388,6 +451,7 @@ export const useStore = create<ProjectState>((set) => ({
       ...commitProjectPatch(state, `Delete ${state.selectedInstanceIds.length} block${state.selectedInstanceIds.length === 1 ? '' : 's'}`, { instances }),
       selectedInstanceId: null,
       selectedInstanceIds: [],
+      edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, instances),
     };
   }),
 
@@ -406,6 +470,7 @@ export const useStore = create<ProjectState>((set) => ({
       ...result.snapshot,
       history: result.history,
       ...selectionAfterInstancesChange(state, result.snapshot.instances),
+      edgeAlignmentSession: null,
     };
   }),
 
@@ -416,6 +481,7 @@ export const useStore = create<ProjectState>((set) => ({
       ...result.snapshot,
       history: result.history,
       ...selectionAfterInstancesChange(state, result.snapshot.instances),
+      edgeAlignmentSession: null,
     };
   }),
 
@@ -440,6 +506,67 @@ export const useStore = create<ProjectState>((set) => ({
       return position ? { ...instance, x: position.x, y: position.y } : instance;
     });
     return commitProjectPatch(state, `Align ${operation.replace('-', ' ')}`, { instances });
+  }),
+
+  alignInstanceEdges: (sourceId, targetId, sourceEdge, targetEdge, offset = 0) => set((state) => (
+    edgeAlignmentPatch(state, sourceId, targetId, sourceEdge, targetEdge, offset)
+  )),
+
+  startEdgeAlignment: (sourceId) => set((state) => {
+    if (!state.instances.some(instance => instance.id === sourceId)) return state;
+    return {
+      edgeAlignmentSession: {
+        sourceId,
+        sourceEdge: null,
+        targetId: null,
+        targetEdge: null,
+        offset: '0',
+      },
+    };
+  }),
+
+  setEdgeAlignmentEdge: (instanceId, edge) => set((state) => {
+    const session = state.edgeAlignmentSession;
+    if (!session || !state.instances.some(instance => instance.id === instanceId)) return state;
+    if (instanceId === session.sourceId) {
+      return { edgeAlignmentSession: { ...session, sourceEdge: edge } };
+    }
+    return {
+      edgeAlignmentSession: {
+        ...session,
+        targetId: instanceId,
+        targetEdge: edge,
+      },
+    };
+  }),
+
+  setEdgeAlignmentOffset: (value) => set((state) => (
+    state.edgeAlignmentSession
+      ? { edgeAlignmentSession: { ...state.edgeAlignmentSession, offset: value } }
+      : state
+  )),
+
+  cancelEdgeAlignment: () => set({ edgeAlignmentSession: null }),
+
+  applyEdgeAlignment: () => set((state) => {
+    const session = state.edgeAlignmentSession;
+    if (!session?.sourceEdge || !session.targetId || !session.targetEdge) {
+      throw new Error('Choose a source edge and a target edge before applying alignment');
+    }
+    const trimmedOffset = session.offset.trim();
+    const offset = trimmedOffset === '' ? Number.NaN : Number(trimmedOffset);
+    if (!Number.isFinite(offset)) throw new RangeError('Alignment offset must be a finite number');
+    return {
+      ...edgeAlignmentPatch(
+        state,
+        session.sourceId,
+        session.targetId,
+        session.sourceEdge,
+        session.targetEdge,
+        offset,
+      ),
+      edgeAlignmentSession: null,
+    };
   }),
 
   distributeSelectedInstances: (axis) => set((state) => {
@@ -478,6 +605,7 @@ export const useStore = create<ProjectState>((set) => ({
     instances: data.instances ?? [],
     rulers: data.rulers ?? [],
     history: { past: [], future: [] },
+    edgeAlignmentSession: null,
     selectedInstanceId: null,
     selectedInstanceIds: [],
     appMode: 'select'

@@ -29,6 +29,7 @@ type EditingToolbarProps = {
   onUndo: () => void;
   onRedo: () => void;
   onAlign: (action: AlignmentAction) => void;
+  onStartEdgeAlign: () => void;
 };
 
 const alignmentItems: Array<{
@@ -55,10 +56,11 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
   onUndo,
   onRedo,
   onAlign,
+  onStartEdgeAlign,
 }) => {
   const [isAlignOpen, setIsAlignOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const canAlign = selectionCount >= 2;
+  const canAlign = selectionCount >= 1;
 
   useEffect(() => {
     if (!isAlignOpen) return;
@@ -110,7 +112,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
         onClick={() => setIsAlignOpen((open) => !open)}
         aria-expanded={isAlignOpen}
         aria-haspopup="menu"
-        title={canAlign ? `Align selected blocks to ${anchorName ?? 'the primary block'}` : 'Select at least two blocks to align'}
+        title={canAlign ? `Align ${anchorName ?? 'the selected block'} by edges` : 'Select a source block to align'}
       >
         <FiAlignLeft />
         <span>Align</span>
@@ -120,8 +122,21 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
       {isAlignOpen && (
         <div className="editing-toolbar__menu" role="menu" aria-label="Alignment actions">
           <div className="editing-toolbar__menu-label">
-            <strong>{anchorName ?? 'Primary block'}</strong> is the fixed reference · {selectionCount} selected
+            <strong>{anchorName ?? 'Selected block'}</strong> · {selectionCount} selected
           </div>
+          <button
+            className="editing-toolbar__menu-item editing-toolbar__menu-item--primary"
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onStartEdgeAlign();
+              setIsAlignOpen(false);
+            }}
+          >
+            <FiAlignCenter />
+            <span><strong>Align by two edges…</strong><small>Pick this block’s edge, then a fixed target edge</small></span>
+          </button>
+          <div className="editing-toolbar__menu-section">Quick align selected blocks</div>
           {alignmentItems.map((item) => (
             <button
               key={item.action}

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  alignInstanceToTarget,
   alignInstances,
   distributeInstances,
   getPhysicalBounds,
@@ -108,6 +109,56 @@ test('uses the explicit primary block as the fixed alignment reference', () => {
   const anchorPosition = result.find(position => position.id === 'anchor');
   assert.deepEqual(anchorPosition, { id: 'anchor', x: 12, y: 8 });
   assert.deepEqual(bounds.map(item => item.left), [4, 4, 4]);
+});
+
+test('aligns a rotated source edge to a mirrored target edge with a signed offset', () => {
+  const source = block('source', 30, 10, 10, 5, 'R90');
+  const target = block('target', 0, -10, 10, 6, 'MY');
+  const position = alignInstanceToTarget(source, target, 'right', 'left', -3, options);
+  const moved = getPhysicalBounds({ ...source, ...position });
+  const fixed = getPhysicalBounds(target);
+  assert.deepEqual(position, { id: 'source', x: -13, y: 10 });
+  assert.equal(moved.right, fixed.left - 3);
+  assert.deepEqual({ x: target.x, y: target.y }, { x: 0, y: -10 });
+});
+
+test('supports vertical edge-to-edge alignment without changing the perpendicular coordinate', () => {
+  const source = block('source', 18, -20, 10, 5, 'MXR90');
+  const target = block('target', -10, 5, 8, 12, 'R180');
+  const position = alignInstanceToTarget(source, target, 'bottom', 'top', 2, options);
+  const moved = getPhysicalBounds({ ...source, ...position });
+  const fixed = getPhysicalBounds(target);
+  assert.equal(position.x, source.x);
+  assert.equal(moved.bottom, fixed.top + 2);
+});
+
+test('rejects cross-axis, off-grid, out-of-bounds, and self edge alignments', () => {
+  const source = block('source', 0, 0, 10, 5);
+  const offGridTarget = block('target', -9, 10, 10, 5);
+  assert.throws(
+    () => alignInstanceToTarget(source, offGridTarget, 'left', 'top', 0, options),
+    /same axis/,
+  );
+  assert.throws(
+    () => alignInstanceToTarget(source, offGridTarget, 'left', 'left', 0, { ...options, gridSize: 2 }),
+    /on-grid and inside/,
+  );
+  const gridSafe = alignInstanceToTarget(source, offGridTarget, 'left', 'left', 1, { ...options, gridSize: 2 });
+  assert.equal(gridSafe.x, -8);
+  assert.throws(
+    () => alignInstanceToTarget({ ...source, y: 0.5 }, offGridTarget, 'left', 'left', 1, options),
+    /perpendicular coordinate/,
+  );
+
+  const boundaryTarget = block('boundary', 40, 0, 10, 5);
+  assert.throws(
+    () => alignInstanceToTarget(source, boundaryTarget, 'left', 'right', 2, options),
+    /on-grid and inside/,
+  );
+  assert.throws(
+    () => alignInstanceToTarget(source, source, 'left', 'right', 0, options),
+    /different instances/,
+  );
 });
 
 test('distributes equal horizontal physical gaps and preserves input order', () => {

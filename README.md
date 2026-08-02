@@ -9,8 +9,9 @@ IC Floorplanner is a browser-based ASIC floorplanning tool with a CAD-style canv
 - Center-origin top-cell canvas with positive Y upward, matching the generated layout coordinates.
 - Grid-snapped placement with top-cell boundary enforcement.
 - All eight Cadence orientations: `R0`, `R90`, `R180`, `R270`, `MX`, `MY`, `MXR90`, and `MYR90`.
-- Mouse rotation handle with 90-degree snapping and center-preserving rotation.
-- Shift-click multi-selection with transformed-edge alignment and equal-gap distribution.
+- Mouse right-click rotation with 90-degree snapping, plus keyboard and Properties controls.
+- Cadence-style source-edge to fixed-target-edge alignment with an exact numeric offset.
+- Shift-click multi-selection with quick transformed-edge alignment and equal-gap distribution.
 - Full project Undo and Redo, including placement, transforms, rulers, master edits, alignment, and top-cell changes.
 - Manual rulers, orthogonal measurement, edge snapping, selected-IP gaps, and reduced-clutter Auto-Dim.
 - Versioned `.flp` project save/open with validation and unsaved-change protection.
@@ -56,7 +57,7 @@ Click the crosshair beside a master or press `i` to attach an instance to the cu
 
 Select a block to edit exact X/Y coordinates and orientation in the Properties panel. Rotation is available in three ways:
 
-- Drag the blue rotation handle above the selected block
+- Right-click an IP to rotate clockwise; Shift-right-click rotates counterclockwise
 - Use the ±90° buttons in Properties
 - Press `r` or `Shift+r`
 
@@ -64,7 +65,9 @@ Mouse rotation snaps to legal Cadence quarter turns and keeps the block's physic
 
 ### 3. Select and arrange blocks
 
-Shift-click blocks on the canvas or in the instance list to build a multi-selection. The amber block is the fixed reference; plain-click another already-selected block to make it the primary reference without clearing the group. The Align menu supports:
+For Cadence-style two-object alignment, first select the IP that should move. Open **Align → Align by two edges**, click an amber source edge, then click a compatible green edge on the fixed target IP. Enter a signed offset in micrometers if needed: positive moves the source right/up and negative moves it left/down. Applying the operation moves only the source and creates one Undo entry.
+
+For quick group alignment, Shift-click blocks on the canvas or in the instance list to build a multi-selection. The amber block is the fixed reference; plain-click another already-selected block to make it the primary reference without clearing the group. The Align menu also supports:
 
 - Left, right, top, and bottom physical edges
 - Horizontal and vertical physical centers
@@ -76,7 +79,7 @@ Every selected block moves to the chosen physical edge or center of the amber re
 
 Ruler mode supports grid and object-edge snapping. Press `o` for orthogonal measurement and click two snapped points to create a ruler. Double-clicking a block in Select mode opens and pins its Properties panel; double-clicking empty canvas fits the view.
 
-Selecting a block shows its directly visible neighboring gaps in blue. Auto-Dim shows only the nearest visible neighbor in each direction instead of every possible pair. Violet labels name both endpoint instances, and hovering a dimension fades the others so the relationship is easy to trace.
+Selecting a block shows its directly visible neighboring gaps in blue. Auto-Dim shows a violet nearest-gap overview only while nothing is selected; selecting an IP automatically suppresses the global network so only that IP’s focused dimensions remain. Labels use lighter text and thin endpoint ticks without extra point markers. Hovering a global dimension fades the others.
 
 ### 5. Save or export
 

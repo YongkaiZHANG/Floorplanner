@@ -16,7 +16,12 @@ export type AlignmentOperation =
   | 'horizontal-center'
   | 'vertical-center';
 
+export type AlignmentEdge = AlignmentOperation;
+
 export type DistributionAxis = 'horizontal' | 'vertical';
+
+export const HORIZONTAL_ALIGNMENT_EDGES = ['left', 'horizontal-center', 'right'] as const;
+export const VERTICAL_ALIGNMENT_EDGES = ['bottom', 'vertical-center', 'top'] as const;
 
 export interface AlignableInstance {
   id: string;
@@ -111,6 +116,21 @@ export const getPhysicalBounds = (instance: AlignableInstance): PhysicalBounds =
   };
 };
 
+export const getAlignmentEdgeAxis = (edge: AlignmentEdge): DistributionAxis => (
+  edge === 'left' || edge === 'right' || edge === 'horizontal-center'
+    ? 'horizontal'
+    : 'vertical'
+);
+
+export const getEdgeCoordinate = (bounds: PhysicalBounds, edge: AlignmentEdge) => {
+  if (edge === 'left') return bounds.left;
+  if (edge === 'right') return bounds.right;
+  if (edge === 'bottom') return bounds.bottom;
+  if (edge === 'top') return bounds.top;
+  if (edge === 'horizontal-center') return bounds.centerX;
+  return bounds.centerY;
+};
+
 const validateOptions = (options: ArrangementOptions) => {
   assertFinitePositive(options.topWidth, 'Top-cell width');
   assertFinitePositive(options.topHeight, 'Top-cell height');
@@ -148,6 +168,65 @@ const placeInsideTop = (
     x: snapWithin(targetX, minX, maxX, options.gridSize),
     y: snapWithin(targetY, minY, maxY, options.gridSize),
   };
+};
+
+/**
+ * Moves one source block by constraining one of its physical edges to an edge
+ * on a fixed target block. Edges must be on the same axis. The signed offset is
+ * expressed in world coordinates: positive is right for horizontal edges and
+ * up for vertical edges.
+ *
+ * The equation is exact: sourceEdge = targetEdge + offset. If that coordinate
+ * cannot be represented by a grid-snapped source origin inside the top cell,
+ * this function throws instead of silently rounding to a different alignment.
+ */
+export const alignInstanceToTarget = (
+  source: AlignableInstance,
+  target: AlignableInstance,
+  sourceEdge: AlignmentEdge,
+  targetEdge: AlignmentEdge,
+  offset: number,
+  options: ArrangementOptions,
+): InstancePosition => {
+  validateOptions(options);
+  if (source.id === target.id) {
+    throw new Error('Source and target must be different instances');
+  }
+  if (!Number.isFinite(offset)) {
+    throw new RangeError('Alignment offset must be finite');
+  }
+  const axis = getAlignmentEdgeAxis(sourceEdge);
+  if (axis !== getAlignmentEdgeAxis(targetEdge)) {
+    throw new Error('Source and target edges must be on the same axis');
+  }
+
+  const sourceBounds = getPhysicalBounds(source);
+  const targetBounds = getPhysicalBounds(target);
+  const desiredCoordinate = getEdgeCoordinate(targetBounds, targetEdge) + offset;
+  const sourceCoordinate = getEdgeCoordinate(sourceBounds, sourceEdge);
+  const delta = desiredCoordinate - sourceCoordinate;
+  const position = placeInsideTop(
+    source,
+    axis === 'horizontal' ? source.x + delta : source.x,
+    axis === 'vertical' ? source.y + delta : source.y,
+    options,
+  );
+  const perpendicularWasChanged = axis === 'horizontal'
+    ? Math.abs(position.y - source.y) > EPSILON
+    : Math.abs(position.x - source.x) > EPSILON;
+  if (perpendicularWasChanged) {
+    throw new RangeError(
+      `Cannot align ${source.id} without changing its perpendicular coordinate to satisfy grid or top-cell bounds`,
+    );
+  }
+  const movedBounds = getPhysicalBounds({ ...source, ...position });
+  const actualCoordinate = getEdgeCoordinate(movedBounds, sourceEdge);
+  if (Math.abs(actualCoordinate - desiredCoordinate) > EPSILON) {
+    throw new RangeError(
+      `Cannot place ${source.id} at the requested edge offset while keeping it on-grid and inside the top cell`,
+    );
+  }
+  return position;
 };
 
 /**
