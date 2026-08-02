@@ -85,7 +85,7 @@ test('emits a visible pixel array on the requested drawing layers', () => {
 
 test('multiple pad instances reference one generated pad cellview', () => {
   const padCells = {
-    pad: { id: 'pad', libName: 'ioLib', cellName: 'PAD', width: 10, height: 8, color: '#f59e0b', kind: 'pad' },
+    pad: { id: 'pad', libName: 'demoLib', cellName: 'PAD', width: 10, height: 8, color: '#f59e0b', kind: 'pad' },
   };
   const padInstances = [
     { id: 'p0', cellId: 'pad', name: 'I0', x: -50, y: 42, orientation: 'R0' },
@@ -94,4 +94,14 @@ test('multiple pad instances reference one generated pad cellview', () => {
   const code = generateSkillCode('demoLib', 'top', 100, 100, padCells, padInstances, 0.005);
   assert.equal((code.match(/Creating master: %s\/%s/g) ?? []).length, 1);
   assert.equal((code.match(/dbCreateInst\(cv master/g) ?? []).length, 2);
+});
+
+test('rejects a master outside the Top Cell library', () => {
+  const cells = {
+    ip: { id: 'ip', libName: 'otherLib', cellName: 'IP', width: 10, height: 10, color: '#fff' },
+  };
+  assert.throws(
+    () => generateSkillCode('demoLib', 'top', 100, 100, cells, [], 0.005),
+    /must use the Top Cell library demoLib/,
+  );
 });

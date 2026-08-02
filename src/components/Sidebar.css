@@ -183,6 +183,20 @@
   text-align: center;
 }
 
+.locked-library {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.07);
+  cursor: default;
+}
+
+.field-help {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
 .edge-pad-action {
   width: calc(100% - 16px);
   margin: 12px 8px 0;

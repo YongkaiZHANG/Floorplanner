@@ -49,7 +49,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
           <h3>Build your first floorplan</h3>
           <ol className="tutorial-steps">
             <li><span>1</span><div><strong>Configure the Top Cell</strong><p>Set its Cadence library, cell name, width, height, and placement grid.</p></div></li>
-            <li><span>2</span><div><strong>Create Master IPs</strong><p>Use the left sidebar’s + button to define reusable blocks, dimensions, planning colors, fill transparency, and outline style.</p></div></li>
+            <li><span>2</span><div><strong>Create Master IPs</strong><p>Use the left sidebar’s + button to define reusable blocks, dimensions, planning colors, fill transparency, and outline style. Their library automatically follows the Top Cell.</p></div></li>
             <li><span>3</span><div><strong>Place instances</strong><p>Click a master’s crosshair or press <kbd>i</kbd>, then click the canvas. Press <kbd>Esc</kbd> when finished.</p></div></li>
             <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select the IP to move, click Align (or press a), choose its edge, then click a green IP, top-cell, or ruler reference. The target click applies immediately.</p></div></li>
             <li><span>5</span><div><strong>Save, import, and export</strong><p>Save keeps the working project in this browser. Import SVG opens an editable project file; Export SVG creates a visual copy for review.</p></div></li>
@@ -73,7 +73,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiLayers />
-              <div><strong>Read Auto-Dim</strong><p>With no selection, violet lines give the nearest-gap overview. Selecting an IP hides that network and shows only its focused blue dimensions, so labels do not compete.</p></div>
+              <div><strong>Read Auto-Dim</strong><p>Selecting an IP shows focused blue gaps to visible IPs, boundaries, and pixel-array edges. Hiding the pixel array removes its distances; no selection restores the violet overview.</p></div>
             </article>
             <article className="tutorial-card">
               <FiGrid />
@@ -89,7 +89,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiDownload />
-              <div><strong>Export to Virtuoso</strong><p>SKILL creates or overwrites layout cellviews. Required libraries must already exist and be attached to the intended technology.</p></div>
+              <div><strong>Export to Virtuoso</strong><p>SKILL creates the complete hierarchy in the Top Cell library. A visible pixel array is emitted on the drawing layers; a hidden one is omitted.</p></div>
             </article>
           </div>
         </section>
@@ -113,7 +113,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
 
         <aside className="tutorial-warning">
           <FiBox />
-          <p><strong>Cadence export note:</strong> canvas colors are planning aids. Virtuoso colors come from its technology/display configuration, while geometry and orientation follow the exported database transforms.</p>
+          <p><strong>Cadence export note:</strong> the Top Cell library must already exist and be technology-attached. Canvas colors are planning aids; geometry, orientation, and visible pixel-array drawing follow the export.</p>
         </aside>
       </div>
 

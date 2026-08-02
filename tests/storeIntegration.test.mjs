@@ -166,6 +166,27 @@ test('manual separated pads reuse one master and accept arbitrary perimeter posi
   assert.equal(Object.keys(useStore.getState().masterCells).length, 1);
 });
 
+test('Top Cell library is inherited by every IP and pad and updates atomically', () => {
+  useStore.getState().loadProject({
+    ...emptyProject,
+    topLibName: 'topLib',
+    masterCells: {
+      imported: { id: 'imported', libName: 'legacyLib', cellName: 'IMPORTED', width: 10, height: 10, color: '#fff' },
+    },
+  });
+  assert.equal(useStore.getState().masterCells.imported.libName, 'topLib');
+
+  useStore.getState().addMasterCell('ignoredLib', 'NEW_IP', 10, 10, '#fff');
+  useStore.getState().prepareManualPadPlacement({ libName: 'ignoredPadLib', cellName: 'PAD', width: 5, height: 5, color: '#fff' });
+  assert.ok(Object.values(useStore.getState().masterCells).every(master => master.libName === 'topLib'));
+
+  const beforeHistory = useStore.getState().history.past.length;
+  useStore.getState().setTopNames('renamedLib', 'top');
+  assert.equal(useStore.getState().topLibName, 'renamedLib');
+  assert.ok(Object.values(useStore.getState().masterCells).every(master => master.libName === 'renamedLib'));
+  assert.equal(useStore.getState().history.past.length, beforeHistory + 1);
+});
+
 test('edge alignment moves only the source and is one undoable store action', () => {
   useStore.getState().loadProject(emptyProject);
   useStore.getState().addMasterCell('testLib', 'edgeBlock', 10, 5, '#ffffff');

@@ -574,7 +574,16 @@ export const useStore = create<ProjectState>((set) => ({
       : null;
     return commitProjectPatch(state, 'Resize top cell', { topWidth: w, topHeight: h, instances, pixelArray });
   }),
-  setTopNames: (lib, cell) => set((state) => commitProjectPatch(state, 'Rename top cell', { topLibName: lib, topCellName: cell })),
+  setTopNames: (lib, cell) => set((state) => {
+    const topLibName = lib.trim();
+    const topCellName = cell.trim();
+    if (!topLibName || !topCellName) throw new Error('Top library and cell names are required');
+    const masterCells = Object.fromEntries(Object.entries(state.masterCells).map(([id, master]) => [
+      id,
+      { ...master, libName: topLibName },
+    ]));
+    return commitProjectPatch(state, 'Rename top cell library and hierarchy', { topLibName, topCellName, masterCells });
+  }),
   setShowCreateModal: (show) => set({ showCreateModal: show }),
   setShowInstantiateModal: (show) => set({ showInstantiateModal: show }),
   setLeftSidebarPinned: (pinned) => set({ leftSidebarPinned: pinned }),
@@ -587,25 +596,28 @@ export const useStore = create<ProjectState>((set) => ({
     edgeAlignmentSession: null,
   }),
   
-  addMasterCell: (libName, cellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
-    const existing = Object.values(state.masterCells).find(c => c.cellName === cellName && c.libName === libName);
+  addMasterCell: (_libName, cellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
+    const existing = Object.values(state.masterCells).find(c => c.cellName === cellName);
     if (existing) return state; 
     const appearance = normalizeCellAppearance(opacity, outlineStyle);
     const id = uuidv4();
     return commitProjectPatch(state, `Create ${cellName}`, {
       masterCells: {
         ...state.masterCells,
-        [id]: { id, libName, cellName, width: w, height: h, color, ...appearance }
+        [id]: { id, libName: state.topLibName, cellName, width: w, height: h, color, ...appearance }
       },
     });
   }),
 
-  updateMasterCell: (id, libName, cellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
+  updateMasterCell: (id, _libName, cellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
     if (!state.masterCells[id]) return state;
+    if (Object.values(state.masterCells).some(master => master.id !== id && master.cellName === cellName)) {
+      throw new Error(`Cell name ${cellName} is already used in ${state.topLibName}`);
+    }
     const appearance = normalizeCellAppearance(opacity, outlineStyle);
     const masterCells = {
       ...state.masterCells,
-      [id]: { ...state.masterCells[id], libName, cellName, width: w, height: h, color, ...appearance },
+      [id]: { ...state.masterCells[id], libName: state.topLibName, cellName, width: w, height: h, color, ...appearance },
     };
     const instances = state.instances.map(instance => {
       if (instance.cellId !== id) return instance;
@@ -661,7 +673,7 @@ export const useStore = create<ProjectState>((set) => ({
   }),
 
   createPadRow: (config) => set((state) => {
-    const libName = config.libName.trim();
+    const libName = state.topLibName;
     const cellName = config.cellName.trim();
     if (!libName || !cellName) throw new Error('Pad library and cell names are required');
     if (!Number.isFinite(config.width) || config.width <= 0 || !Number.isFinite(config.height) || config.height <= 0) {
@@ -775,7 +787,7 @@ export const useStore = create<ProjectState>((set) => ({
   }),
 
   prepareManualPadPlacement: (config) => set((state) => {
-    const libName = config.libName.trim();
+    const libName = state.topLibName;
     const cellName = config.cellName.trim();
     if (!libName || !cellName) throw new Error('Pad library and cell names are required');
     if (!Number.isFinite(config.width) || !Number.isFinite(config.height) || config.width <= 0 || config.height <= 0) {
@@ -1268,7 +1280,10 @@ export const useStore = create<ProjectState>((set) => ({
     const gridSize = data.gridSize ?? state.gridSize;
     const topWidth = data.topWidth ?? state.topWidth;
     const topHeight = data.topHeight ?? state.topHeight;
-    const masterCells = data.masterCells ?? {};
+    const masterCells = Object.fromEntries(Object.entries(data.masterCells ?? {}).map(([id, master]) => [
+      id,
+      { ...master, libName: data.topLibName ?? state.topLibName },
+    ]));
     const instances = (data.instances ?? []).map(instance => {
       const master = masterCells[instance.cellId];
       if (!master) return instance;

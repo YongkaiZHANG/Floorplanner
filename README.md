@@ -16,6 +16,8 @@ IC Floorplanner is a browser-based ASIC floorplanning tool with a CAD-style canv
 - Manual rulers, orthogonal measurement, edge snapping, selected-IP gaps, and reduced-clutter Auto-Dim.
 - Edge-bound pads with automatic rows for regular pitch plus manual placement for separated groups, irregular gaps, and keep-out regions.
 - Optional pixel-array region with grid-snapped sizing, click placement, bounded dragging, edge alignment, IP overlap, and a non-destructive visibility toggle.
+- Selected-IP dimensions include clearances to every visible pixel-array edge; hidden arrays are excluded from measurement and export.
+- One authoritative hierarchy library: every IP and pad follows the Top Cell library automatically.
 - Per-master planning appearance with custom color, fill transparency, and solid, dashed, dotted, or hidden outlines.
 - Browser-viewable SVG save with an embedded project payload for lossless re-import.
 - Cadence SKILL preview and export with real OpenAccess `prBoundary` objects.
@@ -43,20 +45,20 @@ npm run build
 
 ### 1. Configure the design
 
-Use the Top Cell settings to define the destination library, cell name, width, and height. The top-cell origin is at its physical center.
+Use the Top Cell settings to define the destination library, cell name, width, and height. The top-cell origin is at its physical center. The Top Cell library is authoritative for the complete generated hierarchy: IP and pad dialogs show it as read-only, imported masters are normalized to it, and changing it updates all existing masters in one Undo/Redo operation.
 
 Create Master IP definitions in the left sidebar. Each master has:
 
-- A Cadence library and cell name
+- The inherited Top Cell library and a unique cell name
 - Width and height in micrometers
 - A canvas color selected from the extended palette or custom color picker
 - Fill transparency and a solid, dashed, dotted, or hidden planning outline
 
 Master geometry uses `(0, 0)` as its local origin, which is also the instance origin exported to Virtuoso.
 
-Click **Place edge pads** under Top Cell and choose one of two methods. **Automatic Row** creates a regular-pitch section: choose the edge, use **Fill edge** for the maximum non-overlapping count or enter a custom count, pitch, and shift. Live span and clear-gap feedback make the section predictable before placement. **Manual / Separated** defines the same reusable pad once, attaches it to the cursor, and lets you click arbitrary perimeter locations. Skip a keep-out gap of any size, continue placing another section on the same or another edge, and press Esc when finished. The ghost preview and every placed pad snap to the nearest top-cell edge. Both methods reuse one master cell for the chosen library/cell; the SKILL output creates that pad cellview once and places any number of instances from it. Dragging or exact coordinate edits keep every pad attached to the perimeter.
+Click **Place edge pads** under Top Cell and choose one of two methods. **Automatic Row** creates a regular-pitch section: choose the edge, use **Fill edge** for the maximum non-overlapping count or enter a custom count, pitch, and shift. Live span and clear-gap feedback make the section predictable before placement. **Manual / Separated** defines the same reusable pad once, attaches it to the cursor, and lets you click arbitrary perimeter locations. Skip a keep-out gap of any size, continue placing another section on the same or another edge, and press Esc when finished. The ghost preview and every placed pad snap to the nearest top-cell edge. Both methods reuse one master cell in the Top Cell library; the SKILL output creates that pad cellview once and places any number of instances from it. Dragging or exact coordinate edits keep every pad attached to the perimeter.
 
-Click **Enable Pixel Array** under Top Cell to define an optional active-array region. Enter a width and height smaller than the top cell, confirm, then click the desired canvas location. The dimensions and bottom-left origin are normalized to the placement grid, the complete region remains inside the top cell, and dragging keeps it bounded. The pixel array is intentionally allowed to overlap IP instances. For exact placement, select the pixel array and click **Align** (or press `a`), choose its amber edge, then choose a green IP edge, top-cell boundary, pixel-array edge, or orthogonal ruler. Unlike normal IP-to-IP spacing, the chosen pixel-array edge is preserved so a zero offset can coincide with a reference while the array overlaps the IP. **Disable Pixel Array** hides it without forgetting its size or position; enable it again to restore the same region. The move control attaches the existing size to the cursor, while Settings supports resize, relocation, or removal.
+Click **Enable Pixel Array** under Top Cell to define an optional active-array region. Enter a width and height smaller than the top cell, confirm, then click the desired canvas location. The dimensions and bottom-left origin are normalized to the placement grid, the complete region remains inside the top cell, and dragging keeps it bounded. The pixel array is intentionally allowed to overlap IP instances. For exact placement, select the pixel array and click **Align** (or press `a`), choose its amber edge, then choose a green IP edge, top-cell boundary, or orthogonal ruler. Conversely, an IP may use a pixel-array edge as its fixed reference. Unlike normal IP-to-IP spacing, the chosen pixel-array source edge is preserved so a zero offset can coincide with a reference while the array overlaps the IP. **Disable Pixel Array** hides it without forgetting its size or position; enable it again to restore the same region. The move control attaches the existing size to the cursor, while Settings supports resize, relocation, or removal.
 
 ### 2. Place and edit instances
 
@@ -72,7 +74,7 @@ Mouse rotation snaps to legal Cadence quarter turns and keeps the block's physic
 
 ### 3. Select and arrange blocks
 
-For Cadence-style alignment, first select the IP that should move. Click **Align** (or press `a`); the compact alignment controls replace the right side of the top toolbar so no window covers the canvas. Click an amber source edge to choose the alignment axis, then click a compatible green reference: another IP side, a top-cell boundary, or an orthogonal ruler line. Vertical rulers provide X references and horizontal rulers provide Y references; diagonal rulers remain measurement-only. The target click applies immediately. The toolbar spacing is a non-negative clear gap between the nearest faces: a right/top target places the whole source outside to its right/top, a left/bottom target places it outside to its left/bottom, and top-cell boundaries place it inward. The last valid spacing is remembered for the next alignment, including after reopening the app. Only the source moves, and the operation creates one Undo entry.
+For Cadence-style alignment, first select the IP or pixel array that should move. Click **Align** (or press `a`); the compact alignment controls replace the right side of the top toolbar so no window covers the canvas. Click an amber source edge to choose the alignment axis, then click a compatible green reference: another IP side, a visible pixel-array edge, a top-cell boundary, or an orthogonal ruler line. Vertical rulers provide X references and horizontal rulers provide Y references; diagonal rulers remain measurement-only. The target click applies immediately. Normal IP spacing is a non-negative clear gap between the nearest faces; pixel-array-source alignment preserves the explicitly chosen edge so overlap remains possible. The last valid spacing is remembered for the next alignment, including after reopening the app. Only the source moves, and the operation creates one Undo entry.
 
 For quick group alignment, Shift-click blocks on the canvas or in the instance list to build a multi-selection. The amber block is the fixed reference; plain-click another already-selected block to make it the primary reference without clearing the group. The Align menu also supports:
 
@@ -86,7 +88,7 @@ Every selected block moves to the chosen physical edge or center of the amber re
 
 Ruler mode supports grid and object-edge snapping. Press `o` for orthogonal measurement and click two snapped points to create a ruler. Double-clicking a block in Select mode opens and pins its Properties panel; double-clicking empty canvas fits the view.
 
-Selecting a block shows its directly visible neighboring gaps in blue. Auto-Dim shows a violet nearest-gap overview only while nothing is selected; selecting an IP automatically suppresses the global network so only that IP’s focused dimensions remain. Labels use lighter text and thin endpoint ticks without extra point markers. Hovering a global dimension fades the others.
+Selecting a block shows its directly visible neighboring gaps in blue. If the pixel array is visible, the same focused view also measures from the selected IP to relevant pixel-array edges—including clearances when the IP overlaps or sits inside the array. The translucent pixel array does not hide IP-to-IP relationships. Hiding the pixel array removes those measurements immediately. Auto-Dim shows a violet nearest-gap overview only while nothing is selected; selecting an IP automatically suppresses the global network so only that IP’s focused dimensions remain. Labels use lighter text and thin endpoint ticks without extra point markers. Hovering a global dimension fades the others.
 
 ### 5. Save or export
 
@@ -95,13 +97,15 @@ Selecting a block shows its directly visible neighboring gaps in blue. Auto-Dim 
 - **Export SVG** downloads a browser-viewable drawing with editable project data embedded inside it.
 - **Preview Code** displays the generated Cadence SKILL before download.
 
+Pixel-array visibility is honored consistently. When enabled, the region is drawn in the exported SVG and emitted in Cadence SKILL. When disabled, no pixel-array drawing or label is emitted, although its saved size and position remain in the editable project payload so it can be restored later.
+
 The Saved/Unsaved indicator tracks the browser workspace. Exporting a review copy does not silently mark later modifications as saved. The application warns before replacing unsaved work or closing the page.
 
 Changing the placement grid re-snaps every existing instance to an exact multiple of the new grid. Coordinate fields, lists, SVG tables, and generated SKILL use precision derived from that grid. For example, `3452u` is valid on a `0.005u` grid because it equals exactly 690,400 grid steps; Cadence may display it as `3452.0000000u` according to its own display precision.
 
 ## Cadence Virtuoso export
 
-Before exporting, ensure every referenced library already exists in `cds.lib` and is attached to the intended technology library.
+Before exporting, ensure the single Top Cell library exists in `cds.lib` and is attached to the intended technology library. All generated IP and pad cellviews are created in that same library.
 
 1. Open **Preview Code** and inspect the destination libraries and cell names.
 2. Download the `.il` file.

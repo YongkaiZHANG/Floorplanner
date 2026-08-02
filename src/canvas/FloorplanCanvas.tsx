@@ -637,7 +637,7 @@ export const FloorplanCanvas: React.FC = () => {
             const projectionStart = horizontal ? selBox.minY : selBox.minX;
             const projectionEnd = horizontal ? selBox.maxY : selBox.maxX;
 
-            const candidates = others.flatMap(other => {
+            const instanceCandidates = others.flatMap(other => {
               const ob = other.box;
               let distance: number;
 
@@ -658,8 +658,60 @@ export const FloorplanCanvas: React.FC = () => {
               );
               if (overlapEnd - overlapStart <= 0.0001) return [];
 
-              return [{ ...other, distance, overlap: { start: overlapStart, end: overlapEnd } }];
-            }).sort((a, b) => a.distance - b.distance);
+              return [{ ...other, distance, overlap: { start: overlapStart, end: overlapEnd }, occludes: true }];
+            });
+
+            const pixelCandidates = pixelArray?.visible ? (() => {
+              const pixelBox: BBox = {
+                minX: pixelArray.x,
+                maxX: pixelArray.x + pixelArray.width,
+                minY: pixelArray.y,
+                maxY: pixelArray.y + pixelArray.height,
+              };
+              const overlapStart = Math.max(projectionStart, horizontal ? pixelBox.minY : pixelBox.minX);
+              const overlapEnd = Math.min(projectionEnd, horizontal ? pixelBox.maxY : pixelBox.maxX);
+              if (overlapEnd - overlapStart <= 0.0001) return [];
+
+              let distance: number;
+              const targetBox = { ...pixelBox };
+              if (direction === 'right') {
+                if (pixelBox.minX >= selBox.maxX - 0.0001) distance = pixelBox.minX - selBox.maxX;
+                else if (pixelBox.maxX > selBox.maxX + 0.0001) {
+                  distance = pixelBox.maxX - selBox.maxX;
+                  targetBox.minX = pixelBox.maxX;
+                } else return [];
+              } else if (direction === 'left') {
+                if (pixelBox.maxX <= selBox.minX + 0.0001) distance = selBox.minX - pixelBox.maxX;
+                else if (pixelBox.minX < selBox.minX - 0.0001) {
+                  distance = selBox.minX - pixelBox.minX;
+                  targetBox.maxX = pixelBox.minX;
+                } else return [];
+              } else if (direction === 'top') {
+                if (pixelBox.minY >= selBox.maxY - 0.0001) distance = pixelBox.minY - selBox.maxY;
+                else if (pixelBox.maxY > selBox.maxY + 0.0001) {
+                  distance = pixelBox.maxY - selBox.maxY;
+                  targetBox.minY = pixelBox.maxY;
+                } else return [];
+              } else {
+                if (pixelBox.maxY <= selBox.minY + 0.0001) distance = selBox.minY - pixelBox.maxY;
+                else if (pixelBox.minY < selBox.minY - 0.0001) {
+                  distance = selBox.minY - pixelBox.minY;
+                  targetBox.maxY = pixelBox.minY;
+                } else return [];
+              }
+
+              return [{
+                id: 'pixel-array',
+                name: 'Pixel Array',
+                box: targetBox,
+                distance,
+                overlap: { start: overlapStart, end: overlapEnd },
+                occludes: false,
+              }];
+            })() : [];
+
+            const candidates = [...instanceCandidates, ...pixelCandidates]
+              .sort((a, b) => a.distance - b.distance);
 
             let covered: Interval[] = [];
             let hasVisibleNeighbor = false;
@@ -691,7 +743,8 @@ export const FloorplanCanvas: React.FC = () => {
               }
 
               // Nearer IPs hide farther IPs only across the projection they actually cover.
-              covered = addCoveredInterval(covered, candidate.overlap);
+              // The pixel array is translucent and may overlap IPs, so it never hides IP relationships.
+              if (candidate.occludes) covered = addCoveredInterval(covered, candidate.overlap);
             });
 
             // Keep the original chip-edge dimension when no IP overlaps this side at all.

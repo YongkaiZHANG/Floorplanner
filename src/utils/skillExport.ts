@@ -38,6 +38,9 @@ const validateFloorplan = (
     if (!Number.isFinite(cell.width) || !Number.isFinite(cell.height) || cell.width <= 0 || cell.height <= 0) {
       throw new Error(`Master ${cell.cellName} has invalid dimensions.`);
     }
+    if (cell.libName !== topLibName) {
+      throw new Error(`Master ${cell.cellName} must use the Top Cell library ${topLibName}.`);
+    }
 
     const qualifiedName = `${cell.libName}\u0000${cell.cellName}`;
     if (masterNames.has(qualifiedName)) throw new Error(`Duplicate master cell: ${cell.libName}/${cell.cellName}.`);

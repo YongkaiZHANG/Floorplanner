@@ -36,7 +36,6 @@ export const Sidebar: React.FC = () => {
   const [instantiateSelection, setInstantiateSelection] = useState('');
   const [editingCellId, setEditingCellId] = useState<string | null>(null);
   
-  const [newLibName, setNewLibName] = useState('custom_lib');
   const [newCellName, setNewCellName] = useState('');
   const [newWidth, setNewWidth] = useState('10');
   const [newHeight, setNewHeight] = useState('10');
@@ -51,7 +50,6 @@ export const Sidebar: React.FC = () => {
   const [editTopHeight, setEditTopHeight] = useState(topHeight.toString());
 
   const [showPadModal, setShowPadModal] = useState(false);
-  const [padLibName, setPadLibName] = useState(topLibName);
   const [padCellName, setPadCellName] = useState('PAD');
   const [padWidth, setPadWidth] = useState('10');
   const [padHeight, setPadHeight] = useState('10');
@@ -67,12 +65,12 @@ export const Sidebar: React.FC = () => {
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (newLibName && newCellName && newWidth && newHeight) {
+    if (newCellName && newWidth && newHeight) {
       if (editingCellId) {
-        updateMasterCell(editingCellId, newLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor, Number(newOpacity) / 100, newOutlineStyle);
+        updateMasterCell(editingCellId, topLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor, Number(newOpacity) / 100, newOutlineStyle);
         setEditingCellId(null);
       } else {
-        addMasterCell(newLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor, Number(newOpacity) / 100, newOutlineStyle);
+        addMasterCell(topLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor, Number(newOpacity) / 100, newOutlineStyle);
       }
       setShowCreateModal(false);
       setNewCellName('');
@@ -84,7 +82,7 @@ export const Sidebar: React.FC = () => {
     try {
       if (padPlacementMode === 'manual') {
         prepareManualPadPlacement({
-          libName: padLibName,
+          libName: topLibName,
           cellName: padCellName,
           width: Number(padWidth),
           height: Number(padHeight),
@@ -94,7 +92,7 @@ export const Sidebar: React.FC = () => {
         return;
       }
       createPadRow({
-        libName: padLibName,
+        libName: topLibName,
         cellName: padCellName,
         width: Number(padWidth),
         height: Number(padHeight),
@@ -136,7 +134,6 @@ export const Sidebar: React.FC = () => {
 
   const openEditModal = (cell: Cell) => {
     setEditingCellId(cell.id);
-    setNewLibName(cell.libName);
     setNewCellName(cell.cellName);
     setNewWidth(cell.width.toString());
     setNewHeight(cell.height.toString());
@@ -204,7 +201,6 @@ export const Sidebar: React.FC = () => {
             </div>
           </div>
           <button className="edge-pad-action" type="button" onClick={() => {
-            setPadLibName(topLibName);
             setShowPadModal(true);
           }}>
             <FiGrid />
@@ -344,8 +340,9 @@ export const Sidebar: React.FC = () => {
               </div>
               <form onSubmit={handleCreateSubmit}>
                 <div className="form-group">
-                  <label className="label">Library Name</label>
-                  <input className="input-field" value={newLibName} onChange={e => setNewLibName(e.target.value)} required />
+                  <label className="label">Library (follows Top Cell)</label>
+                  <input className="input-field locked-library" value={topLibName} readOnly aria-label="IP library inherited from top cell" />
+                  <small className="field-help">All hierarchy cells are kept in the Top Cell library.</small>
                 </div>
                 <div className="form-group">
                   <label className="label">Cell Name</label>
@@ -549,8 +546,8 @@ export const Sidebar: React.FC = () => {
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label className="label">Library</label>
-                <input className="input-field" value={padLibName} onChange={event => setPadLibName(event.target.value)} required />
+                <label className="label">Library (follows Top Cell)</label>
+                <input className="input-field locked-library" value={topLibName} readOnly aria-label="Pad library inherited from top cell" />
               </div>
               <div className="form-group">
                 <label className="label">Pad Cell</label>
