@@ -14,6 +14,7 @@ import type { KonvaEventObject } from 'konva/lib/Node';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
+const MARQUEE_DRAG_THRESHOLD_PX = 3;
 export const SCALE_FACTOR = 100; // 1um = 100px on screen
 
 export const FloorplanCanvas: React.FC = () => {
@@ -37,6 +38,9 @@ export const FloorplanCanvas: React.FC = () => {
 
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+  const selectionBoxRef = useRef<typeof selectionBox>(null);
+  const marqueeDraggedRef = useRef(false);
+  const ignoreBackgroundClickUntilRef = useRef(0);
   const [panStart, setPanStart] = useState<{ x: number; y: number; stageX: number; stageY: number } | null>(null);
   const [isSpaceDown, setIsSpaceDown] = useState(false);
 
@@ -419,7 +423,10 @@ export const FloorplanCanvas: React.FC = () => {
         const worldY = (pointer.y - stagePos.y) / -stageScale;
         const umX = worldX / SCALE_FACTOR;
         const umY = worldY / SCALE_FACTOR;
-        setSelectionBox({ startX: umX, startY: umY, currentX: umX, currentY: umY });
+        const nextSelectionBox = { startX: umX, startY: umY, currentX: umX, currentY: umY };
+        selectionBoxRef.current = nextSelectionBox;
+        marqueeDraggedRef.current = false;
+        setSelectionBox(nextSelectionBox);
       }
     }
   };
@@ -436,12 +443,18 @@ export const FloorplanCanvas: React.FC = () => {
     const pointer = stageRef.current?.getPointerPosition();
     if (!pointer) return;
     
-    if (selectionBox) {
+    if (selectionBoxRef.current) {
       const worldX = (pointer.x - stagePos.x) / stageScale;
       const worldY = (pointer.y - stagePos.y) / -stageScale;
       const umX = worldX / SCALE_FACTOR;
       const umY = worldY / SCALE_FACTOR;
-      setSelectionBox(prev => prev ? { ...prev, currentX: umX, currentY: umY } : null);
+      const nextSelectionBox = { ...selectionBoxRef.current, currentX: umX, currentY: umY };
+      selectionBoxRef.current = nextSelectionBox;
+      marqueeDraggedRef.current ||= Math.hypot(
+        (umX - nextSelectionBox.startX) * SCALE_FACTOR * stageScale,
+        (umY - nextSelectionBox.startY) * SCALE_FACTOR * stageScale,
+      ) >= MARQUEE_DRAG_THRESHOLD_PX;
+      setSelectionBox(nextSelectionBox);
       return;
     }
 
@@ -474,41 +487,55 @@ export const FloorplanCanvas: React.FC = () => {
     }
   };
 
+  const finishMarqueeSelection = (shiftKey: boolean) => {
+    const completedBox = selectionBoxRef.current;
+    const wasDragged = marqueeDraggedRef.current;
+    selectionBoxRef.current = null;
+    marqueeDraggedRef.current = false;
+    setSelectionBox(null);
+
+    // A click that never crossed the drag threshold is handled by Stage.onClick.
+    if (!completedBox || !wasDragged) return;
+
+    const minX = Math.min(completedBox.startX, completedBox.currentX);
+    const maxX = Math.max(completedBox.startX, completedBox.currentX);
+    const minY = Math.min(completedBox.startY, completedBox.currentY);
+    const maxY = Math.max(completedBox.startY, completedBox.currentY);
+      
+    const newSelectedIds: string[] = [];
+      
+    for (const inst of instances) {
+      const bbox = computeInstanceBBox(inst);
+      if (bbox) {
+        if (bbox.minX >= minX && bbox.maxX <= maxX && bbox.minY >= minY && bbox.maxY <= maxY) {
+          newSelectedIds.push(inst.id);
+        }
+      }
+    }
+      
+    const state = useStore.getState();
+    if (newSelectedIds.length > 0) {
+      if (shiftKey) {
+        state.setSelection([...new Set([...state.selectedInstanceIds, ...newSelectedIds])]);
+      } else {
+        state.setSelection(newSelectedIds);
+      }
+    } else if (!shiftKey) {
+      state.setSelectedInstance(null);
+    }
+
+    // Konva emits click after mouseup on the same background gesture. Without
+    // this guard, Stage.onClick immediately clears the selection made above.
+    ignoreBackgroundClickUntilRef.current = performance.now() + 100;
+  };
+
   const handleMouseUp = (e: KonvaEventObject<MouseEvent>) => {
     if (panStart) {
       setPanStart(null);
       setIsPanning(false);
       return;
     }
-    if (selectionBox) {
-      const minX = Math.min(selectionBox.startX, selectionBox.currentX);
-      const maxX = Math.max(selectionBox.startX, selectionBox.currentX);
-      const minY = Math.min(selectionBox.startY, selectionBox.currentY);
-      const maxY = Math.max(selectionBox.startY, selectionBox.currentY);
-      
-      const newSelectedIds: string[] = [];
-      
-      for (const inst of instances) {
-        const bbox = computeInstanceBBox(inst);
-        if (bbox) {
-          if (bbox.minX >= minX && bbox.maxX <= maxX && bbox.minY >= minY && bbox.maxY <= maxY) {
-            newSelectedIds.push(inst.id);
-          }
-        }
-      }
-      
-      const state = useStore.getState();
-      if (newSelectedIds.length > 0) {
-        if (e.evt.shiftKey) {
-          state.setSelection([...new Set([...state.selectedInstanceIds, ...newSelectedIds])]);
-        } else {
-          state.setSelection(newSelectedIds);
-        }
-      } else if (!e.evt.shiftKey) {
-        state.setSelectedInstance(null);
-      }
-      setSelectionBox(null);
-    }
+    finishMarqueeSelection(e.evt.shiftKey);
   };
 
   const handleMouseLeave = (e: KonvaEventObject<MouseEvent>) => {
@@ -517,34 +544,7 @@ export const FloorplanCanvas: React.FC = () => {
       setPanStart(null);
       setIsPanning(false);
     }
-    if (selectionBox) {
-      const minX = Math.min(selectionBox.startX, selectionBox.currentX);
-      const maxX = Math.max(selectionBox.startX, selectionBox.currentX);
-      const minY = Math.min(selectionBox.startY, selectionBox.currentY);
-      const maxY = Math.max(selectionBox.startY, selectionBox.currentY);
-      
-      const newSelectedIds: string[] = [];
-      for (const inst of instances) {
-        const bbox = computeInstanceBBox(inst);
-        if (bbox) {
-          if (bbox.minX >= minX && bbox.maxX <= maxX && bbox.minY >= minY && bbox.maxY <= maxY) {
-            newSelectedIds.push(inst.id);
-          }
-        }
-      }
-      
-      const state = useStore.getState();
-      if (newSelectedIds.length > 0) {
-        if (e.evt?.shiftKey) {
-          state.setSelection([...new Set([...state.selectedInstanceIds, ...newSelectedIds])]);
-        } else {
-          state.setSelection(newSelectedIds);
-        }
-      } else if (!e.evt?.shiftKey) {
-        state.setSelectedInstance(null);
-      }
-      setSelectionBox(null);
-    }
+    finishMarqueeSelection(e.evt?.shiftKey ?? false);
   };
 
   // Drag bound logic: compute physical bounds, clamp them in real-time, then snap to grid
@@ -1258,6 +1258,10 @@ export const FloorplanCanvas: React.FC = () => {
           } else if (appMode === 'pixel-array' && pendingPixelArraySize && snapped) {
             placePixelArray(snapped.umX, snapped.umY);
           } else if (appMode === 'select' && !edgeAlignmentSession && (e.target === e.target.getStage() || e.target.name() === 'bg' || e.target.name() === 'overlay')) {
+            if (performance.now() <= ignoreBackgroundClickUntilRef.current) {
+              ignoreBackgroundClickUntilRef.current = 0;
+              return;
+            }
             if (!e.evt.shiftKey) setSelectedInstance(null);
           }
         }}
