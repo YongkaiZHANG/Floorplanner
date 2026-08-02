@@ -65,6 +65,10 @@ export type PadRowConfig = {
   offset: number;
 };
 
+export type PadMasterConfig = Pick<PadRowConfig, 'libName' | 'cellName' | 'width' | 'height' | 'color'>;
+
+export const PIXEL_ARRAY_ALIGNMENT_ID = '__pixel_array__';
+
 export type EdgeAlignmentSession = {
   sourceId: string;
   sourceEdge: AlignmentEdge | null;
@@ -91,6 +95,7 @@ export type ProjectState = {
   
   selectedInstanceId: string | null;
   selectedInstanceIds: string[];
+  pixelArraySelected: boolean;
   showCreateModal: boolean;
   showInstantiateModal: boolean;
   leftSidebarPinned: boolean;
@@ -119,10 +124,12 @@ export type ProjectState = {
   deleteMasterCell: (id: string) => void;
   placeInstance: (cellId: string, x?: number, y?: number, orientation?: string) => void;
   createPadRow: (config: PadRowConfig) => void;
+  prepareManualPadPlacement: (config: PadMasterConfig) => void;
   startPixelArrayPlacement: (width: number, height: number) => void;
   placePixelArray: (centerX: number, centerY: number) => void;
   updatePixelArrayPosition: (x: number, y: number) => void;
   setPixelArrayVisible: (visible: boolean) => void;
+  setPixelArraySelected: (selected: boolean) => void;
   deletePixelArray: () => void;
   
   updateInstancePosition: (instanceId: string, x: number, y: number) => void;
@@ -343,9 +350,50 @@ const edgeAlignmentAfterInstancesChange = (state: ProjectState, instances: Insta
   const session = state.edgeAlignmentSession;
   if (!session) return null;
   const existingIds = new Set(instances.map(instance => instance.id));
-  return existingIds.has(session.sourceId) && (!session.targetId || existingIds.has(session.targetId))
+  const exists = (id: string) => existingIds.has(id)
+    || (id === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible));
+  return exists(session.sourceId) && (!session.targetId || exists(session.targetId))
     ? session
     : null;
+};
+
+const getAlignable = (state: ProjectState, id: string) => {
+  if (id === PIXEL_ARRAY_ALIGNMENT_ID) {
+    const array = state.pixelArray;
+    if (!array?.visible) throw new Error('The pixel array is hidden or no longer exists');
+    return {
+      id,
+      name: 'Pixel Array',
+      x: array.x,
+      y: array.y,
+      width: array.width,
+      height: array.height,
+      orientation: 'R0',
+    };
+  }
+  const instance = state.instances.find(item => item.id === id);
+  if (!instance) throw new Error('The alignment instance no longer exists');
+  const master = state.masterCells[instance.cellId];
+  if (!master) throw new Error('The alignment master cell no longer exists');
+  return { ...instance, width: master.width, height: master.height };
+};
+
+const alignmentPositionPatch = (
+  state: ProjectState,
+  sourceId: string,
+  x: number,
+  y: number,
+): Pick<ProjectSnapshot, 'instances' | 'pixelArray'> => {
+  if (sourceId === PIXEL_ARRAY_ALIGNMENT_ID) {
+    if (!state.pixelArray) throw new Error('The pixel array no longer exists');
+    return { instances: state.instances, pixelArray: { ...state.pixelArray, x, y } };
+  }
+  return {
+    instances: state.instances.map(instance => (
+      instance.id === sourceId ? { ...instance, x, y } : instance
+    )),
+    pixelArray: state.pixelArray,
+  };
 };
 
 const edgeAlignmentPatch = (
@@ -357,32 +405,26 @@ const edgeAlignmentPatch = (
   offset: number,
   displaySpacing?: number,
 ) => {
-  if (sourceId === targetId) throw new Error('Source and target must be different instances');
-  const source = state.instances.find(instance => instance.id === sourceId);
-  const target = state.instances.find(instance => instance.id === targetId);
-  if (!source || !target) throw new Error('The source or target instance no longer exists');
-  const sourceMaster = state.masterCells[source.cellId];
-  const targetMaster = state.masterCells[target.cellId];
-  if (!sourceMaster || !targetMaster) throw new Error('The source or target master cell no longer exists');
+  if (sourceId === targetId) throw new Error('Source and target must be different objects');
+  const source = getAlignable(state, sourceId);
+  const target = getAlignable(state, targetId);
 
   const position = alignInstanceToTarget(
-    { ...source, width: sourceMaster.width, height: sourceMaster.height },
-    { ...target, width: targetMaster.width, height: targetMaster.height },
+    source,
+    target,
     sourceEdge,
     targetEdge,
     offset,
     { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize },
   );
-  const instances = state.instances.map(instance => (
-    instance.id === sourceId ? { ...instance, x: position.x, y: position.y } : instance
-  ));
+  const patch = alignmentPositionPatch(state, sourceId, position.x, position.y);
   const offsetLabel = displaySpacing === undefined
     ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
     : (displaySpacing === 0 ? '' : ` gap ${displaySpacing} um`);
   return commitProjectPatch(
     state,
     `Align ${source.name}.${sourceEdge} to ${target.name}.${targetEdge}${offsetLabel}`,
-    { instances },
+    patch,
   );
 };
 
@@ -395,27 +437,22 @@ const edgeAlignmentCoordinatePatch = (
   referenceLabel: string,
   displaySpacing?: number,
 ) => {
-  const source = state.instances.find(instance => instance.id === sourceId);
-  if (!source) throw new Error('The source instance no longer exists');
-  const sourceMaster = state.masterCells[source.cellId];
-  if (!sourceMaster) throw new Error('The source master cell no longer exists');
+  const source = getAlignable(state, sourceId);
   const position = alignInstanceToCoordinate(
-    { ...source, width: sourceMaster.width, height: sourceMaster.height },
+    source,
     sourceEdge,
     targetCoordinate,
     offset,
     { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize },
   );
-  const instances = state.instances.map(instance => (
-    instance.id === sourceId ? { ...instance, x: position.x, y: position.y } : instance
-  ));
+  const patch = alignmentPositionPatch(state, sourceId, position.x, position.y);
   const offsetLabel = displaySpacing === undefined
     ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
     : (displaySpacing === 0 ? '' : ` gap ${displaySpacing} um`);
   return commitProjectPatch(
     state,
     `Align ${source.name}.${sourceEdge} to ${referenceLabel}${offsetLabel}`,
-    { instances },
+    patch,
   );
 };
 
@@ -480,6 +517,7 @@ export const useStore = create<ProjectState>((set) => ({
   pendingPixelArraySize: null,
   selectedInstanceId: null,
   selectedInstanceIds: [],
+  pixelArraySelected: false,
   showCreateModal: false,
   showInstantiateModal: false,
   leftSidebarPinned: false,
@@ -615,8 +653,9 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = [...state.instances, newInst];
     return {
       ...commitProjectPatch(state, `Place ${newInst.name}`, { instances }),
-      selectedInstanceId: newInst.id,
-      selectedInstanceIds: [newInst.id],
+      selectedInstanceId: master.kind === 'pad' ? null : newInst.id,
+      selectedInstanceIds: master.kind === 'pad' ? [] : [newInst.id],
+      pixelArraySelected: false,
       // Cadence keeps placement mode active so you can place multiple. We won't change appMode.
     };
   }),
@@ -641,6 +680,15 @@ export const useStore = create<ProjectState>((set) => ({
     if (libName === state.topLibName && cellName === state.topCellName) {
       throw new Error('The top cell cannot also be used as the pad master');
     }
+    snapPadToNearestEdge(
+      0,
+      0,
+      config.width,
+      config.height,
+      state.topWidth,
+      state.topHeight,
+      state.gridSize,
+    );
 
     const horizontal = config.side === 'top' || config.side === 'bottom';
     const padAlongRow = horizontal ? config.width : config.height;
@@ -720,7 +768,68 @@ export const useStore = create<ProjectState>((set) => ({
       ...commitProjectPatch(state, `Place ${config.count} ${cellName} pads on ${config.side}`, { masterCells, instances }),
       selectedInstanceId: null,
       selectedInstanceIds: [],
+      pixelArraySelected: false,
       appMode: 'select',
+      edgeAlignmentSession: null,
+    };
+  }),
+
+  prepareManualPadPlacement: (config) => set((state) => {
+    const libName = config.libName.trim();
+    const cellName = config.cellName.trim();
+    if (!libName || !cellName) throw new Error('Pad library and cell names are required');
+    if (!Number.isFinite(config.width) || !Number.isFinite(config.height) || config.width <= 0 || config.height <= 0) {
+      throw new RangeError('Pad width and height must be positive finite numbers');
+    }
+    if (libName === state.topLibName && cellName === state.topCellName) {
+      throw new Error('The top cell cannot also be used as the pad master');
+    }
+    snapPadToNearestEdge(
+      0,
+      0,
+      config.width,
+      config.height,
+      state.topWidth,
+      state.topHeight,
+      state.gridSize,
+    );
+    const existingMaster = Object.values(state.masterCells).find(cell => (
+      cell.libName === libName && cell.cellName === cellName
+    ));
+    if (existingMaster && (
+      Math.abs(existingMaster.width - config.width) > 1e-9
+      || Math.abs(existingMaster.height - config.height) > 1e-9
+    )) {
+      throw new Error(`Existing master ${libName}/${cellName} has different dimensions`);
+    }
+    const master: Cell = existingMaster ? {
+      ...existingMaster,
+      kind: 'pad',
+      opacity: existingMaster.opacity ?? 0.65,
+      outlineStyle: existingMaster.outlineStyle ?? 'solid',
+    } : {
+      id: uuidv4(),
+      libName,
+      cellName,
+      width: config.width,
+      height: config.height,
+      color: config.color,
+      kind: 'pad',
+      opacity: 0.65,
+      outlineStyle: 'solid',
+    };
+    const masterCells = { ...state.masterCells, [master.id]: master };
+    const masterChanged = !existingMaster || existingMaster.kind !== 'pad';
+    return {
+      ...(masterChanged ? commitProjectPatch(state, `Prepare ${cellName} pad`, { masterCells }) : {}),
+      masterCells,
+      placementMasterId: master.id,
+      placementOrientation: 'R0',
+      appMode: 'place',
+      pendingPixelArraySize: null,
+      selectedInstanceId: null,
+      selectedInstanceIds: [],
+      pixelArraySelected: false,
       edgeAlignmentSession: null,
     };
   }),
@@ -744,6 +853,7 @@ export const useStore = create<ProjectState>((set) => ({
       edgeAlignmentSession: null,
       selectedInstanceId: null,
       selectedInstanceIds: [],
+      pixelArraySelected: false,
     };
   }),
 
@@ -765,6 +875,7 @@ export const useStore = create<ProjectState>((set) => ({
       ...commitProjectPatch(state, state.pixelArray ? 'Move pixel array' : 'Place pixel array', { pixelArray }),
       pendingPixelArraySize: null,
       appMode: 'select',
+      pixelArraySelected: true,
     };
   }),
 
@@ -781,9 +892,12 @@ export const useStore = create<ProjectState>((set) => ({
 
   setPixelArrayVisible: (visible) => set((state) => {
     if (!state.pixelArray || state.pixelArray.visible === visible) return state;
-    return commitProjectPatch(state, `${visible ? 'Show' : 'Hide'} pixel array`, {
-      pixelArray: { ...state.pixelArray, visible },
-    });
+    return {
+      ...commitProjectPatch(state, `${visible ? 'Show' : 'Hide'} pixel array`, {
+        pixelArray: { ...state.pixelArray, visible },
+      }),
+      ...(!visible ? { pixelArraySelected: false, edgeAlignmentSession: null } : {}),
+    };
   }),
 
   deletePixelArray: () => set((state) => {
@@ -792,6 +906,8 @@ export const useStore = create<ProjectState>((set) => ({
       ...commitProjectPatch(state, 'Delete pixel array', { pixelArray: null }),
       pendingPixelArraySize: null,
       appMode: 'select',
+      pixelArraySelected: false,
+      edgeAlignmentSession: null,
     };
   }),
 
@@ -837,12 +953,12 @@ export const useStore = create<ProjectState>((set) => ({
   }),
 
   setSelectedInstance: (id, additive = false) => set((state) => {
-    if (!id) return { selectedInstanceId: null, selectedInstanceIds: [] };
+    if (!id) return { selectedInstanceId: null, selectedInstanceIds: [], pixelArraySelected: false };
     if (!additive) {
       if (state.selectedInstanceIds.length > 1 && state.selectedInstanceIds.includes(id)) {
-        return { selectedInstanceId: id };
+        return { selectedInstanceId: id, pixelArraySelected: false };
       }
-      return { selectedInstanceId: id, selectedInstanceIds: [id] };
+      return { selectedInstanceId: id, selectedInstanceIds: [id], pixelArraySelected: false };
     }
 
     const isSelected = state.selectedInstanceIds.includes(id);
@@ -854,12 +970,19 @@ export const useStore = create<ProjectState>((set) => ({
       selectedInstanceId: isSelected
         ? (state.selectedInstanceId === id ? selectedInstanceIds.at(-1) ?? null : state.selectedInstanceId)
         : id,
+      pixelArraySelected: false,
     };
   }),
+
+  setPixelArraySelected: (selected) => set((state) => ({
+    pixelArraySelected: Boolean(selected && state.pixelArray?.visible),
+    ...(selected ? { selectedInstanceId: null, selectedInstanceIds: [] } : {}),
+  })),
 
   selectAllInstances: () => set((state) => ({
     selectedInstanceIds: state.instances.map(instance => instance.id),
     selectedInstanceId: state.instances.at(-1)?.id ?? null,
+    pixelArraySelected: false,
   })),
 
   deleteInstance: (id) => set((state) => {
@@ -901,6 +1024,7 @@ export const useStore = create<ProjectState>((set) => ({
       edgeAlignmentSession: null,
       pendingPixelArraySize: null,
       appMode: 'select',
+      pixelArraySelected: false,
     };
   }),
 
@@ -914,6 +1038,7 @@ export const useStore = create<ProjectState>((set) => ({
       edgeAlignmentSession: null,
       pendingPixelArraySize: null,
       appMode: 'select',
+      pixelArraySelected: false,
     };
   }),
 
@@ -945,7 +1070,9 @@ export const useStore = create<ProjectState>((set) => ({
   )),
 
   startEdgeAlignment: (sourceId) => set((state) => {
-    if (!state.instances.some(instance => instance.id === sourceId)) return state;
+    const sourceExists = state.instances.some(instance => instance.id === sourceId)
+      || (sourceId === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible));
+    if (!sourceExists) return state;
     return {
       edgeAlignmentSession: {
         sourceId,
@@ -959,7 +1086,9 @@ export const useStore = create<ProjectState>((set) => ({
 
   setEdgeAlignmentEdge: (instanceId, edge) => set((state) => {
     const session = state.edgeAlignmentSession;
-    if (!session || !state.instances.some(instance => instance.id === instanceId)) return state;
+    const exists = state.instances.some(instance => instance.id === instanceId)
+      || (instanceId === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible));
+    if (!session || !exists) return state;
     if (instanceId === session.sourceId) {
       return { edgeAlignmentSession: { ...session, sourceEdge: edge } };
     }
@@ -991,16 +1120,14 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error('Source and target edges must be on the same axis');
     }
     const spacing = parseEdgeAlignmentSpacing(session);
-    const sourceEdge = sourceEdgeOutsideTarget(targetEdge) ?? session.sourceEdge;
+    const pixelArraySource = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID;
+    const sourceEdge = pixelArraySource
+      ? session.sourceEdge
+      : sourceEdgeOutsideTarget(targetEdge) ?? session.sourceEdge;
     let direction = outwardDirectionForEdge(targetEdge);
     if (direction === 0) {
-      const source = state.instances.find(instance => instance.id === session.sourceId);
-      const target = state.instances.find(instance => instance.id === targetId);
-      if (!source || !target) throw new Error('The source or target instance no longer exists');
-      const sourceMaster = state.masterCells[source.cellId];
-      const targetMaster = state.masterCells[target.cellId];
-      const sourceBounds = getPhysicalBounds({ ...source, width: sourceMaster.width, height: sourceMaster.height });
-      const targetBounds = getPhysicalBounds({ ...target, width: targetMaster.width, height: targetMaster.height });
+      const sourceBounds = getPhysicalBounds(getAlignable(state, session.sourceId));
+      const targetBounds = getPhysicalBounds(getAlignable(state, targetId));
       direction = getAlignmentEdgeAxis(session.sourceEdge) === 'horizontal'
         ? (sourceBounds.centerX < targetBounds.centerX ? -1 : 1)
         : (sourceBounds.centerY < targetBounds.centerY ? -1 : 1);
@@ -1031,11 +1158,14 @@ export const useStore = create<ProjectState>((set) => ({
       : state.topHeight / 2;
     const spacing = parseEdgeAlignmentSpacing(session);
     const inwardDirection = -outwardDirectionForEdge(targetEdge);
+    const sourceEdge = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
+      ? session.sourceEdge
+      : targetEdge;
     return {
       ...edgeAlignmentCoordinatePatch(
         state,
         session.sourceId,
-        targetEdge,
+        sourceEdge,
         coordinate,
         spacing * inwardDirection,
         `top.${targetEdge}`,
@@ -1057,16 +1187,15 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error('Only an orthogonal ruler on the matching axis can be an alignment reference');
     }
     const coordinate = axis === 'horizontal' ? ruler.startX : ruler.startY;
-    const source = state.instances.find(instance => instance.id === session.sourceId);
-    if (!source) throw new Error('The source instance no longer exists');
-    const master = state.masterCells[source.cellId];
-    const bounds = getPhysicalBounds({ ...source, width: master.width, height: master.height });
+    const bounds = getPhysicalBounds(getAlignable(state, session.sourceId));
     const sourceCenter = axis === 'horizontal' ? bounds.centerX : bounds.centerY;
     const spacing = parseEdgeAlignmentSpacing(session);
     const direction = sourceCenter < coordinate ? -1 : 1;
-    const sourceEdge: AlignmentEdge = axis === 'horizontal'
-      ? (direction < 0 ? 'right' : 'left')
-      : (direction < 0 ? 'top' : 'bottom');
+    const sourceEdge: AlignmentEdge = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
+      ? session.sourceEdge
+      : axis === 'horizontal'
+        ? (direction < 0 ? 'right' : 'left')
+        : (direction < 0 ? 'top' : 'bottom');
     return {
       ...edgeAlignmentCoordinatePatch(
         state,
@@ -1092,7 +1221,9 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error('Source and target edges must be on the same axis');
     }
     const spacing = parseEdgeAlignmentSpacing(session);
-    const sourceEdge = sourceEdgeOutsideTarget(session.targetEdge) ?? session.sourceEdge;
+    const sourceEdge = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
+      ? session.sourceEdge
+      : sourceEdgeOutsideTarget(session.targetEdge) ?? session.sourceEdge;
     const direction = outwardDirectionForEdge(session.targetEdge);
     return {
       ...edgeAlignmentPatch(
@@ -1174,6 +1305,7 @@ export const useStore = create<ProjectState>((set) => ({
       edgeAlignmentSession: null,
       selectedInstanceId: null,
       selectedInstanceIds: [],
+      pixelArraySelected: false,
       appMode: 'select',
     };
   }),

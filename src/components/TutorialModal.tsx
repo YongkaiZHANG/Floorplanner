@@ -77,11 +77,11 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiGrid />
-              <div><strong>Place edge pads</strong><p>Click Place edge pads under Top Cell, choose an edge visually, then use Fill edge or enter a count and pitch. Pads remain attached when dragged around the perimeter.</p></div>
+              <div><strong>Place edge pads</strong><p>Use Automatic Row for regular pitch. Use Manual / Separated to click arbitrary edge locations, skip keep-out gaps, and continue elsewhere. Every pad instance reuses one Cadence pad cell.</p></div>
             </article>
             <article className="tutorial-card">
               <FiGrid />
-              <div><strong>Place a pixel array</strong><p>Click Enable Pixel Array, define a region smaller than the top cell, then click to place it. Drag to move it or disable it temporarily without losing its position.</p></div>
+              <div><strong>Place and align a pixel array</strong><p>Define and place the region, then select it and use Align exactly like an IP. Its selected edge can align to an IP, top boundary, pixel-array reference, or ruler, and overlap with IPs is allowed.</p></div>
             </article>
             <article className="tutorial-card">
               <FiSave />

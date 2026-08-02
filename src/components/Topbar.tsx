@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { getProjectSnapshot, useStore } from '../store/useStore';
+import { getProjectSnapshot, PIXEL_ARRAY_ALIGNMENT_ID, useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
 import { exportSVG } from '../utils/svgExport';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
@@ -12,11 +12,11 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, pixelArray, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, pixelArray, pixelArraySelected, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v12') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v13') !== 'yes';
     } catch {
       return true;
     }
@@ -35,14 +35,17 @@ export const Topbar: React.FC = () => {
   const alignmentSource = edgeAlignmentSession
     ? instances.find(instance => instance.id === edgeAlignmentSession.sourceId)
     : null;
+  const alignmentSourceName = edgeAlignmentSession?.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
+    ? 'Pixel Array'
+    : alignmentSource?.name ?? 'IP';
   const alignmentAxis = edgeAlignmentSession?.sourceEdge
     ? (edgeAlignmentSession.sourceEdge === 'left' || edgeAlignmentSession.sourceEdge === 'right' || edgeAlignmentSession.sourceEdge === 'horizontal-center'
         ? 'horizontally'
         : 'vertically')
     : null;
   const alignmentStep = edgeAlignmentSession?.sourceEdge
-    ? 'Click the green side where this IP should be placed'
-    : `Click an amber edge of ${alignmentSource?.name ?? 'the source IP'}`;
+    ? 'Click a green IP, pixel-array, top-cell, or ruler reference'
+    : `Click an amber edge of ${alignmentSourceName}`;
 
   const showToast = (message: string, kind: ToastKind = 'success') => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -171,7 +174,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v12', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v13', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -230,7 +233,7 @@ export const Topbar: React.FC = () => {
             <div className="topbar-align__identity">
               <span className="topbar-align__dot" />
               <div>
-                <strong>{alignmentAxis ? `Move ${alignmentSource?.name ?? 'IP'} ${alignmentAxis}` : `Align ${alignmentSource?.name ?? 'IP'}`}</strong>
+                <strong>{alignmentAxis ? `Move ${alignmentSourceName} ${alignmentAxis}` : `Align ${alignmentSourceName}`}</strong>
                 <span>{alignmentStep}</span>
               </div>
             </div>
@@ -246,7 +249,7 @@ export const Topbar: React.FC = () => {
               />
               <span>µm</span>
             </label>
-            <span className="topbar-align__hint">Non-negative gap outside target · inside top boundary</span>
+            <span className="topbar-align__hint">{edgeAlignmentSession.sourceId === PIXEL_ARRAY_ALIGNMENT_ID ? 'Exact selected-edge offset · IP overlap is allowed' : 'Non-negative gap outside target · inside top boundary'}</span>
             <button className="topbar-align__cancel" type="button" onClick={cancelEdgeAlignment} aria-label="Cancel edge alignment" title="Cancel alignment (Esc)">
               <FiX />
             </button>
@@ -255,15 +258,15 @@ export const Topbar: React.FC = () => {
           <EditingToolbar
           canUndo={history.past.length > 0}
           canRedo={history.future.length > 0}
-          selectionCount={selectedInstanceIds.length}
-          anchorName={instances.find(instance => instance.id === selectedInstanceId)?.name}
+          selectionCount={pixelArraySelected ? 1 : selectedInstanceIds.length}
+          anchorName={pixelArraySelected ? 'Pixel Array' : instances.find(instance => instance.id === selectedInstanceId)?.name}
           onUndo={undo}
           onRedo={redo}
           onAlign={handleAlignment}
           onStartEdgeAlign={() => {
-            if (!selectedInstanceId) return;
             setAppMode('select');
-            startEdgeAlignment(selectedInstanceId);
+            if (pixelArraySelected) startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
+            else if (selectedInstanceId) startEdgeAlignment(selectedInstanceId);
           }}
         />
 

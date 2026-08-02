@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getPhysicalBounds } from '../src/utils/alignment.ts';
-import { getProjectSnapshot, rotateOrientationByQuarterTurns, useStore } from '../src/store/useStore.ts';
+import { getProjectSnapshot, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, useStore } from '../src/store/useStore.ts';
 
 const emptyProject = {
   gridSize: 0.005,
@@ -122,6 +122,48 @@ test('pixel array placement is grid-snapped, bounded, hideable, and undoable', (
   assert.equal(useStore.getState().pixelArray.visible, true);
 
   assert.throws(() => useStore.getState().startPixelArrayPlacement(100, 20), /smaller than the top cell/);
+});
+
+test('pixel array aligns by its selected edge and may overlap an IP', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'sensor', 20, 20, '#fff');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -10, -10);
+  const target = useStore.getState().instances[0];
+  useStore.getState().startPixelArrayPlacement(60, 40);
+  useStore.getState().placePixelArray(20, 0);
+
+  useStore.getState().startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
+  useStore.getState().setEdgeAlignmentEdge(PIXEL_ARRAY_ALIGNMENT_ID, 'left');
+  useStore.getState().setEdgeAlignmentOffset('0');
+  useStore.getState().completeEdgeAlignment(target.id, 'left');
+  assert.equal(useStore.getState().pixelArray.x, -10);
+  assert.equal(useStore.getState().pixelArray.y, -20);
+  assert.equal(useStore.getState().instances[0].x, -10);
+
+  useStore.getState().startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
+  useStore.getState().setEdgeAlignmentEdge(PIXEL_ARRAY_ALIGNMENT_ID, 'right');
+  useStore.getState().setEdgeAlignmentOffset('5');
+  useStore.getState().completeEdgeAlignmentToBoundary('right');
+  assert.equal(useStore.getState().pixelArray.x + useStore.getState().pixelArray.width, 45);
+});
+
+test('manual separated pads reuse one master and accept arbitrary perimeter positions', () => {
+  useStore.getState().loadProject(emptyProject);
+  const config = { libName: 'ioLib', cellName: 'PAD', width: 10, height: 8, color: '#f59e0b' };
+  useStore.getState().prepareManualPadPlacement(config);
+  const master = Object.values(useStore.getState().masterCells)[0];
+  assert.equal(master.kind, 'pad');
+  useStore.getState().placeInstance(master.id, -31.125, 45);
+  useStore.getState().placeInstance(master.id, 17.335, 45);
+  assert.equal(Object.keys(useStore.getState().masterCells).length, 1);
+  assert.equal(useStore.getState().instances.length, 2);
+  assert.ok(useStore.getState().instances.every(instance => instance.cellId === master.id));
+  assert.equal(useStore.getState().instances[0].y, 42);
+  assert.equal(useStore.getState().instances[1].y, 42);
+
+  useStore.getState().prepareManualPadPlacement(config);
+  assert.equal(Object.keys(useStore.getState().masterCells).length, 1);
 });
 
 test('edge alignment moves only the source and is one undoable store action', () => {

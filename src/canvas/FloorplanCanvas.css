@@ -41,6 +41,20 @@
   white-space: nowrap;
 }
 
+.manual-pad-placement-hint {
+  top: auto;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-color: rgba(59, 130, 246, 0.7);
+  background: rgba(30, 64, 175, 0.9);
+  color: #eff6ff;
+  font-family: Inter, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .autodim-legend {
   position: absolute;
   right: 18px;

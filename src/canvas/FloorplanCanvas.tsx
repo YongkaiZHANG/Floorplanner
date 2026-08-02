@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, clampInstancePosition, getTransformProps, rotateOrientationByQuarterTurns, snapPadToNearestEdge } from '../store/useStore';
+import { useStore, clampInstancePosition, getTransformProps, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToNearestEdge } from '../store/useStore';
 import { getAlignmentEdgeAxis } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
 import { formatGridValue } from '../utils/grid';
@@ -65,6 +65,8 @@ export const FloorplanCanvas: React.FC = () => {
     pendingPixelArraySize,
     placePixelArray,
     updatePixelArrayPosition,
+    pixelArraySelected,
+    setPixelArraySelected,
   } = useStore();
 
   const fitView = useCallback(() => {
@@ -203,7 +205,8 @@ export const FloorplanCanvas: React.FC = () => {
           break;
         case 'a':
           e.preventDefault();
-          if (state.selectedInstanceId) state.startEdgeAlignment(state.selectedInstanceId);
+          if (state.pixelArraySelected) state.startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
+          else if (state.selectedInstanceId) state.startEdgeAlignment(state.selectedInstanceId);
           break;
         case 'escape':
           if (state.edgeAlignmentSession) {
@@ -218,6 +221,8 @@ export const FloorplanCanvas: React.FC = () => {
             setCurrentRuler(null);
           } else if (selectedInstanceId) {
             setSelectedInstance(null);
+          } else if (state.pixelArraySelected) {
+            state.setPixelArraySelected(false);
           }
           break;
       }
@@ -1013,7 +1018,11 @@ export const FloorplanCanvas: React.FC = () => {
               setCurrentRuler(null);
             }
           } else if (appMode === 'place' && placementMasterId && snapped) {
-            placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation);
+            try {
+              placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation);
+            } catch (error) {
+              alert(error instanceof Error ? error.message : 'Unable to place the selected cell.');
+            }
           } else if (appMode === 'pixel-array' && pendingPixelArraySize && snapped) {
             placePixelArray(snapped.umX, snapped.umY);
           } else if (appMode === 'select' && !edgeAlignmentSession && (e.target === e.target.getStage() || e.target.name() === 'bg' || e.target.name() === 'overlay')) {
@@ -1056,7 +1065,11 @@ export const FloorplanCanvas: React.FC = () => {
               x={pixelArray.x * SCALE_FACTOR}
               y={pixelArray.y * SCALE_FACTOR}
               draggable={appMode === 'select' && !edgeAlignmentSession}
-              onClick={(event) => { event.cancelBubble = true; }}
+              onClick={(event) => {
+                event.cancelBubble = true;
+                if (appMode === 'select' && !edgeAlignmentSession) setPixelArraySelected(true);
+              }}
+              onDragStart={() => setPixelArraySelected(true)}
               onDragEnd={(event) => updatePixelArrayPosition(
                 event.target.x() / SCALE_FACTOR,
                 event.target.y() / SCALE_FACTOR,
@@ -1067,8 +1080,8 @@ export const FloorplanCanvas: React.FC = () => {
                 width={pixelArray.width * SCALE_FACTOR}
                 height={pixelArray.height * SCALE_FACTOR}
                 fill="rgba(139, 92, 246, 0.1)"
-                stroke="#8b5cf6"
-                strokeWidth={2 / stageScale}
+                stroke={pixelArraySelected ? '#f59e0b' : '#8b5cf6'}
+                strokeWidth={(pixelArraySelected ? 3 : 2) / stageScale}
                 dash={[7 / stageScale, 5 / stageScale]}
               />
               {[1, 2, 3, 4, 5].map(index => (
@@ -1376,7 +1389,51 @@ export const FloorplanCanvas: React.FC = () => {
               });
             });
 
-            if (!sourceAxis) return ipEdges;
+            const pixelArrayEdges = pixelArray?.visible ? (() => {
+              const isSource = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID;
+              if (!isSource && !sourceAxis) return [];
+              const box: BBox = {
+                minX: pixelArray.x,
+                maxX: pixelArray.x + pixelArray.width,
+                minY: pixelArray.y,
+                maxY: pixelArray.y + pixelArray.height,
+              };
+              const edges: AlignmentEdge[] = isSource
+                ? (session.sourceEdge ? [session.sourceEdge] : ['left', 'right', 'bottom', 'top'])
+                : sourceAxis === 'horizontal' ? ['left', 'right'] : ['bottom', 'top'];
+              return edges.map(edge => {
+                const key = `pixel-array-${edge}`;
+                const chosen = (isSource && session.sourceEdge === edge)
+                  || (!isSource && session.targetId === PIXEL_ARRAY_ALIGNMENT_ID && session.targetEdge === edge);
+                return (
+                  <Line
+                    key={`align-edge-${key}`}
+                    points={edgeLine(box, edge).map(value => value * SCALE_FACTOR)}
+                    stroke={isSource ? '#f59e0b' : '#10b981'}
+                    strokeWidth={(chosen || hoveredAlignEdge === key ? 5 : 3) / stageScale}
+                    opacity={chosen || hoveredAlignEdge === key ? 1 : 0.78}
+                    hitStrokeWidth={18 / stageScale}
+                    lineCap="round"
+                    onMouseEnter={() => setHoveredAlignEdge(key)}
+                    onMouseLeave={() => setHoveredAlignEdge(null)}
+                    onClick={event => {
+                      event.cancelBubble = true;
+                      if (isSource) {
+                        setEdgeAlignmentEdge(PIXEL_ARRAY_ALIGNMENT_ID, edge);
+                      } else {
+                        try {
+                          completeEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID, edge);
+                        } catch (error) {
+                          alert(error instanceof Error ? error.message : 'Unable to align to the pixel array.');
+                        }
+                      }
+                    }}
+                  />
+                );
+              });
+            })() : [];
+
+            if (!sourceAxis) return [...ipEdges, ...pixelArrayEdges];
             const boundaryEdges: AlignmentEdge[] = sourceAxis === 'horizontal'
               ? ['left', 'right']
               : ['bottom', 'top'];
@@ -1410,7 +1467,7 @@ export const FloorplanCanvas: React.FC = () => {
                 />
               );
             });
-            return [...ipEdges, ...boundaryTargets];
+            return [...ipEdges, ...pixelArrayEdges, ...boundaryTargets];
           })()}
 
           {/* Rulers */}
@@ -1457,7 +1514,7 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Gap Annotations (selection-based + auto-dim) */}
           {renderGapAnnotations(
             edgeAlignmentSession ? null : selectedInstanceId,
-            showAutoDim && !edgeAlignmentSession,
+            showAutoDim && !edgeAlignmentSession && !pixelArraySelected,
           )}
 
           {/* Snap Indicator */}
@@ -1473,10 +1530,18 @@ export const FloorplanCanvas: React.FC = () => {
           {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && mousePos && (() => {
             const m = masterCells[placementMasterId];
             const t = getTransformProps(placementOrientation);
+            let ghostPosition = mousePos;
+            if (m.kind === 'pad') {
+              try {
+                ghostPosition = snapPadToNearestEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize);
+              } catch {
+                return null;
+              }
+            }
             return (
               <Group
-                x={mousePos.x * SCALE_FACTOR}
-                y={mousePos.y * SCALE_FACTOR}
+                x={ghostPosition.x * SCALE_FACTOR}
+                y={ghostPosition.y * SCALE_FACTOR}
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
@@ -1557,7 +1622,12 @@ export const FloorplanCanvas: React.FC = () => {
           Pixel Array {formatGridValue(pendingPixelArraySize.width, gridSize)} × {formatGridValue(pendingPixelArraySize.height, gridSize)} um · Click inside the top cell to place · Esc cancels
         </div>
       )}
-      {showAutoDim && appMode !== 'measure' && (
+      {appMode === 'place' && placementMasterId && masterCells[placementMasterId]?.kind === 'pad' && (
+        <div className="coordinate-overlay manual-pad-placement-hint">
+          Manual Pad Placement · Click arbitrary perimeter positions · Skip keep-out gaps · Esc finishes
+        </div>
+      )}
+      {showAutoDim && appMode !== 'measure' && !pixelArraySelected && (
         <div className="autodim-legend">
           <span className="autodim-legend__swatch" />
           Nearest visible gaps · select a block to focus its local dimensions

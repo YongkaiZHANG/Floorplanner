@@ -24,7 +24,7 @@ export const Sidebar: React.FC = () => {
     topWidth, topHeight, topLibName, topCellName, 
     setTopDimensions, setTopNames,
     masterCells, instances, selectedInstanceIds, setSelectedInstance,
-    addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, createPadRow,
+    addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, createPadRow, prepareManualPadPlacement,
     pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
@@ -60,6 +60,7 @@ export const Sidebar: React.FC = () => {
   const [padSide, setPadSide] = useState<PadSide>('top');
   const [padOffset, setPadOffset] = useState('0');
   const [padColor, setPadColor] = useState('#f59e0b');
+  const [padPlacementMode, setPadPlacementMode] = useState<'row' | 'manual'>('row');
   const [showPixelArrayModal, setShowPixelArrayModal] = useState(false);
   const [pixelArrayWidth, setPixelArrayWidth] = useState('60');
   const [pixelArrayHeight, setPixelArrayHeight] = useState('60');
@@ -81,6 +82,17 @@ export const Sidebar: React.FC = () => {
   const handlePadSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     try {
+      if (padPlacementMode === 'manual') {
+        prepareManualPadPlacement({
+          libName: padLibName,
+          cellName: padCellName,
+          width: Number(padWidth),
+          height: Number(padHeight),
+          color: padColor,
+        });
+        setShowPadModal(false);
+        return;
+      }
       createPadRow({
         libName: padLibName,
         cellName: padCellName,
@@ -522,10 +534,18 @@ export const Sidebar: React.FC = () => {
             </button>
           </div>
           <form onSubmit={handlePadSubmit}>
+            <div className="pad-placement-mode" role="group" aria-label="Pad placement method">
+              <button type="button" className={padPlacementMode === 'row' ? 'active' : ''} onClick={() => setPadPlacementMode('row')} aria-pressed={padPlacementMode === 'row'}>
+                <FiGrid /><span><strong>Automatic row</strong><small>Count and fixed pitch</small></span>
+              </button>
+              <button type="button" className={padPlacementMode === 'manual' ? 'active' : ''} onClick={() => setPadPlacementMode('manual')} aria-pressed={padPlacementMode === 'manual'}>
+                <FiCrosshair /><span><strong>Manual / separated</strong><small>Click every pad position</small></span>
+              </button>
+            </div>
             <div className="pad-row-guide">
-              <span><b>1</b> Define one reusable pad</span>
-              <span><b>2</b> Choose edge, count, and pitch</span>
-              <span><b>3</b> Drag pads around the perimeter later</span>
+              <span><b>1</b> Define one reusable pad cell</span>
+              <span><b>2</b>{padPlacementMode === 'row' ? ' Choose edge, count, and pitch' : ' Attach it to the cursor'}</span>
+              <span><b>3</b>{padPlacementMode === 'row' ? ' Drag pads around the perimeter later' : ' Click arbitrary perimeter positions; Esc ends'}</span>
             </div>
             <div className="form-row">
               <div className="form-group">
@@ -547,62 +567,69 @@ export const Sidebar: React.FC = () => {
                 <input type="number" min="0" step="any" className="input-field" value={padHeight} onChange={event => setPadHeight(event.target.value)} required />
               </div>
             </div>
-            <div className="form-row">
-              <div className="form-group">
-                <div className="field-label-row">
-                  <label className="label">Count</label>
-                  <button type="button" className="text-action" onClick={fitPadsToEdge}>Fill edge</button>
+            {padPlacementMode === 'row' ? <>
+              <div className="form-row">
+                <div className="form-group">
+                  <div className="field-label-row">
+                    <label className="label">Count</label>
+                    <button type="button" className="text-action" onClick={fitPadsToEdge}>Fill edge</button>
+                  </div>
+                  <input type="number" min="1" max="1000" step="1" className="input-field" value={padCount} onChange={event => setPadCount(event.target.value)} required />
                 </div>
-                <input type="number" min="1" max="1000" step="1" className="input-field" value={padCount} onChange={event => setPadCount(event.target.value)} required />
+                <div className="form-group">
+                  <label className="label">Pitch, center-to-center (um)</label>
+                  <input type="number" min="0" step="any" className="input-field" value={padPitch} onChange={event => setPadPitch(event.target.value)} required />
+                </div>
               </div>
               <div className="form-group">
-                <label className="label">Pitch, center-to-center (um)</label>
-                <input type="number" min="0" step="any" className="input-field" value={padPitch} onChange={event => setPadPitch(event.target.value)} required />
+                <label className="label">Choose Top-cell Edge</label>
+                <div className="pad-edge-picker" role="group" aria-label="Top-cell pad edge">
+                  {(['top', 'right', 'bottom', 'left'] as PadSide[]).map(side => (
+                    <button
+                      key={side}
+                      type="button"
+                      className={`pad-edge-option pad-edge-option--${side}${padSide === side ? ' active' : ''}`}
+                      onClick={() => setPadSide(side)}
+                      aria-pressed={padSide === side}
+                    >
+                      <i />
+                      <span>{side}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-            <div className="form-group">
-              <label className="label">Choose Top-cell Edge</label>
-              <div className="pad-edge-picker" role="group" aria-label="Top-cell pad edge">
-                {(['top', 'right', 'bottom', 'left'] as PadSide[]).map(side => (
-                  <button
-                    key={side}
-                    type="button"
-                    className={`pad-edge-option pad-edge-option--${side}${padSide === side ? ' active' : ''}`}
-                    onClick={() => setPadSide(side)}
-                    aria-pressed={padSide === side}
-                  >
-                    <i />
-                    <span>{side}</span>
-                  </button>
-                ))}
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="label">Shift Along Edge (um)</label>
+                  <input type="number" step="any" className="input-field" value={padOffset} onChange={event => setPadOffset(event.target.value)} required />
+                </div>
+                <div className="form-group pad-fit-hint">
+                  <span className="label">Current row</span>
+                  <strong>{Number.isFinite(padSpan) ? padSpan.toFixed(3) : '—'} um span</strong>
+                  <small className={padGap < 0 ? 'error-text' : ''}>
+                    {Number.isFinite(padGap) ? (padGap < 0 ? `${Math.abs(padGap).toFixed(3)} um overlap` : `${padGap.toFixed(3)} um clear gap`) : 'Enter valid dimensions'}
+                  </small>
+                </div>
               </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label className="label">Shift Along Edge (um)</label>
-                <input type="number" step="any" className="input-field" value={padOffset} onChange={event => setPadOffset(event.target.value)} required />
+            </> : (
+              <div className="manual-pad-guide">
+                <FiCrosshair />
+                <div><strong>No pitch is required.</strong><span>The cursor preview snaps to the nearest top-cell edge. Click each desired location, skip any keep-out gap, continue on another edge, then press Esc.</span></div>
               </div>
-              <div className="form-group pad-fit-hint">
-                <span className="label">Current row</span>
-                <strong>{Number.isFinite(padSpan) ? padSpan.toFixed(3) : '—'} um span</strong>
-                <small className={padGap < 0 ? 'error-text' : ''}>
-                  {Number.isFinite(padGap) ? (padGap < 0 ? `${Math.abs(padGap).toFixed(3)} um overlap` : `${padGap.toFixed(3)} um clear gap`) : 'Enter valid dimensions'}
-                </small>
-              </div>
-            </div>
+            )}
             <div className="pad-row-options">
               <label className="pad-color-field">
                 <input type="color" value={padColor} onChange={event => setPadColor(event.target.value)} />
                 <span><strong>Planning color</strong><small>Cadence display colors still come from the technology file.</small></span>
               </label>
               <div className="pad-row-summary">
-                <strong>{Number(padCount) || 0} pads attached to the {padSide} edge</strong>
-                <span>Use Fill edge for the maximum non-overlapping count · shift is measured from edge center</span>
+                <strong>{padPlacementMode === 'row' ? `${Number(padCount) || 0} pads attached to the ${padSide} edge` : 'One Cadence pad cell · any number of instances'}</strong>
+                <span>{padPlacementMode === 'row' ? 'Use Fill edge for the maximum non-overlapping count · shift is measured from edge center' : 'Separated groups and irregular gaps are placed manually with the same reusable master.'}</span>
               </div>
             </div>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setShowPadModal(false)}>Cancel</button>
-              <button type="submit" className="btn btn-primary"><FiGrid /> Place {Number(padCount) || 0} Pads</button>
+              <button type="submit" className="btn btn-primary">{padPlacementMode === 'row' ? <><FiGrid /> Place {Number(padCount) || 0} Pads</> : <><FiCrosshair /> Attach Pad to Cursor</>}</button>
             </div>
           </form>
         </div>
