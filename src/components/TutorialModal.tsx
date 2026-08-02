@@ -51,7 +51,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             <li><span>1</span><div><strong>Configure the Top Cell</strong><p>Set its Cadence library, cell name, width, height, and placement grid.</p></div></li>
             <li><span>2</span><div><strong>Create Master IPs</strong><p>Use the left sidebar’s + button to define reusable blocks, dimensions, planning colors, fill transparency, and outline style. Their library automatically follows the Top Cell.</p></div></li>
             <li><span>3</span><div><strong>Place instances</strong><p>Click a master’s crosshair or press <kbd>i</kbd>, then click the canvas. Press <kbd>Esc</kbd> when finished.</p></div></li>
-            <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select the IP to move, click Align (or press a), choose its edge, then click a green IP, top-cell, or ruler reference. The target click applies immediately.</p></div></li>
+            <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select one or several objects to move, click Align (or press a), choose any selected edge, then click a green IP, top-cell, or ruler reference. The target click applies immediately.</p></div></li>
             <li><span>5</span><div><strong>Save, import, and export</strong><p>Save keeps the working project in this browser. Import SVG opens an editable project file; Export SVG creates a visual copy for review.</p></div></li>
           </ol>
         </section>
@@ -69,7 +69,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiAlignLeft />
-              <div><strong>Align by edges</strong><p>Select the moving source and click Align. Pick its alignment axis, then click the green side where it should be placed. Spacing is the clear gap between the two nearest faces.</p></div>
+              <div><strong>Align by edges</strong><p>Select one or several moving objects and click Align. Pick an amber edge from any selected object, then a green reference. Every selected object shifts by the same delta. Spacing is directional: selected + spacing = reference when selected is left/below; reference + spacing = selected when selected is right/above.</p></div>
             </article>
             <article className="tutorial-card">
               <FiLayers />
@@ -97,7 +97,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
         <section className="tutorial-section">
           <h3>Selection colors</h3>
           <div className="tutorial-legend">
-            <span><i className="tutorial-dot tutorial-dot--anchor" />Amber: primary alignment reference</span>
+            <span><i className="tutorial-dot tutorial-dot--anchor" />Amber: moving selection and chosen source edge</span>
             <span><i className="tutorial-dot tutorial-dot--selected" />Blue: additional selected blocks</span>
             <span><i className="tutorial-dot tutorial-dot--target" />Green: alignment target</span>
             <span><i className="tutorial-dot tutorial-dot--dimension" />Violet: Auto-Dim gap</span>

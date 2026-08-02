@@ -1406,10 +1406,11 @@ export const FloorplanCanvas: React.FC = () => {
             const ipEdges = instances.flatMap(instance => {
               const box = computeInstanceBBox(instance);
               if (!box) return [];
-              const isSource = instance.id === session.sourceId;
+              const isSource = session.sourceIds.includes(instance.id);
+              const isPivot = instance.id === session.sourceId;
               if (!isSource && !sourceAxis) return [];
               const edges: AlignmentEdge[] = isSource
-                ? (session.sourceEdge ? [session.sourceEdge] : ['left', 'right', 'bottom', 'top'])
+                ? (session.sourceEdge ? (isPivot ? [session.sourceEdge] : []) : ['left', 'right', 'bottom', 'top'])
                 : sourceAxis === 'horizontal' ? ['left', 'right'] : ['bottom', 'top'];
 
               return edges.map(edge => {
@@ -1447,7 +1448,7 @@ export const FloorplanCanvas: React.FC = () => {
             });
 
             const pixelArrayEdges = pixelArray?.visible ? (() => {
-              const isSource = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID;
+              const isSource = session.sourceIds.includes(PIXEL_ARRAY_ALIGNMENT_ID);
               if (!isSource && !sourceAxis) return [];
               const box: BBox = {
                 minX: pixelArray.x,

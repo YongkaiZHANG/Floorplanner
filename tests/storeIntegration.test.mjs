@@ -346,7 +346,7 @@ test('top-cell edges and orthogonal rulers can complete edge alignment', () => {
   );
 });
 
-test('positive spacing on a target right edge creates an outside gap without overlap', () => {
+test('directional spacing preserves the selected and reference edge equation', () => {
   useStore.getState().loadProject({ ...emptyProject, topWidth: 1000, topHeight: 500 });
   useStore.getState().addMasterCell('testLib', 'spacingBlock', 150, 20, '#fff');
   const master = Object.values(useStore.getState().masterCells)[0];
@@ -355,8 +355,8 @@ test('positive spacing on a target right edge creates an outside gap without ove
   const [source, target] = useStore.getState().instances;
 
   useStore.getState().startEdgeAlignment(source.id);
-  // The first edge chooses the horizontal axis. A wide source must still be
-  // placed wholly outside the target side rather than overlapping it.
+  // The clicked source edge remains authoritative. Because it starts left of
+  // the reference, source.right + spacing = target.right.
   useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
   useStore.getState().setEdgeAlignmentOffset('100');
   useStore.getState().completeEdgeAlignment(target.id, 'right');
@@ -364,8 +364,66 @@ test('positive spacing on a target right edge creates an outside gap without ove
   const [moved, fixed] = useStore.getState().instances;
   const movedBounds = getPhysicalBounds({ ...moved, width: master.width, height: master.height });
   const fixedBounds = getPhysicalBounds({ ...fixed, width: master.width, height: master.height });
-  assert.equal(movedBounds.left, fixedBounds.right + 100);
-  assert.ok(movedBounds.left > fixedBounds.right);
+  assert.equal(movedBounds.right + 100, fixedBounds.right);
+});
+
+test('vertical directional spacing works below-to-above and above-to-below', () => {
+  const runCase = (sourceY, targetY, sourceEdge, targetEdge, expectedEquation) => {
+    useStore.getState().loadProject(emptyProject);
+    useStore.getState().addMasterCell('testLib', 'verticalShift', 10, 10, '#fff');
+    const master = Object.values(useStore.getState().masterCells)[0];
+    useStore.getState().placeInstance(master.id, 0, sourceY);
+    useStore.getState().placeInstance(master.id, 0, targetY);
+    const [source, target] = useStore.getState().instances;
+    useStore.getState().startEdgeAlignment(source.id);
+    useStore.getState().setEdgeAlignmentEdge(source.id, sourceEdge);
+    useStore.getState().setEdgeAlignmentOffset('7');
+    useStore.getState().completeEdgeAlignment(target.id, targetEdge);
+    const [moved, fixed] = useStore.getState().instances;
+    const movedBounds = getPhysicalBounds({ ...moved, width: 10, height: 10 });
+    const fixedBounds = getPhysicalBounds({ ...fixed, width: 10, height: 10 });
+    expectedEquation(movedBounds, fixedBounds);
+  };
+
+  runCase(-30, 20, 'top', 'bottom', (moved, fixed) => assert.equal(moved.top + 7, fixed.bottom));
+  runCase(20, -30, 'bottom', 'top', (moved, fixed) => assert.equal(fixed.top + 7, moved.bottom));
+});
+
+test('multi-selection alignment shifts every selected pad by one rigid delta', () => {
+  useStore.getState().loadProject({
+    ...emptyProject,
+    topWidth: 200,
+    masterCells: {
+      pad: { id: 'pad', libName: 'testLib', cellName: 'PAD', width: 10, height: 5, color: '#f59e0b', kind: 'pad' },
+      ref: { id: 'ref', libName: 'testLib', cellName: 'REF', width: 10, height: 10, color: '#fff' },
+    },
+    instances: [
+      { id: 'p1', cellId: 'pad', name: 'I0', x: -80, y: 45, orientation: 'R0' },
+      { id: 'p2', cellId: 'pad', name: 'I1', x: -60, y: 45, orientation: 'R0' },
+      { id: 'ref1', cellId: 'ref', name: 'I2', x: 30, y: 0, orientation: 'R0' },
+    ],
+  });
+  useStore.getState().setSelectedInstance('p1');
+  useStore.getState().setSelectedInstance('p2', true);
+  const before = structuredClone(useStore.getState().instances);
+  const historyLength = useStore.getState().history.past.length;
+
+  useStore.getState().startEdgeAlignment('p1');
+  assert.deepEqual(useStore.getState().edgeAlignmentSession?.sourceIds, ['p1', 'p2']);
+  useStore.getState().setEdgeAlignmentEdge('p2', 'right');
+  assert.equal(useStore.getState().edgeAlignmentSession?.sourceId, 'p2');
+  useStore.getState().setEdgeAlignmentOffset('10');
+  useStore.getState().completeEdgeAlignment('ref1', 'left');
+
+  const [p1, p2, reference] = useStore.getState().instances;
+  assert.equal(p1.x - before[0].x, p2.x - before[1].x);
+  assert.equal(p2.x + 10 + 10, reference.x);
+  assert.equal(p1.y, 45);
+  assert.equal(p2.y, 45);
+  assert.deepEqual(reference, before[2]);
+  assert.equal(useStore.getState().history.past.length, historyLength + 1);
+  useStore.getState().undo();
+  assert.deepEqual(useStore.getState().instances, before);
 });
 
 test('interactive spacing rejects negative values instead of reversing across the target', () => {

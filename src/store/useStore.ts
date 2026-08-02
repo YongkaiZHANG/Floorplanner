@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { alignInstanceToCoordinate, alignInstanceToTarget, alignInstances, distributeInstances, getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment.ts';
+import { alignInstanceToCoordinate, alignInstanceToTarget, alignInstances, distributeInstances, getAlignmentEdgeAxis, getEdgeCoordinate, getPhysicalBounds } from '../utils/alignment.ts';
 import type { AlignmentEdge, AlignmentOperation, DistributionAxis } from '../utils/alignment.ts';
 import type { ProjectSnapshot } from './projectDocument.ts';
 import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
@@ -82,6 +82,8 @@ export type PendingManualPadGroup = {
 export const PIXEL_ARRAY_ALIGNMENT_ID = '__pixel_array__';
 
 export type EdgeAlignmentSession = {
+  /** Every object that moves together. sourceId identifies the member whose edge was picked. */
+  sourceIds: string[];
   sourceId: string;
   sourceEdge: AlignmentEdge | null;
   targetId: string | null;
@@ -413,7 +415,7 @@ const edgeAlignmentAfterInstancesChange = (state: ProjectState, instances: Insta
   const existingIds = new Set(instances.map(instance => instance.id));
   const exists = (id: string) => existingIds.has(id)
     || (id === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible));
-  return exists(session.sourceId) && (!session.targetId || exists(session.targetId))
+  return session.sourceIds.every(exists) && exists(session.sourceId) && (!session.targetId || exists(session.targetId))
     ? session
     : null;
 };
@@ -457,6 +459,48 @@ const alignmentPositionPatch = (
   };
 };
 
+const alignmentGroupPositionPatch = (
+  state: ProjectState,
+  sourceIds: readonly string[],
+  pivotId: string,
+  pivotX: number,
+  pivotY: number,
+): Pick<ProjectSnapshot, 'instances' | 'pixelArray'> => {
+  if (pivotId === PIXEL_ARRAY_ALIGNMENT_ID) {
+    if (sourceIds.length !== 1) throw new Error('The pixel array cannot be part of an instance alignment group');
+    return alignmentPositionPatch(state, pivotId, pivotX, pivotY);
+  }
+  const pivot = state.instances.find(instance => instance.id === pivotId);
+  if (!pivot) throw new Error('The alignment source no longer exists');
+  const deltaX = pivotX - pivot.x;
+  const deltaY = pivotY - pivot.y;
+  const sourceSet = new Set(sourceIds);
+  const instances = state.instances.map(instance => {
+    if (!sourceSet.has(instance.id)) return instance;
+    const master = state.masterCells[instance.cellId];
+    if (!master) throw new Error(`The master for ${instance.name} no longer exists`);
+    const requestedX = instance.x + deltaX;
+    const requestedY = instance.y + deltaY;
+    const checked = clampInstancePosition(
+      requestedX, requestedY, instance.orientation, master.width, master.height,
+      state.topWidth, state.topHeight, state.gridSize,
+    );
+    if (Math.abs(checked.x - requestedX) > 1e-9 || Math.abs(checked.y - requestedY) > 1e-9) {
+      throw new RangeError(`Cannot shift the selected group without moving ${instance.name} off-grid or outside the top cell`);
+    }
+    if (master.kind === 'pad') {
+      const bounds = getPhysicalBounds({ ...instance, x: checked.x, y: checked.y, width: master.width, height: master.height });
+      const touchesPerimeter = Math.abs(bounds.left + state.topWidth / 2) <= 1e-9
+        || Math.abs(bounds.right - state.topWidth / 2) <= 1e-9
+        || Math.abs(bounds.bottom + state.topHeight / 2) <= 1e-9
+        || Math.abs(bounds.top - state.topHeight / 2) <= 1e-9;
+      if (!touchesPerimeter) throw new RangeError(`Cannot shift the group because pad ${instance.name} would leave the top-cell perimeter`);
+    }
+    return { ...instance, x: checked.x, y: checked.y };
+  });
+  return { instances, pixelArray: state.pixelArray };
+};
+
 const edgeAlignmentPatch = (
   state: ProjectState,
   sourceId: string,
@@ -465,8 +509,9 @@ const edgeAlignmentPatch = (
   targetEdge: AlignmentEdge,
   offset: number,
   displaySpacing?: number,
+  sourceIds: readonly string[] = [sourceId],
 ) => {
-  if (sourceId === targetId) throw new Error('Source and target must be different objects');
+  if (sourceIds.includes(targetId)) throw new Error('The reference must not be part of the moving selection');
   const source = getAlignable(state, sourceId);
   const target = getAlignable(state, targetId);
 
@@ -478,13 +523,13 @@ const edgeAlignmentPatch = (
     offset,
     { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize },
   );
-  const patch = alignmentPositionPatch(state, sourceId, position.x, position.y);
+  const patch = alignmentGroupPositionPatch(state, sourceIds, sourceId, position.x, position.y);
   const offsetLabel = displaySpacing === undefined
     ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
     : (displaySpacing === 0 ? '' : ` gap ${displaySpacing} um`);
   return commitProjectPatch(
     state,
-    `Align ${source.name}.${sourceEdge} to ${target.name}.${targetEdge}${offsetLabel}`,
+    `Align ${sourceIds.length > 1 ? `${sourceIds.length} objects via ` : ''}${source.name}.${sourceEdge} to ${target.name}.${targetEdge}${offsetLabel}`,
     patch,
   );
 };
@@ -497,6 +542,7 @@ const edgeAlignmentCoordinatePatch = (
   offset: number,
   referenceLabel: string,
   displaySpacing?: number,
+  sourceIds: readonly string[] = [sourceId],
 ) => {
   const source = getAlignable(state, sourceId);
   const position = alignInstanceToCoordinate(
@@ -506,13 +552,13 @@ const edgeAlignmentCoordinatePatch = (
     offset,
     { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize },
   );
-  const patch = alignmentPositionPatch(state, sourceId, position.x, position.y);
+  const patch = alignmentGroupPositionPatch(state, sourceIds, sourceId, position.x, position.y);
   const offsetLabel = displaySpacing === undefined
     ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
     : (displaySpacing === 0 ? '' : ` gap ${displaySpacing} um`);
   return commitProjectPatch(
     state,
-    `Align ${source.name}.${sourceEdge} to ${referenceLabel}${offsetLabel}`,
+    `Align ${sourceIds.length > 1 ? `${sourceIds.length} objects via ` : ''}${source.name}.${sourceEdge} to ${referenceLabel}${offsetLabel}`,
     patch,
   );
 };
@@ -526,18 +572,20 @@ const parseEdgeAlignmentSpacing = (session: EdgeAlignmentSession) => {
   return spacing;
 };
 
-const outwardDirectionForEdge = (edge: AlignmentEdge) => {
-  if (edge === 'right' || edge === 'top') return 1;
-  if (edge === 'left' || edge === 'bottom') return -1;
-  return 0;
-};
-
-const sourceEdgeOutsideTarget = (targetEdge: AlignmentEdge): AlignmentEdge | null => {
-  if (targetEdge === 'right') return 'left';
-  if (targetEdge === 'left') return 'right';
-  if (targetEdge === 'top') return 'bottom';
-  if (targetEdge === 'bottom') return 'top';
-  return null;
+const directionalSpacingOffset = (
+  source: ReturnType<typeof getAlignable>,
+  sourceEdge: AlignmentEdge,
+  targetCoordinate: number,
+  spacing: number,
+) => {
+  const bounds = getPhysicalBounds(source);
+  const sourceCoordinate = getEdgeCoordinate(bounds, sourceEdge);
+  // A source before/below the reference satisfies sourceEdge + spacing = referenceEdge.
+  // A source after/above it satisfies referenceEdge + spacing = sourceEdge.
+  const sourceComesFirst = Math.abs(sourceCoordinate - targetCoordinate) <= 1e-9
+    ? (getAlignmentEdgeAxis(sourceEdge) === 'horizontal' ? bounds.centerX : bounds.centerY) < targetCoordinate
+    : sourceCoordinate < targetCoordinate;
+  return spacing * (sourceComesFirst ? -1 : 1);
 };
 
 const ALIGNMENT_SPACING_STORAGE_KEY = 'ic-floorplanner:alignment-spacing:v1';
@@ -1161,8 +1209,14 @@ export const useStore = create<ProjectState>((set) => ({
     const sourceExists = state.instances.some(instance => instance.id === sourceId)
       || (sourceId === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible));
     if (!sourceExists) return state;
+    const sourceIds = sourceId === PIXEL_ARRAY_ALIGNMENT_ID
+      ? [sourceId]
+      : state.selectedInstanceIds.includes(sourceId)
+        ? state.selectedInstanceIds.filter(id => state.instances.some(instance => instance.id === id))
+        : [sourceId];
     return {
       edgeAlignmentSession: {
+        sourceIds,
         sourceId,
         sourceEdge: null,
         targetId: null,
@@ -1177,8 +1231,8 @@ export const useStore = create<ProjectState>((set) => ({
     const exists = state.instances.some(instance => instance.id === instanceId)
       || (instanceId === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible));
     if (!session || !exists) return state;
-    if (instanceId === session.sourceId) {
-      return { edgeAlignmentSession: { ...session, sourceEdge: edge } };
+    if (session.sourceIds.includes(instanceId)) {
+      return { edgeAlignmentSession: { ...session, sourceId: instanceId, sourceEdge: edge, targetId: null, targetEdge: null } };
     }
     return {
       edgeAlignmentSession: {
@@ -1208,27 +1262,19 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error('Source and target edges must be on the same axis');
     }
     const spacing = parseEdgeAlignmentSpacing(session);
-    const pixelArraySource = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID;
-    const sourceEdge = pixelArraySource
-      ? session.sourceEdge
-      : sourceEdgeOutsideTarget(targetEdge) ?? session.sourceEdge;
-    let direction = outwardDirectionForEdge(targetEdge);
-    if (direction === 0) {
-      const sourceBounds = getPhysicalBounds(getAlignable(state, session.sourceId));
-      const targetBounds = getPhysicalBounds(getAlignable(state, targetId));
-      direction = getAlignmentEdgeAxis(session.sourceEdge) === 'horizontal'
-        ? (sourceBounds.centerX < targetBounds.centerX ? -1 : 1)
-        : (sourceBounds.centerY < targetBounds.centerY ? -1 : 1);
-    }
+    const target = getAlignable(state, targetId);
+    const targetCoordinate = getEdgeCoordinate(getPhysicalBounds(target), targetEdge);
+    const offset = directionalSpacingOffset(getAlignable(state, session.sourceId), session.sourceEdge, targetCoordinate, spacing);
     return {
       ...edgeAlignmentPatch(
         state,
         session.sourceId,
         targetId,
-        sourceEdge,
+        session.sourceEdge,
         targetEdge,
-        spacing * direction,
+        offset,
         spacing,
+        session.sourceIds,
       ),
       edgeAlignmentSession: null,
     };
@@ -1245,19 +1291,17 @@ export const useStore = create<ProjectState>((set) => ({
       : targetEdge === 'bottom' ? -state.topHeight / 2
       : state.topHeight / 2;
     const spacing = parseEdgeAlignmentSpacing(session);
-    const inwardDirection = -outwardDirectionForEdge(targetEdge);
-    const sourceEdge = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
-      ? session.sourceEdge
-      : targetEdge;
+    const offset = directionalSpacingOffset(getAlignable(state, session.sourceId), session.sourceEdge, coordinate, spacing);
     return {
       ...edgeAlignmentCoordinatePatch(
         state,
         session.sourceId,
-        sourceEdge,
+        session.sourceEdge,
         coordinate,
-        spacing * inwardDirection,
+        offset,
         `top.${targetEdge}`,
         spacing,
+        session.sourceIds,
       ),
       edgeAlignmentSession: null,
     };
@@ -1275,24 +1319,18 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error('Only an orthogonal ruler on the matching axis can be an alignment reference');
     }
     const coordinate = axis === 'horizontal' ? ruler.startX : ruler.startY;
-    const bounds = getPhysicalBounds(getAlignable(state, session.sourceId));
-    const sourceCenter = axis === 'horizontal' ? bounds.centerX : bounds.centerY;
     const spacing = parseEdgeAlignmentSpacing(session);
-    const direction = sourceCenter < coordinate ? -1 : 1;
-    const sourceEdge: AlignmentEdge = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
-      ? session.sourceEdge
-      : axis === 'horizontal'
-        ? (direction < 0 ? 'right' : 'left')
-        : (direction < 0 ? 'top' : 'bottom');
+    const offset = directionalSpacingOffset(getAlignable(state, session.sourceId), session.sourceEdge, coordinate, spacing);
     return {
       ...edgeAlignmentCoordinatePatch(
         state,
         session.sourceId,
-        sourceEdge,
+        session.sourceEdge,
         coordinate,
-        spacing * direction,
+        offset,
         'ruler line',
         spacing,
+        session.sourceIds,
       ),
       edgeAlignmentSession: null,
     };
@@ -1309,19 +1347,18 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error('Source and target edges must be on the same axis');
     }
     const spacing = parseEdgeAlignmentSpacing(session);
-    const sourceEdge = session.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
-      ? session.sourceEdge
-      : sourceEdgeOutsideTarget(session.targetEdge) ?? session.sourceEdge;
-    const direction = outwardDirectionForEdge(session.targetEdge);
+    const targetCoordinate = getEdgeCoordinate(getPhysicalBounds(getAlignable(state, session.targetId)), session.targetEdge);
+    const offset = directionalSpacingOffset(getAlignable(state, session.sourceId), session.sourceEdge, targetCoordinate, spacing);
     return {
       ...edgeAlignmentPatch(
         state,
         session.sourceId,
         session.targetId,
-        sourceEdge,
+        session.sourceEdge,
         session.targetEdge,
-        spacing * direction,
+        offset,
         spacing,
+        session.sourceIds,
       ),
       edgeAlignmentSession: null,
     };

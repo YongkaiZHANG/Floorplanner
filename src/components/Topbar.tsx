@@ -16,7 +16,7 @@ export const Topbar: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v15') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v16') !== 'yes';
     } catch {
       return true;
     }
@@ -37,7 +37,9 @@ export const Topbar: React.FC = () => {
     : null;
   const alignmentSourceName = edgeAlignmentSession?.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
     ? 'Pixel Array'
-    : alignmentSource?.name ?? 'IP';
+    : edgeAlignmentSession && edgeAlignmentSession.sourceIds.length > 1
+      ? `${edgeAlignmentSession.sourceIds.length} selected objects${edgeAlignmentSession.sourceEdge ? ` via ${alignmentSource?.name ?? 'chosen edge'}` : ''}`
+      : alignmentSource?.name ?? 'IP';
   const alignmentAxis = edgeAlignmentSession?.sourceEdge
     ? (edgeAlignmentSession.sourceEdge === 'left' || edgeAlignmentSession.sourceEdge === 'right' || edgeAlignmentSession.sourceEdge === 'horizontal-center'
         ? 'horizontally'
@@ -45,7 +47,9 @@ export const Topbar: React.FC = () => {
     : null;
   const alignmentStep = edgeAlignmentSession?.sourceEdge
     ? 'Click a green IP, pixel-array, top-cell, or ruler reference'
-    : `Click an amber edge of ${alignmentSourceName}`;
+    : edgeAlignmentSession && edgeAlignmentSession.sourceIds.length > 1
+      ? 'Click an amber edge on any selected object'
+      : `Click an amber edge of ${alignmentSourceName}`;
 
   const showToast = (message: string, kind: ToastKind = 'success') => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -174,7 +178,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v15', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v16', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -249,7 +253,7 @@ export const Topbar: React.FC = () => {
               />
               <span>µm</span>
             </label>
-            <span className="topbar-align__hint">{edgeAlignmentSession.sourceId === PIXEL_ARRAY_ALIGNMENT_ID ? 'Exact selected-edge offset · IP overlap is allowed' : 'Non-negative gap outside target · inside top boundary'}</span>
+            <span className="topbar-align__hint">Directional edge distance · the entire selection shifts together</span>
             <button className="topbar-align__cancel" type="button" onClick={cancelEdgeAlignment} aria-label="Cancel edge alignment" title="Cancel alignment (Esc)">
               <FiX />
             </button>

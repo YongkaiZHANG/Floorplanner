@@ -145,7 +145,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
             }}
           >
             <FiAlignCenter />
-            <span><strong>Align by two edges…</strong><small>Pick this block’s edge, then a fixed target edge</small></span>
+            <span><strong>Align by two edges…</strong><small>Pick any selected object’s edge; the whole selection moves together</small></span>
           </button>
           <div className="editing-toolbar__menu-section">Quick align selected blocks</div>
           {alignmentItems.map((item) => (
