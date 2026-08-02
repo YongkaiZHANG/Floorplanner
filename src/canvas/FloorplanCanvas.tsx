@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, clampInstancePosition, computePadGroupPositions, getTransformProps, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToNearestEdge } from '../store/useStore';
+import { useStore, clampInstancePosition, computePadGroupPositions, getTransformProps, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
 import { getAlignmentEdgeAxis } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
 import { formatGridValue } from '../utils/grid';
@@ -1618,18 +1618,20 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Ghost Placement Group */}
           {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && mousePos && (() => {
             const m = masterCells[placementMasterId];
-            const t = getTransformProps(placementOrientation);
+            let previewOrientation = placementOrientation;
             let ghostPosition = mousePos;
             if (m.kind === 'pad') {
               try {
-                const snapped = snapPadToNearestEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize, placementOrientation);
                 if (pendingManualPadGroup) {
+                  const snapped = snapPadToAutoOrientedEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize);
+                  previewOrientation = snapped.orientation;
+                  const t = getTransformProps(previewOrientation);
                   const horizontal = snapped.side === 'top' || snapped.side === 'bottom';
                   const centerAlong = horizontal ? mousePos.x : mousePos.y;
                   const positions = computePadGroupPositions({
                     width: m.width, height: m.height, count: pendingManualPadGroup.count,
                     pitch: pendingManualPadGroup.pitch, side: snapped.side, centerAlong,
-                    orientation: placementOrientation, topWidth, topHeight, gridSize,
+                    orientation: previewOrientation, topWidth, topHeight, gridSize,
                   });
                   return <>{positions.map((position, index) => (
                     <Group
@@ -1653,11 +1655,12 @@ export const FloorplanCanvas: React.FC = () => {
                     </Group>
                   ))}</>;
                 }
-                ghostPosition = snapped;
+                ghostPosition = snapPadToNearestEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize, placementOrientation);
               } catch {
                 return null;
               }
             }
+            const t = getTransformProps(previewOrientation);
             return (
               <Group
                 x={ghostPosition.x * SCALE_FACTOR}
@@ -1744,7 +1747,7 @@ export const FloorplanCanvas: React.FC = () => {
       )}
       {appMode === 'place' && placementMasterId && masterCells[placementMasterId]?.kind === 'pad' && (
         <div className="coordinate-overlay manual-pad-placement-hint">
-          Manual Pad Groups · {pendingManualPadGroup?.count ?? 1} pads at {pendingManualPadGroup?.pitch ?? 0} um pitch · Click each group location · Esc finishes
+          Manual Pad Groups · Auto-rotate by nearest edge · {pendingManualPadGroup?.count ?? 1} pads at {pendingManualPadGroup?.pitch ?? 0} um pitch · Click each group location · Esc finishes
         </div>
       )}
       {showAutoDim && appMode !== 'measure' && !pixelArraySelected && (

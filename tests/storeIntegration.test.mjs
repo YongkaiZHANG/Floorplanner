@@ -563,23 +563,25 @@ test('automatic pad shift is measured from the selected top-cell edge start', ()
   );
 });
 
-test('manual placement clicks create pitched groups while preserving arbitrary gaps', () => {
+test('manual placement clicks auto-rotate pitched groups for each hovered edge', () => {
   useStore.getState().loadProject(emptyProject);
   useStore.getState().prepareManualPadPlacement({
     libName: 'padLib', cellName: 'GROUP_PAD', width: 10, height: 5, color: '#fff',
-    count: 3, pitch: 8, orientation: 'R90',
+    count: 3, pitch: 12, orientation: 'R180',
   });
   const before = useStore.getState().history.past.length;
   useStore.getState().placeManualPadGroup(-25, 45);
-  useStore.getState().placeManualPadGroup(20, 45);
+  useStore.getState().placeManualPadGroup(45, 20);
   const state = useStore.getState();
   const master = Object.values(state.masterCells)[0];
   const bounds = state.instances.map(instance => getPhysicalBounds({ ...instance, width: master.width, height: master.height }));
   assert.equal(state.instances.length, 6);
-  assert.ok(state.instances.every(instance => instance.cellId === master.id && instance.orientation === 'R90'));
-  assert.deepEqual(bounds.slice(0, 3).map(bound => bound.centerX), [-33, -25, -17]);
-  assert.deepEqual(bounds.slice(3).map(bound => bound.centerX), [12, 20, 28]);
-  assert.ok(bounds.every(bound => bound.top === 50));
+  assert.ok(state.instances.slice(0, 3).every(instance => instance.cellId === master.id && instance.orientation === 'R0'));
+  assert.ok(state.instances.slice(3).every(instance => instance.cellId === master.id && instance.orientation === 'R270'));
+  assert.deepEqual(bounds.slice(0, 3).map(bound => bound.centerX), [-37, -25, -13]);
+  assert.deepEqual(bounds.slice(3).map(bound => bound.centerY), [8, 20, 32]);
+  assert.ok(bounds.slice(0, 3).every(bound => bound.top === 50));
+  assert.ok(bounds.slice(3).every(bound => bound.right === 50));
   assert.equal(state.history.past.length, before + 2);
 });
 

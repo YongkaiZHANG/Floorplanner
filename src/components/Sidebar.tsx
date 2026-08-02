@@ -91,7 +91,6 @@ export const Sidebar: React.FC = () => {
           color: padColor,
           count: Number(padCount),
           pitch: Number(padPitch),
-          orientation: padOrientation,
         });
         setShowPadModal(false);
         return;
@@ -561,7 +560,7 @@ export const Sidebar: React.FC = () => {
             </div>
             <div className="pad-row-guide">
               <span><b>1</b> Define one reusable pad cell</span>
-              <span><b>2</b>{padPlacementMode === 'row' ? ' Choose edge, count, pitch, and rotation' : ' Set group count, pitch, and rotation'}</span>
+              <span><b>2</b>{padPlacementMode === 'row' ? ' Choose edge, count, pitch, and rotation' : ' Set group count and pitch; rotation follows the hovered edge'}</span>
               <span><b>3</b>{padPlacementMode === 'row' ? ' Drag pads around the perimeter later' : ' Click each group; leave any gap between groups'}</span>
             </div>
             <div className="form-row">
@@ -587,20 +586,24 @@ export const Sidebar: React.FC = () => {
             <div className="form-row">
               <div className="form-group">
                 <label className="label">Orientation (Virtuoso)</label>
-                <select className="input-field" value={padPlacementMode === 'row' && padAutoOrient ? resolvedPadOrientation : padOrientation} onChange={event => setPadOrientation(event.target.value)} disabled={padPlacementMode === 'row' && padAutoOrient}>
-                  {['R0', 'R90', 'R180', 'R270'].map(orientation => <option key={orientation} value={orientation}>{orientation}</option>)}
-                </select>
-                {padPlacementMode === 'row' && (
+                {padPlacementMode === 'manual' ? (
+                  <div className="input-field locked-library">Automatic by hovered edge</div>
+                ) : (
+                  <select className="input-field" value={padAutoOrient ? resolvedPadOrientation : padOrientation} onChange={event => setPadOrientation(event.target.value)} disabled={padAutoOrient}>
+                    {['R0', 'R90', 'R180', 'R270'].map(orientation => <option key={orientation} value={orientation}>{orientation}</option>)}
+                  </select>
+                )}
+                {padPlacementMode === 'row' ? (
                   <label className="checkbox-label">
                     <input type="checkbox" checked={padAutoOrient} onChange={event => setPadAutoOrient(event.target.checked)} />
                     Auto by edge ({resolvedPadOrientation})
                   </label>
-                )}
+                ) : <small>Top R0 · Right R270 · Bottom R180 · Left R90</small>}
               </div>
               <div className="form-group pad-fit-hint">
                 <span className="label">Placed footprint</span>
-                <strong>{Number.isFinite(padPhysicalWidth) ? padPhysicalWidth.toFixed(3) : '—'} × {Number.isFinite(padPhysicalHeight) ? padPhysicalHeight.toFixed(3) : '—'} um</strong>
-                <small>{padRotated ? `${resolvedPadOrientation} swaps physical width and height` : `${resolvedPadOrientation} uses defined width and height`}</small>
+                <strong>{padPlacementMode === 'manual' ? 'Updates with edge' : `${Number.isFinite(padPhysicalWidth) ? padPhysicalWidth.toFixed(3) : '—'} × ${Number.isFinite(padPhysicalHeight) ? padPhysicalHeight.toFixed(3) : '—'} um`}</strong>
+                <small>{padPlacementMode === 'manual' ? 'The canvas preview shows the rotated footprint' : padRotated ? `${resolvedPadOrientation} swaps physical width and height` : `${resolvedPadOrientation} uses defined width and height`}</small>
               </div>
             </div>
             {padPlacementMode === 'row' ? <>
@@ -664,7 +667,7 @@ export const Sidebar: React.FC = () => {
                 </div>
                 <div className="manual-pad-guide">
                   <FiCrosshair />
-                  <div><strong>Each click places one group.</strong><span>The preview follows the nearest edge. Click again after any keep-out gap or on another edge; every pad reuses the same Cadence cell. Press Esc when finished.</span></div>
+                  <div><strong>Each click places one auto-rotated group.</strong><span>The preview follows and rotates for the nearest edge. Click again after any keep-out gap or on another edge; every pad reuses the same Cadence cell. Press Esc when finished.</span></div>
                 </div>
               </>
             )}

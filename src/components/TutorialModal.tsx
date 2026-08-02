@@ -82,7 +82,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiGrid />
-              <div><strong>Place edge pads</strong><p>Automatic Row rotates by edge by default. Shift is measured from the Top Cell’s left edge for top/bottom rows, or bottom edge for left/right rows, to the first pad’s physical edge. Manual / Separated places flexible pitched groups with arbitrary gaps. Every instance reuses one Cadence pad cell.</p></div>
+              <div><strong>Place edge pads</strong><p>Automatic Row rotates by edge by default. Shift is measured from the Top Cell’s left edge for top/bottom rows, or bottom edge for left/right rows. Manual / Separated also rotates its preview automatically as the mouse moves between edges, while allowing arbitrary gaps. Every instance reuses one Cadence pad cell.</p></div>
             </article>
             <article className="tutorial-card">
               <FiGrid />
