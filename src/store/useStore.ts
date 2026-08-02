@@ -25,6 +25,9 @@ export type Cell = {
   color: string;
   /** Pads remain attached to the nearest top-cell edge when moved. */
   kind?: 'ip' | 'pad';
+  /** Canvas/SVG planning appearance; Cadence display colors remain technology-controlled. */
+  opacity?: number;
+  outlineStyle?: 'solid' | 'dashed' | 'dotted' | 'none';
 };
 
 export type Ruler = {
@@ -97,8 +100,8 @@ export type ProjectState = {
   setRightSidebarPinned: (pinned: boolean) => void;
   setPlacement: (masterId: string | null, orientation?: string) => void;
   
-  addMasterCell: (libName: string, cellName: string, w: number, h: number, color: string) => void;
-  updateMasterCell: (id: string, libName: string, cellName: string, w: number, h: number, color: string) => void;
+  addMasterCell: (libName: string, cellName: string, w: number, h: number, color: string, opacity?: number, outlineStyle?: Cell['outlineStyle']) => void;
+  updateMasterCell: (id: string, libName: string, cellName: string, w: number, h: number, color: string, opacity?: number, outlineStyle?: Cell['outlineStyle']) => void;
   deleteMasterCell: (id: string) => void;
   placeInstance: (cellId: string, x?: number, y?: number, orientation?: string) => void;
   createPadRow: (config: PadRowConfig) => void;
@@ -234,6 +237,16 @@ const getNextInstanceName = (instances: Instance[]) => {
   let index = 0;
   while (usedNames.has(`I${index}`)) index += 1;
   return `I${index}`;
+};
+
+const normalizeCellAppearance = (opacity: number, outlineStyle: Cell['outlineStyle']) => {
+  if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) {
+    throw new RangeError('IP opacity must be between 0 and 1');
+  }
+  if (!outlineStyle || !(['solid', 'dashed', 'dotted', 'none'] as const).includes(outlineStyle)) {
+    throw new Error('IP outline style must be solid, dashed, dotted, or none');
+  }
+  return { opacity, outlineStyle };
 };
 
 const ORIENTATION_ROTATION_CYCLES = [
@@ -474,24 +487,25 @@ export const useStore = create<ProjectState>((set) => ({
   setRightSidebarPinned: (pinned) => set({ rightSidebarPinned: pinned }),
   setPlacement: (masterId, orientation = 'R0') => set({ placementMasterId: masterId, placementOrientation: orientation, appMode: masterId ? 'place' : 'select', edgeAlignmentSession: null }),
   
-  addMasterCell: (libName, cellName, w, h, color) => set((state) => {
+  addMasterCell: (libName, cellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
     const existing = Object.values(state.masterCells).find(c => c.cellName === cellName && c.libName === libName);
     if (existing) return state; 
-    
+    const appearance = normalizeCellAppearance(opacity, outlineStyle);
     const id = uuidv4();
     return commitProjectPatch(state, `Create ${cellName}`, {
       masterCells: {
         ...state.masterCells,
-        [id]: { id, libName, cellName, width: w, height: h, color }
+        [id]: { id, libName, cellName, width: w, height: h, color, ...appearance }
       },
     });
   }),
 
-  updateMasterCell: (id, libName, cellName, w, h, color) => set((state) => {
+  updateMasterCell: (id, libName, cellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
     if (!state.masterCells[id]) return state;
+    const appearance = normalizeCellAppearance(opacity, outlineStyle);
     const masterCells = {
       ...state.masterCells,
-      [id]: { ...state.masterCells[id], libName, cellName, width: w, height: h, color },
+      [id]: { ...state.masterCells[id], libName, cellName, width: w, height: h, color, ...appearance },
     };
     const instances = state.instances.map(instance => {
       if (instance.cellId !== id) return instance;
@@ -588,7 +602,12 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error(`Existing master ${libName}/${cellName} has different dimensions`);
     }
 
-    const master: Cell = existingMaster ? { ...existingMaster, kind: 'pad' } : {
+    const master: Cell = existingMaster ? {
+      ...existingMaster,
+      kind: 'pad',
+      opacity: existingMaster.opacity ?? 0.65,
+      outlineStyle: existingMaster.outlineStyle ?? 'solid',
+    } : {
       id: uuidv4(),
       libName,
       cellName,
@@ -596,6 +615,8 @@ export const useStore = create<ProjectState>((set) => ({
       height: config.height,
       color: config.color,
       kind: 'pad',
+      opacity: 0.65,
+      outlineStyle: 'solid',
     };
     const masterCells = { ...state.masterCells, [master.id]: master };
     const instances = [...state.instances];

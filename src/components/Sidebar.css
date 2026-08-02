@@ -182,6 +182,72 @@
   padding: 8px;
   text-align: center;
 }
+
+.edge-pad-action {
+  width: calc(100% - 16px);
+  margin: 12px 8px 0;
+  padding: 10px 11px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.38);
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.13), rgba(14, 165, 233, 0.06));
+  color: #60a5fa;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s, transform 0.15s;
+}
+
+.edge-pad-action:hover {
+  border-color: rgba(96, 165, 250, 0.7);
+  background-color: rgba(59, 130, 246, 0.14);
+  transform: translateY(-1px);
+}
+
+.edge-pad-action > svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.edge-pad-action span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.edge-pad-action strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.edge-pad-action small {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.cell-swatch {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-width: 2px;
+  border-color: var(--text-primary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.cell-swatch i {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.cell-swatch--solid { border-style: solid; }
+.cell-swatch--dashed { border-style: dashed; }
+.cell-swatch--dotted { border-style: dotted; }
+.cell-swatch--none { border-color: transparent; }
+
 .custom-color-picker {
   margin-top: 12px;
   padding: 8px 10px;
@@ -211,6 +277,109 @@
   color: var(--text-primary);
   font-size: 11px;
 }
+
+.master-modal {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.appearance-editor {
+  margin-top: 4px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 94px 1fr;
+  gap: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+}
+
+.appearance-preview-wrap,
+.appearance-controls {
+  display: flex;
+  flex-direction: column;
+}
+
+.appearance-preview {
+  height: 68px;
+  margin-top: 6px;
+  position: relative;
+  overflow: hidden;
+  border-width: 2px;
+  border-color: #cbd5e1;
+  border-radius: 5px;
+  background: repeating-conic-gradient(rgba(148, 163, 184, 0.12) 0 25%, transparent 0 50%) 50% / 12px 12px;
+}
+
+.appearance-preview i {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0));
+}
+
+.appearance-preview--solid { border-style: solid; }
+.appearance-preview--dashed { border-style: dashed; }
+.appearance-preview--dotted { border-style: dotted; }
+.appearance-preview--none { border-color: transparent; }
+
+.appearance-heading,
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.appearance-heading strong {
+  color: #93c5fd;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.opacity-slider {
+  width: 100%;
+  margin: 3px 0 12px;
+  accent-color: var(--accent-color);
+}
+
+.outline-options {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+
+.outline-option {
+  min-width: 0;
+  padding: 6px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.outline-option:hover,
+.outline-option.active {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.outline-option.active {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.outline-sample {
+  width: 22px;
+  border-top: 2px solid currentColor;
+}
+
+.outline-sample--dashed { border-top-style: dashed; }
+.outline-sample--dotted { border-top-style: dotted; }
+.outline-sample--none { border-top-color: transparent; }
 
 .pad-row-modal {
   width: min(560px, calc(100vw - 32px));
@@ -266,6 +435,111 @@
   font-size: 10px;
 }
 
+.text-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #60a5fa;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.text-action:hover {
+  color: #93c5fd;
+  text-decoration: underline;
+}
+
+.pad-edge-picker {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 7px;
+}
+
+.pad-edge-option {
+  padding: 7px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
+.pad-edge-option:hover,
+.pad-edge-option.active {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.pad-edge-option.active {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.pad-edge-option i {
+  width: 34px;
+  height: 22px;
+  position: relative;
+  border: 1px solid var(--text-secondary);
+  border-radius: 2px;
+}
+
+.pad-edge-option i::after {
+  content: '';
+  position: absolute;
+  background: #60a5fa;
+}
+
+.pad-edge-option--top i::after,
+.pad-edge-option--bottom i::after {
+  left: 5px;
+  right: 5px;
+  height: 3px;
+}
+
+.pad-edge-option--top i::after { top: -2px; }
+.pad-edge-option--bottom i::after { bottom: -2px; }
+
+.pad-edge-option--left i::after,
+.pad-edge-option--right i::after {
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+}
+
+.pad-edge-option--left i::after { left: -2px; }
+.pad-edge-option--right i::after { right: -2px; }
+
+.pad-fit-hint {
+  padding: 7px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+}
+
+.pad-fit-hint strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.pad-fit-hint small {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.pad-fit-hint .error-text {
+  color: #f87171;
+}
+
 .pad-color-field,
 .pad-row-summary {
   min-height: 60px;
@@ -316,6 +590,10 @@
 @media (max-width: 600px) {
   .pad-row-options,
   .pad-row-guide {
+    grid-template-columns: 1fr;
+  }
+
+  .appearance-editor {
     grid-template-columns: 1fr;
   }
 }

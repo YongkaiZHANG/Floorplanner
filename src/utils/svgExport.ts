@@ -112,10 +112,14 @@ export const exportSVG = () => {
     const h = m.height * sf;
     const x = inst.x * sf;
     const y = inst.y * sf;
+    const outlineStyle = m.outlineStyle ?? 'solid';
+    const outlineStroke = outlineStyle === 'none' ? 'none' : '#1e293b';
+    const outlineDash = outlineStyle === 'dashed' ? ' stroke-dasharray="8,6"'
+      : outlineStyle === 'dotted' ? ' stroke-dasharray="2,4"' : '';
     
     const transform = `translate(${x} ${y}) rotate(${rot}) scale(${scaleX} ${scaleY})`;
     svg += `  <g transform="${transform}">\n`;
-    svg += `    <rect width="${w}" height="${h}" fill="${m.color}" fill-opacity="0.7" stroke="#1e293b" stroke-width="1.5" vector-effect="non-scaling-stroke" />\n`;
+    svg += `    <rect width="${w}" height="${h}" fill="${m.color}" fill-opacity="${m.opacity ?? 0.5}" stroke="${outlineStroke}" stroke-width="1.5"${outlineDash} vector-effect="non-scaling-stroke" />\n`;
     
     const instFS = Math.min(w * 0.15, h * 0.25, baseFS * 2);
     svg += `    <text x="${w/2}" y="${h/2 - instFS*0.6}" fill="#0f172a" font-family="Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${m.cellName}</text>\n`;

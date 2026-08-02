@@ -1093,6 +1093,10 @@ export const FloorplanCanvas: React.FC = () => {
             const isPrimarySelection = selectedInstanceId === inst.id;
 
             const t = getTransformProps(inst.orientation);
+            const outlineStyle = masterCell.outlineStyle ?? 'solid';
+            const outlineDash = outlineStyle === 'dashed'
+              ? [8 / stageScale, 6 / stageScale]
+              : outlineStyle === 'dotted' ? [1.5 / stageScale, 4 / stageScale] : undefined;
 
             return (
               <Group
@@ -1127,10 +1131,29 @@ export const FloorplanCanvas: React.FC = () => {
                   width={w}
                   height={h}
                   fill={masterCell.color}
-                  opacity={0.5}
-                  stroke={isPrimarySelection ? '#f59e0b' : isSelected ? '#38bdf8' : '#334155'}
-                  strokeWidth={isSelected ? 3 / stageScale : 1 / stageScale}
+                  opacity={masterCell.opacity ?? 0.5}
                 />
+                {outlineStyle !== 'none' && (
+                  <Rect
+                    width={w}
+                    height={h}
+                    fillEnabled={false}
+                    stroke="#334155"
+                    strokeWidth={1 / stageScale}
+                    dash={outlineDash}
+                    listening={false}
+                  />
+                )}
+                {isSelected && (
+                  <Rect
+                    width={w}
+                    height={h}
+                    fillEnabled={false}
+                    stroke={isPrimarySelection ? '#f59e0b' : '#38bdf8'}
+                    strokeWidth={3 / stageScale}
+                    listening={false}
+                  />
+                )}
                 
                 {(() => {
                   // Compute a fontSize that is always readable:

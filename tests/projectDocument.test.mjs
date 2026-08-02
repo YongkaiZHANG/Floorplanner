@@ -38,3 +38,17 @@ test('pad master behavior survives project serialization and rejects unknown kin
   padProject.masterCells.m.kind = 'mystery';
   assert.throws(() => parseProjectDocument(JSON.stringify(padProject)), /Invalid master cell/);
 });
+
+test('IP appearance survives serialization and invalid appearance is rejected', () => {
+  const styledProject = structuredClone(project);
+  styledProject.masterCells.m.opacity = 0.35;
+  styledProject.masterCells.m.outlineStyle = 'dotted';
+  assert.deepEqual(parseProjectDocument(serializeProjectDocument(styledProject)), styledProject);
+
+  styledProject.masterCells.m.opacity = 1.2;
+  assert.throws(() => parseProjectDocument(JSON.stringify(styledProject)), /Invalid master cell/);
+
+  styledProject.masterCells.m.opacity = 0.5;
+  styledProject.masterCells.m.outlineStyle = 'double';
+  assert.throws(() => parseProjectDocument(JSON.stringify(styledProject)), /Invalid master cell/);
+});

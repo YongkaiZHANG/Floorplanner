@@ -14,7 +14,8 @@ IC Floorplanner is a browser-based ASIC floorplanning tool with a CAD-style canv
 - Shift-click multi-selection with quick transformed-edge alignment and equal-gap distribution.
 - Full project Undo and Redo, including placement, transforms, rulers, master edits, alignment, and top-cell changes.
 - Manual rulers, orthogonal measurement, edge snapping, selected-IP gaps, and reduced-clutter Auto-Dim.
-- Edge-bound top/bottom/left/right pad placement with pad size, count, pitch, shift controls, and perimeter-constrained dragging.
+- Edge-bound pad placement with a visual side picker, automatic edge filling, live span/gap feedback, and perimeter-constrained dragging.
+- Per-master planning appearance with custom color, fill transparency, and solid, dashed, dotted, or hidden outlines.
 - Browser-viewable SVG save with an embedded project payload for lossless re-import.
 - Cadence SKILL preview and export with real OpenAccess `prBoundary` objects.
 
@@ -48,10 +49,11 @@ Create Master IP definitions in the left sidebar. Each master has:
 - A Cadence library and cell name
 - Width and height in micrometers
 - A canvas color selected from the extended palette or custom color picker
+- Fill transparency and a solid, dashed, dotted, or hidden planning outline
 
 Master geometry uses `(0, 0)` as its local origin, which is also the instance origin exported to Virtuoso.
 
-Use the grid button beside **Top Cell** to place a continuous edge-pad row. Define the reusable pad library/cell, width, height, count, center-to-center pitch, top-cell side, and shift along that edge. Top/bottom shifts move the row along X; left/right shifts move it along Y. Pads touch the chosen boundary from inside the top cell, and the complete master-plus-row creation is one Undo operation. Afterward, dragging any pad keeps it attached to the perimeter and automatically switches it to the nearest edge. Exact X/Y edits use the same constraint. The tool rejects overlapping pitch, off-grid origins, or rows that do not fit.
+Click **Place edge pads** under Top Cell to create a continuous edge-pad row. Define one reusable pad, choose the top-cell edge with the visual picker, then click **Fill edge** for the maximum non-overlapping count or enter a custom count, center-to-center pitch, and shift. Live span and clear-gap feedback make the result predictable before placement. Top/bottom shifts move the row along X; left/right shifts move it along Y. Pads touch the chosen boundary from inside the top cell, and the complete master-plus-row creation is one Undo operation. Afterward, dragging any pad keeps it attached to the perimeter and automatically switches it to the nearest edge. Exact X/Y edits use the same constraint. The tool rejects overlapping pitch, off-grid origins, or rows that do not fit.
 
 ### 2. Place and edit instances
 

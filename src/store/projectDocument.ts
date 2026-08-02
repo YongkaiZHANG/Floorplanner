@@ -50,7 +50,9 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     if (!isRecord(raw) || raw.id !== key || !nonEmptyString(raw.libName) ||
         !nonEmptyString(raw.cellName) || !finite(raw.width) || raw.width <= 0 ||
         !finite(raw.height) || raw.height <= 0 || !nonEmptyString(raw.color) ||
-        (raw.kind !== undefined && raw.kind !== 'ip' && raw.kind !== 'pad')) {
+        (raw.kind !== undefined && raw.kind !== 'ip' && raw.kind !== 'pad') ||
+        (raw.opacity !== undefined && (!finite(raw.opacity) || raw.opacity < 0 || raw.opacity > 1)) ||
+        (raw.outlineStyle !== undefined && !['solid', 'dashed', 'dotted', 'none'].includes(String(raw.outlineStyle)))) {
       throw new Error(`Invalid master cell: ${key}.`);
     }
     masterCells[key] = raw as Cell;

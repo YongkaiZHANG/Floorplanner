@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
+import type { Cell, PadSide } from '../store/useStore';
 import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
@@ -9,6 +10,13 @@ const PRESET_COLORS = [
   '#16a34a', '#22c55e', '#84cc16', '#ca8a04', '#eab308', '#f59e0b',
   '#ea580c', '#f97316', '#dc2626', '#ef4444', '#e11d48', '#ec4899',
   '#c026d3', '#a855f7', '#7c3aed', '#6366f1', '#64748b', '#ffffff',
+];
+
+const OUTLINE_STYLES: Array<{ value: NonNullable<Cell['outlineStyle']>; label: string }> = [
+  { value: 'solid', label: 'Solid' },
+  { value: 'dashed', label: 'Dashed' },
+  { value: 'dotted', label: 'Dotted' },
+  { value: 'none', label: 'None' },
 ];
 
 export const Sidebar: React.FC = () => {
@@ -32,6 +40,8 @@ export const Sidebar: React.FC = () => {
   const [newWidth, setNewWidth] = useState('10');
   const [newHeight, setNewHeight] = useState('10');
   const [newColor, setNewColor] = useState(PRESET_COLORS[0]);
+  const [newOpacity, setNewOpacity] = useState('50');
+  const [newOutlineStyle, setNewOutlineStyle] = useState<NonNullable<Cell['outlineStyle']>>('solid');
 
   const [showEditTopModal, setShowEditTopModal] = useState(false);
   const [editTopLibName, setEditTopLibName] = useState(topLibName);
@@ -46,7 +56,7 @@ export const Sidebar: React.FC = () => {
   const [padHeight, setPadHeight] = useState('10');
   const [padCount, setPadCount] = useState('8');
   const [padPitch, setPadPitch] = useState('12');
-  const [padSide, setPadSide] = useState<'top' | 'bottom' | 'left' | 'right'>('top');
+  const [padSide, setPadSide] = useState<PadSide>('top');
   const [padOffset, setPadOffset] = useState('0');
   const [padColor, setPadColor] = useState('#f59e0b');
 
@@ -54,10 +64,10 @@ export const Sidebar: React.FC = () => {
     e.preventDefault();
     if (newLibName && newCellName && newWidth && newHeight) {
       if (editingCellId) {
-        updateMasterCell(editingCellId, newLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor);
+        updateMasterCell(editingCellId, newLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor, Number(newOpacity) / 100, newOutlineStyle);
         setEditingCellId(null);
       } else {
-        addMasterCell(newLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor);
+        addMasterCell(newLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor, Number(newOpacity) / 100, newOutlineStyle);
       }
       setShowCreateModal(false);
       setNewCellName('');
@@ -87,18 +97,35 @@ export const Sidebar: React.FC = () => {
   const openCreateModal = () => {
     setEditingCellId(null);
     setNewCellName('');
+    setNewOpacity('50');
+    setNewOutlineStyle('solid');
     setShowCreateModal(true);
   };
 
-  const openEditModal = (cell: any) => {
+  const openEditModal = (cell: Cell) => {
     setEditingCellId(cell.id);
     setNewLibName(cell.libName);
     setNewCellName(cell.cellName);
     setNewWidth(cell.width.toString());
     setNewHeight(cell.height.toString());
     setNewColor(cell.color);
+    setNewOpacity(String(Math.round((cell.opacity ?? 0.5) * 100)));
+    setNewOutlineStyle(cell.outlineStyle ?? 'solid');
     setShowCreateModal(true);
   };
+
+  const fitPadsToEdge = () => {
+    const along = padSide === 'top' || padSide === 'bottom' ? Number(padWidth) : Number(padHeight);
+    const available = padSide === 'top' || padSide === 'bottom' ? topWidth : topHeight;
+    const pitch = Number(padPitch);
+    if (!Number.isFinite(along) || along <= 0 || !Number.isFinite(pitch) || pitch < along) return;
+    setPadCount(String(Math.max(1, Math.floor((available - along) / pitch) + 1)));
+    setPadOffset('0');
+  };
+
+  const padAlong = padSide === 'top' || padSide === 'bottom' ? Number(padWidth) : Number(padHeight);
+  const padGap = Number(padPitch) - padAlong;
+  const padSpan = Math.max(0, (Number(padCount) - 1) * Number(padPitch) + padAlong);
 
   const handleMouseEnter = () => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
@@ -125,12 +152,6 @@ export const Sidebar: React.FC = () => {
             <h3 className="section-title"><FiLayers /> Top Cell</h3>
             <div className="section-actions">
               <button className="icon-btn" onClick={() => {
-                setPadLibName(topLibName);
-                setShowPadModal(true);
-              }} title="Place edge-bound pads">
-                <FiGrid />
-              </button>
-              <button className="icon-btn" onClick={() => {
                 setEditTopLibName(topLibName);
                 setEditTopCellName(topCellName);
                 setEditTopWidth(topWidth.toString());
@@ -150,6 +171,13 @@ export const Sidebar: React.FC = () => {
               {topWidth.toFixed(1)}x{topHeight.toFixed(1)}
             </div>
           </div>
+          <button className="edge-pad-action" type="button" onClick={() => {
+            setPadLibName(topLibName);
+            setShowPadModal(true);
+          }}>
+            <FiGrid />
+            <span><strong>Place edge pads</strong><small>Choose an edge, count, and pitch</small></span>
+          </button>
         </div>
 
         <div className="sidebar-section">
@@ -163,7 +191,11 @@ export const Sidebar: React.FC = () => {
             {Object.values(masterCells).map(cell => (
               <li key={cell.id} className="cell-item static">
                 <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-                  <div style={{width: 12, height: 12, backgroundColor: cell.color, borderRadius: 2}}></div>
+                  <div
+                    className={`cell-swatch cell-swatch--${cell.outlineStyle ?? 'solid'}`}
+                  >
+                    <i style={{ backgroundColor: cell.color, opacity: cell.opacity ?? 0.5 }} />
+                  </div>
                   <div>
                     <span className="cell-name">{cell.cellName}</span>
                     <span className="lib-badge">{cell.libName}</span>
@@ -231,7 +263,7 @@ export const Sidebar: React.FC = () => {
 
     {showCreateModal && (
           <div className="modal-overlay">
-            <div className="modal-content glass-panel">
+            <div className="modal-content glass-panel master-modal">
               <div className="modal-header">
                 <h2 className="modal-title">{editingCellId ? 'Edit Master IP' : 'Create Master IP'}</h2>
                 <div style={{display: 'flex', gap: '8px'}}>
@@ -300,6 +332,48 @@ export const Sidebar: React.FC = () => {
                     <span>Custom color</span>
                     <code>{newColor.toUpperCase()}</code>
                   </label>
+                </div>
+                <div className="appearance-editor">
+                  <div className="appearance-preview-wrap">
+                    <span className="label">Canvas preview</span>
+                    <div
+                      className={`appearance-preview appearance-preview--${newOutlineStyle}`}
+                      aria-label={`${newOpacity}% opacity with ${newOutlineStyle} outline`}
+                    >
+                      <i style={{ backgroundColor: newColor, opacity: Number(newOpacity) / 100 }} />
+                    </div>
+                  </div>
+                  <div className="appearance-controls">
+                    <div className="appearance-heading">
+                      <label className="label" htmlFor="ip-opacity">Fill transparency</label>
+                      <strong>{newOpacity}% visible</strong>
+                    </div>
+                    <input
+                      id="ip-opacity"
+                      className="opacity-slider"
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={newOpacity}
+                      onChange={event => setNewOpacity(event.target.value)}
+                    />
+                    <label className="label">Outline style</label>
+                    <div className="outline-options" role="group" aria-label="IP outline style">
+                      {OUTLINE_STYLES.map(option => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`outline-option${newOutlineStyle === option.value ? ' active' : ''}`}
+                          onClick={() => setNewOutlineStyle(option.value)}
+                          aria-pressed={newOutlineStyle === option.value}
+                        >
+                          <i className={`outline-sample outline-sample--${option.value}`} />
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 <div className="modal-actions">
                   <button type="button" className="btn" onClick={() => { setShowCreateModal(false); setEditingCellId(null); }}>Cancel</button>
@@ -434,7 +508,10 @@ export const Sidebar: React.FC = () => {
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label className="label">Count</label>
+                <div className="field-label-row">
+                  <label className="label">Count</label>
+                  <button type="button" className="text-action" onClick={fitPadsToEdge}>Fill edge</button>
+                </div>
                 <input type="number" min="1" max="1000" step="1" className="input-field" value={padCount} onChange={event => setPadCount(event.target.value)} required />
               </div>
               <div className="form-group">
@@ -442,19 +519,34 @@ export const Sidebar: React.FC = () => {
                 <input type="number" min="0" step="any" className="input-field" value={padPitch} onChange={event => setPadPitch(event.target.value)} required />
               </div>
             </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label className="label">Top-cell Side</label>
-                <select className="input-field" value={padSide} onChange={event => setPadSide(event.target.value as typeof padSide)}>
-                  <option value="top">Top</option>
-                  <option value="bottom">Bottom</option>
-                  <option value="left">Left</option>
-                  <option value="right">Right</option>
-                </select>
+            <div className="form-group">
+              <label className="label">Choose Top-cell Edge</label>
+              <div className="pad-edge-picker" role="group" aria-label="Top-cell pad edge">
+                {(['top', 'right', 'bottom', 'left'] as PadSide[]).map(side => (
+                  <button
+                    key={side}
+                    type="button"
+                    className={`pad-edge-option pad-edge-option--${side}${padSide === side ? ' active' : ''}`}
+                    onClick={() => setPadSide(side)}
+                    aria-pressed={padSide === side}
+                  >
+                    <i />
+                    <span>{side}</span>
+                  </button>
+                ))}
               </div>
+            </div>
+            <div className="form-row">
               <div className="form-group">
                 <label className="label">Shift Along Edge (um)</label>
                 <input type="number" step="any" className="input-field" value={padOffset} onChange={event => setPadOffset(event.target.value)} required />
+              </div>
+              <div className="form-group pad-fit-hint">
+                <span className="label">Current row</span>
+                <strong>{Number.isFinite(padSpan) ? padSpan.toFixed(3) : '—'} um span</strong>
+                <small className={padGap < 0 ? 'error-text' : ''}>
+                  {Number.isFinite(padGap) ? (padGap < 0 ? `${Math.abs(padGap).toFixed(3)} um overlap` : `${padGap.toFixed(3)} um clear gap`) : 'Enter valid dimensions'}
+                </small>
               </div>
             </div>
             <div className="pad-row-options">
@@ -464,7 +556,7 @@ export const Sidebar: React.FC = () => {
               </label>
               <div className="pad-row-summary">
                 <strong>{Number(padCount) || 0} pads attached to the {padSide} edge</strong>
-                <span>Pitch is center-to-center · shift is measured from the edge center</span>
+                <span>Use Fill edge for the maximum non-overlapping count · shift is measured from edge center</span>
               </div>
             </div>
             <div className="modal-actions">

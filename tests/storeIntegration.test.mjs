@@ -76,6 +76,27 @@ test('quarter-turn rotation preserves the displayed center and mirrored family',
   assert.equal(rotateOrientationByQuarterTurns('MYR90', 1), 'MX');
 });
 
+test('master IP appearance is editable and rejects unsupported values', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'styled', 12, 8, '#38bdf8', 0.25, 'dashed');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  assert.equal(master.opacity, 0.25);
+  assert.equal(master.outlineStyle, 'dashed');
+
+  useStore.getState().updateMasterCell(master.id, 'testLib', 'styled', 12, 8, '#38bdf8', 0.8, 'none');
+  assert.equal(useStore.getState().masterCells[master.id].opacity, 0.8);
+  assert.equal(useStore.getState().masterCells[master.id].outlineStyle, 'none');
+
+  assert.throws(
+    () => useStore.getState().addMasterCell('testLib', 'invalidOpacity', 1, 1, '#fff', 1.1, 'solid'),
+    /opacity/,
+  );
+  assert.throws(
+    () => useStore.getState().addMasterCell('testLib', 'invalidOutline', 1, 1, '#fff', 0.5, 'double'),
+    /outline style/,
+  );
+});
+
 test('edge alignment moves only the source and is one undoable store action', () => {
   useStore.getState().loadProject(emptyProject);
   useStore.getState().addMasterCell('testLib', 'edgeBlock', 10, 5, '#ffffff');
