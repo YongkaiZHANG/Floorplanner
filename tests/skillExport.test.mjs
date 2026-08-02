@@ -61,6 +61,29 @@ test('escapes names before inserting them into SKILL strings', () => {
   assert.match(code, /"block\\"quoted"/);
 });
 
+test('IP masters receive centered adaptive name and size labels on text drawing', () => {
+  const cells = {
+    short: { id: 'short', libName: 'demoLib', cellName: 'IP', width: 100, height: 40, color: '#fff' },
+    long: { id: 'long', libName: 'demoLib', cellName: 'VERY_LONG_ANALOG_PROCESSING_BLOCK', width: 100, height: 40, color: '#fff' },
+  };
+  const code = generateSkillCode('demoLib', 'top', 200, 200, cells, [], 0.005);
+  const shortMatch = code.match(/dbCreateLabel\(cv list\("text" "drawing"\) 50:23\.6 "IP" "centerCenter" "R0" "roman" ([\d.]+)\)/);
+  const longMatch = code.match(/dbCreateLabel\(cv list\("text" "drawing"\) 50:23\.6 "VERY_LONG_ANALOG_PROCESSING_BLOCK" "centerCenter" "R0" "roman" ([\d.]+)\)/);
+  assert.ok(shortMatch);
+  assert.ok(longMatch);
+  assert.ok(Number(longMatch[1]) < Number(shortMatch[1]));
+  assert.equal((code.match(/50:16\.4 "100 x 40 um"/g) ?? []).length, 2);
+});
+
+test('pad masters keep one compact label instead of the two-line IP label', () => {
+  const padCells = {
+    pad: { id: 'pad', libName: 'demoLib', cellName: 'PAD', width: 10, height: 8, color: '#fff', kind: 'pad' },
+  };
+  const code = generateSkillCode('demoLib', 'top', 100, 100, padCells, [], 0.005);
+  assert.equal((code.match(/dbCreateLabel\(cv list\("text" "drawing"\)/g) ?? []).length, 1);
+  assert.doesNotMatch(code, /"10 x 8 um"/);
+});
+
 test('emits canonical grid coordinates and rejects off-grid geometry', () => {
   const instance = {
     id: 'large', cellId: 'master', name: 'I0', x: 3452, y: -0.005, orientation: 'R0',

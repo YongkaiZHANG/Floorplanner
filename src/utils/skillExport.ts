@@ -16,6 +16,16 @@ const skillString = (value: string): string => `"${value
 /** Keep generated comments on one line even when names came from an imported project. */
 const skillComment = (value: string): string => value.replace(/[\r\n]+/g, ' ');
 
+const fitLabelHeight = (
+  text: string,
+  cellWidth: number,
+  cellHeight: number,
+  maxHeightFraction: number,
+): number => cleanNumber(Math.min(
+  cellHeight * maxHeightFraction,
+  (cellWidth * 0.86) / (Math.max(1, text.length) * 0.62),
+));
+
 const allocateUniqueName = (base: string, used: Set<string>): string => {
   let candidate = base;
   let suffix = 2;
@@ -182,6 +192,13 @@ export const generateSkillCode = (
     const exactH = cleanNumber(cell.height);
     const exactCX = cleanNumber(cell.width / 2);
     const exactCY = cleanNumber(cell.height / 2);
+    const isPad = cell.kind === 'pad';
+    const sizeTextValue = `${formatGridValue(cell.width, gridSize)} x ${formatGridValue(cell.height, gridSize)} um`;
+    const sizeText = skillString(sizeTextValue);
+    const nameLabelHeight = fitLabelHeight(cell.cellName, cell.width, cell.height, isPad ? 0.12 : 0.16);
+    const sizeLabelHeight = fitLabelHeight(sizeTextValue, cell.width, cell.height, 0.1);
+    const nameLabelY = cleanNumber(exactCY + cell.height * 0.09);
+    const sizeLabelY = cleanNumber(exactCY - cell.height * 0.09);
 
     const lib = skillString(cell.libName);
     const cellName = skillString(cell.cellName);
@@ -192,10 +209,21 @@ export const generateSkillCode = (
     code += `    ; Native OA prBoundary object on ("prBoundary" "drawing").\n`;
     code += `    boundary = dbCreatePRBoundary(cv list(0:0 0:${exactH} ${exactW}:${exactH} ${exactW}:0))\n`;
     code += `    unless(boundary error("Floorplanner: cannot create prBoundary for %s/%s.\\n" ${lib} ${cellName}))\n`;
-    code += `    ; Visual label uses only the requested ("text" "drawing") LPP.\n`;
-    code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${exactCY} ${cellName} "centerCenter" "R0" "roman" ${cleanNumber(cell.height * 0.1)}) t)\n`;
-    code += `      printf("WARNING: label layer text/drawing is unavailable for %s/%s.\\n" ${lib} ${cellName})\n`;
-    code += `    )\n`;
+    if (isPad) {
+      code += `    ; Compact pad label on the requested ("text" "drawing") LPP.\n`;
+      code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${exactCY} ${cellName} "centerCenter" "R0" "roman" ${nameLabelHeight}) t)\n`;
+      code += `      printf("WARNING: label layer text/drawing is unavailable for %s/%s.\\n" ${lib} ${cellName})\n`;
+      code += `    )\n`;
+    } else {
+      code += `    ; Centered IP name and size labels on ("text" "drawing").\n`;
+      code += `    ; Text heights adapt to both the IP height and the available width.\n`;
+      code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${nameLabelY} ${cellName} "centerCenter" "R0" "roman" ${nameLabelHeight}) t)\n`;
+      code += `      printf("WARNING: cannot create the IP name label for %s/%s.\\n" ${lib} ${cellName})\n`;
+      code += `    )\n`;
+      code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${sizeLabelY} ${sizeText} "centerCenter" "R0" "roman" ${sizeLabelHeight}) t)\n`;
+      code += `      printf("WARNING: cannot create the IP size label for %s/%s.\\n" ${lib} ${cellName})\n`;
+      code += `    )\n`;
+    }
     code += `    dbSave(cv)\n`;
     code += `    dbClose(cv)\n`;
   });
