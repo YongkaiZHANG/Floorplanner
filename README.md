@@ -4,23 +4,32 @@ IC Floorplanner is a browser-based ASIC floorplanning tool with a CAD-style canv
 
 ![IC Floorplanner overview](src/assets/hero.png)
 
-## Highlights
+## Features & Functions
 
-- Center-origin top-cell canvas with positive Y upward, matching the generated layout coordinates.
-- Grid-snapped placement with top-cell boundary enforcement.
-- All eight Cadence orientations: `R0`, `R90`, `R180`, `R270`, `MX`, `MY`, `MXR90`, and `MYR90`.
-- Mouse right-click rotation with 90-degree snapping, plus keyboard and Properties controls.
-- Cadence-style side placement with an exact, remembered face-to-face spacing.
+### Visual Layout & IP Management
+- Center-origin top-cell canvas with positive Y upward, matching generated layout coordinates.
+- Grid-snapped placement with strict top-cell boundary enforcement.
+- Support for all eight Cadence orientations (`R0`, `R90`, `R180`, `R270`, `MX`, `MY`, `MXR90`, and `MYR90`).
+- Mouse right-click rotation with 90-degree snapping, plus keyboard and Properties panel controls.
+- Per-master planning appearance with custom color, fill transparency, and outline styles.
+
+### Precision Alignment & Measurement
+- Cadence-style side placement with exact, remembered face-to-face spacing.
 - Shift-click multi-selection with quick transformed-edge alignment and equal-gap distribution.
-- Full project Undo and Redo, including placement, transforms, rulers, master edits, alignment, and top-cell changes.
 - Manual rulers, orthogonal measurement, edge snapping, selected-IP gaps, and reduced-clutter Auto-Dim.
-- Edge-bound pads with automatic rows for regular pitch plus manual placement for separated groups, irregular gaps, and keep-out regions.
-- Optional pixel-array region with grid-snapped sizing, click placement, bounded dragging, edge alignment, IP overlap, and a non-destructive visibility toggle.
-- Selected-IP dimensions include clearances to every visible pixel-array edge; hidden arrays are excluded from measurement and export.
-- One authoritative hierarchy library: every IP and pad follows the Top Cell library automatically.
-- Per-master planning appearance with custom color, fill transparency, and solid, dashed, dotted, or hidden outlines.
+- Arrow-key viewport panning for smooth and precise canvas navigation.
+
+### Advanced Pad & Array Capabilities
+- Edge-bound pads with automatic rows for regular pitch.
+- Auto-rotation for manual pads based on edge attachment, supporting separated groups and keep-out regions.
+- Optional pixel-array regions with grid-snapped sizing, click placement, bounded dragging, and visibility toggles.
+- Automatic clearance calculations from IPs to every visible pixel-array edge.
+
+### Integration & Export
 - Browser-viewable SVG save with an embedded project payload for lossless re-import.
-- Cadence SKILL preview and export with real OpenAccess `prBoundary` objects.
+- Full project Undo and Redo tracking placement, transforms, rulers, and top-cell changes.
+- Direct Cadence Virtuoso SKILL preview and export generating real OpenAccess `prBoundary` objects.
+- Origin-anchored Cadence hierarchy with IP wrappers and adaptive IP labels based on available dimensions.
 
 ## Quick start
 
