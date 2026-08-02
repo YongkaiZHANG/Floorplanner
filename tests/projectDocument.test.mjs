@@ -52,3 +52,14 @@ test('IP appearance survives serialization and invalid appearance is rejected', 
   styledProject.masterCells.m.outlineStyle = 'double';
   assert.throws(() => parseProjectDocument(JSON.stringify(styledProject)), /Invalid master cell/);
 });
+
+test('pixel array survives serialization and must remain inside the top cell', () => {
+  const pixelProject = structuredClone(project);
+  pixelProject.pixelArray = { x: -30, y: -20, width: 60, height: 40, visible: false };
+  assert.deepEqual(parseProjectDocument(serializeProjectDocument(pixelProject)), pixelProject);
+
+  pixelProject.pixelArray.x = 30;
+  assert.throws(() => parseProjectDocument(JSON.stringify(pixelProject)), /Invalid pixel array/);
+  pixelProject.pixelArray = { x: -50, y: -40, width: 100, height: 20, visible: true };
+  assert.throws(() => parseProjectDocument(JSON.stringify(pixelProject)), /Invalid pixel array/);
+});

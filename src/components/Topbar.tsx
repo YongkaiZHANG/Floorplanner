@@ -12,11 +12,11 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, pixelArray, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v11') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v12') !== 'yes';
     } catch {
       return true;
     }
@@ -52,7 +52,7 @@ export const Topbar: React.FC = () => {
 
   const createSkillCode = () => {
     try {
-      return generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize);
+      return generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to generate Cadence SKILL code.');
       return null;
@@ -171,7 +171,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v11', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v12', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }

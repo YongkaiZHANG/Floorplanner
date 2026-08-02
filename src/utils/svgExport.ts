@@ -65,6 +65,7 @@ export const exportSVG = () => {
     masterCells: state.masterCells,
     instances: state.instances,
     rulers: state.rulers,
+    pixelArray: state.pixelArray,
   };
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${-maxY} ${vbW} ${vbH}" style="background-color: #f8fafc;">\n`;
@@ -75,6 +76,24 @@ export const exportSVG = () => {
   
   // Top ASIC Boundary
   svg += `  <rect x="${-tw/2}" y="${-th/2}" width="${tw}" height="${th}" fill="#ffffff" stroke="#334155" stroke-width="3" stroke-dasharray="20,10" vector-effect="non-scaling-stroke" />\n`;
+
+  if (state.pixelArray?.visible) {
+    const array = state.pixelArray;
+    const x = array.x * sf;
+    const y = array.y * sf;
+    const width = array.width * sf;
+    const height = array.height * sf;
+    svg += `  <g>\n`;
+    svg += `    <rect x="${x}" y="${y}" width="${width}" height="${height}" fill="#8b5cf6" fill-opacity="0.1" stroke="#7c3aed" stroke-width="2" stroke-dasharray="8,6" vector-effect="non-scaling-stroke" />\n`;
+    for (let index = 1; index < 6; index += 1) {
+      const gx = x + width * index / 6;
+      const gy = y + height * index / 6;
+      svg += `    <line x1="${gx}" y1="${y}" x2="${gx}" y2="${y + height}" stroke="#8b5cf6" stroke-width="0.75" opacity="0.3" vector-effect="non-scaling-stroke" />\n`;
+      svg += `    <line x1="${x}" y1="${gy}" x2="${x + width}" y2="${gy}" stroke="#8b5cf6" stroke-width="0.75" opacity="0.3" vector-effect="non-scaling-stroke" />\n`;
+    }
+    svg += `    <text x="${x + width / 2}" y="${-(y + height / 2)}" fill="#6d28d9" font-family="Inter, sans-serif" font-size="${baseFS}" font-weight="700" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">PIXEL ARRAY · ${formatGridValue(array.width, state.gridSize)} × ${formatGridValue(array.height, state.gridSize)} um</text>\n`;
+    svg += `  </g>\n`;
+  }
   
   // Top ASIC Labels
   const labelY = -(th/2 + baseFS*1.5);

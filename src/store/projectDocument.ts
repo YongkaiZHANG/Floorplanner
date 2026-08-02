@@ -1,4 +1,4 @@
-import type { Cell, Instance, Ruler } from './useStore';
+import type { Cell, Instance, PixelArray, Ruler } from './useStore';
 
 export const PROJECT_FILE_VERSION = 1 as const;
 export const PROJECT_RECOVERY_KEY = 'ic-floorplanner:recovery:v1';
@@ -12,6 +12,7 @@ export type ProjectSnapshot = {
   masterCells: Record<string, Cell>;
   instances: Instance[];
   rulers: Ruler[];
+  pixelArray?: PixelArray | null;
 };
 
 export type ProjectDocument = {
@@ -85,6 +86,20 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     return raw as Ruler;
   });
 
+  let pixelArray: PixelArray | null = null;
+  if (value.pixelArray !== undefined && value.pixelArray !== null) {
+    const raw = value.pixelArray;
+    if (!isRecord(raw) || !finite(raw.x) || !finite(raw.y) ||
+        !finite(raw.width) || raw.width <= 0 || raw.width >= value.topWidth ||
+        !finite(raw.height) || raw.height <= 0 || raw.height >= value.topHeight ||
+        typeof raw.visible !== 'boolean' ||
+        raw.x < -value.topWidth / 2 - 1e-9 || raw.x + raw.width > value.topWidth / 2 + 1e-9 ||
+        raw.y < -value.topHeight / 2 - 1e-9 || raw.y + raw.height > value.topHeight / 2 + 1e-9) {
+      throw new Error('Invalid pixel array.');
+    }
+    pixelArray = raw as PixelArray;
+  }
+
   return {
     gridSize: value.gridSize,
     topWidth: value.topWidth,
@@ -94,6 +109,7 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     masterCells,
     instances,
     rulers,
+    ...(value.pixelArray === undefined ? {} : { pixelArray }),
   };
 };
 

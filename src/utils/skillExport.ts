@@ -1,4 +1,4 @@
-import type { Cell, Instance } from '../store/useStore';
+import type { Cell, Instance, PixelArray } from '../store/useStore';
 import { formatGridValue, isOnGrid } from './grid.ts';
 
 const VALID_ORIENTATIONS = new Set(['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90']);
@@ -23,7 +23,8 @@ const validateFloorplan = (
   topHeight: number,
   masterCells: Record<string, Cell>,
   instances: Instance[],
-  gridSize: number
+  gridSize: number,
+  pixelArray?: PixelArray | null,
 ) => {
   if (!topLibName.trim() || !topCellName.trim()) throw new Error('Top library and cell names are required.');
   if (!Number.isFinite(gridSize) || gridSize <= 0) throw new Error('Grid size must be greater than zero.');
@@ -58,6 +59,24 @@ const validateFloorplan = (
     }
     if (!VALID_ORIENTATIONS.has(instance.orientation)) throw new Error(`Instance ${instance.name} has invalid orientation ${instance.orientation}.`);
   });
+
+  if (pixelArray) {
+    if (!Number.isFinite(pixelArray.x) || !Number.isFinite(pixelArray.y) ||
+        !Number.isFinite(pixelArray.width) || !Number.isFinite(pixelArray.height) ||
+        pixelArray.width <= 0 || pixelArray.height <= 0 ||
+        pixelArray.width >= topWidth || pixelArray.height >= topHeight) {
+      throw new Error('Pixel array has invalid dimensions or coordinates.');
+    }
+    for (const coordinate of [pixelArray.x, pixelArray.y, pixelArray.width, pixelArray.height]) {
+      if (!isOnGrid(coordinate, gridSize)) {
+        throw new Error(`Pixel array geometry is off the ${formatGridValue(gridSize, gridSize)} um placement grid.`);
+      }
+    }
+    if (pixelArray.x < -topWidth / 2 - 1e-9 || pixelArray.x + pixelArray.width > topWidth / 2 + 1e-9 ||
+        pixelArray.y < -topHeight / 2 - 1e-9 || pixelArray.y + pixelArray.height > topHeight / 2 + 1e-9) {
+      throw new Error('Pixel array must fit completely inside the top cell.');
+    }
+  }
 };
 
 export const generateSkillCode = (
@@ -67,9 +86,10 @@ export const generateSkillCode = (
   topHeight: number, 
   masterCells: Record<string, Cell>, 
   instances: Instance[],
-  gridSize: number
+  gridSize: number,
+  pixelArray?: PixelArray | null,
 ): string => {
-  validateFloorplan(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize);
+  validateFloorplan(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray);
 
   // Dimensions are emitted exactly as drawn. Only placement coordinates are grid-snapped.
   const exactTopW = cleanNumber(topWidth);
@@ -139,6 +159,23 @@ export const generateSkillCode = (
   code += `    ; Chip boundary: native OA prBoundary on ("prBoundary" "drawing"); both origins are at its center.\n`;
   code += `    boundary = dbCreatePRBoundary(cv list(${-exactHalfW}:${-exactHalfH} ${-exactHalfW}:${exactHalfH} ${exactHalfW}:${exactHalfH} ${exactHalfW}:${-exactHalfH}))\n`;
   code += `    unless(boundary error("Floorplanner: cannot create the top-cell prBoundary.\\n"))\n\n`;
+
+  if (pixelArray?.visible) {
+    const arrayX = formatGridValue(pixelArray.x, gridSize);
+    const arrayY = formatGridValue(pixelArray.y, gridSize);
+    const arrayX2 = formatGridValue(pixelArray.x + pixelArray.width, gridSize);
+    const arrayY2 = formatGridValue(pixelArray.y + pixelArray.height, gridSize);
+    const arrayCX = formatGridValue(pixelArray.x + pixelArray.width / 2, gridSize);
+    const arrayCY = formatGridValue(pixelArray.y + pixelArray.height / 2, gridSize);
+    const arrayLabel = skillString(`PIXEL ARRAY ${formatGridValue(pixelArray.width, gridSize)}x${formatGridValue(pixelArray.height, gridSize)}um`);
+    code += `    ; Pixel-array planning region on the requested drawing LPPs.\n`;
+    code += `    unless(errset(dbCreateRect(cv list("prBoundary" "drawing") list(${arrayX}:${arrayY} ${arrayX2}:${arrayY2})) t)\n`;
+    code += `      error("Floorplanner: cannot create the pixel-array region on prBoundary/drawing.\\n")\n`;
+    code += `    )\n`;
+    code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${arrayCX}:${arrayCY} ${arrayLabel} "centerCenter" "R0" "roman" ${cleanNumber(Math.min(pixelArray.width, pixelArray.height) * 0.04)}) t)\n`;
+    code += `      printf("WARNING: cannot create the pixel-array label on text/drawing.\\n")\n`;
+    code += `    )\n\n`;
+  }
 
   if (instances.length === 0) {
     code += `    ; No instances to place\n`;

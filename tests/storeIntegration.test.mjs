@@ -97,6 +97,33 @@ test('master IP appearance is editable and rejects unsupported values', () => {
   );
 });
 
+test('pixel array placement is grid-snapped, bounded, hideable, and undoable', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().startPixelArrayPlacement(60.002, 40.001);
+  assert.equal(useStore.getState().appMode, 'pixel-array');
+  assert.deepEqual(useStore.getState().pendingPixelArraySize, { width: 60, height: 40 });
+
+  useStore.getState().placePixelArray(0, 0);
+  assert.deepEqual(useStore.getState().pixelArray, {
+    x: -30,
+    y: -20,
+    width: 60,
+    height: 40,
+    visible: true,
+  });
+  assert.equal(useStore.getState().appMode, 'select');
+
+  useStore.getState().updatePixelArrayPosition(100, 100);
+  assert.equal(useStore.getState().pixelArray.x, -10);
+  assert.equal(useStore.getState().pixelArray.y, 10);
+  useStore.getState().setPixelArrayVisible(false);
+  assert.equal(useStore.getState().pixelArray.visible, false);
+  useStore.getState().undo();
+  assert.equal(useStore.getState().pixelArray.visible, true);
+
+  assert.throws(() => useStore.getState().startPixelArrayPlacement(100, 20), /smaller than the top cell/);
+});
+
 test('edge alignment moves only the source and is one undoable store action', () => {
   useStore.getState().loadProject(emptyProject);
   useStore.getState().addMasterCell('testLib', 'edgeBlock', 10, 5, '#ffffff');

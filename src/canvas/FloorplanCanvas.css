@@ -27,6 +27,20 @@
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
 }
 
+.pixel-array-placement-hint {
+  top: auto;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-color: rgba(139, 92, 246, 0.7);
+  background: rgba(76, 29, 149, 0.9);
+  color: #ede9fe;
+  font-family: Inter, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .autodim-legend {
   position: absolute;
   right: 18px;

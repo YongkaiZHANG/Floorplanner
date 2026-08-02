@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, getTransformProps, rotateOrientationByQuarterTurns, snapPadToNearestEdge } from '../store/useStore';
+import { useStore, clampInstancePosition, getTransformProps, rotateOrientationByQuarterTurns, snapPadToNearestEdge } from '../store/useStore';
 import { getAlignmentEdgeAxis } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
 import { formatGridValue } from '../utils/grid';
@@ -61,6 +61,10 @@ export const FloorplanCanvas: React.FC = () => {
     completeEdgeAlignment,
     completeEdgeAlignmentToBoundary,
     completeEdgeAlignmentToRuler,
+    pixelArray,
+    pendingPixelArraySize,
+    placePixelArray,
+    updatePixelArrayPosition,
   } = useStore();
 
   const fitView = useCallback(() => {
@@ -206,6 +210,8 @@ export const FloorplanCanvas: React.FC = () => {
             state.cancelEdgeAlignment();
           } else if (state.appMode === 'place') {
             state.setPlacement(null);
+          } else if (state.appMode === 'pixel-array') {
+            state.setAppMode('select');
           } else if (appMode === 'measure') {
             setAppMode('select');
             setIsMeasuring(false);
@@ -1008,13 +1014,15 @@ export const FloorplanCanvas: React.FC = () => {
             }
           } else if (appMode === 'place' && placementMasterId && snapped) {
             placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation);
+          } else if (appMode === 'pixel-array' && pendingPixelArraySize && snapped) {
+            placePixelArray(snapped.umX, snapped.umY);
           } else if (appMode === 'select' && !edgeAlignmentSession && (e.target === e.target.getStage() || e.target.name() === 'bg' || e.target.name() === 'overlay')) {
             if (!e.evt.shiftKey) setSelectedInstance(null);
           }
         }}
         ref={stageRef}
         style={{ 
-          cursor: edgeAlignmentSession ? 'crosshair' : appMode === 'measure' ? 'crosshair' : (isPanning ? 'grabbing' : 'grab')
+          cursor: edgeAlignmentSession || appMode === 'measure' || appMode === 'pixel-array' ? 'crosshair' : (isPanning ? 'grabbing' : 'grab')
         }}
       >
         <Layer>
@@ -1041,6 +1049,92 @@ export const FloorplanCanvas: React.FC = () => {
             shadowColor="rgba(0,0,0,0.1)"
             shadowBlur={10 / stageScale}
           />
+
+          {pixelArray?.visible && (
+            <Group
+              name="pixel-array"
+              x={pixelArray.x * SCALE_FACTOR}
+              y={pixelArray.y * SCALE_FACTOR}
+              draggable={appMode === 'select' && !edgeAlignmentSession}
+              onClick={(event) => { event.cancelBubble = true; }}
+              onDragEnd={(event) => updatePixelArrayPosition(
+                event.target.x() / SCALE_FACTOR,
+                event.target.y() / SCALE_FACTOR,
+              )}
+            >
+              <Rect
+                name="overlay"
+                width={pixelArray.width * SCALE_FACTOR}
+                height={pixelArray.height * SCALE_FACTOR}
+                fill="rgba(139, 92, 246, 0.1)"
+                stroke="#8b5cf6"
+                strokeWidth={2 / stageScale}
+                dash={[7 / stageScale, 5 / stageScale]}
+              />
+              {[1, 2, 3, 4, 5].map(index => (
+                <React.Fragment key={index}>
+                  <Line
+                    points={[pixelArray.width * SCALE_FACTOR * index / 6, 0, pixelArray.width * SCALE_FACTOR * index / 6, pixelArray.height * SCALE_FACTOR]}
+                    stroke="#8b5cf6"
+                    strokeWidth={0.6 / stageScale}
+                    opacity={0.3}
+                    listening={false}
+                  />
+                  <Line
+                    points={[0, pixelArray.height * SCALE_FACTOR * index / 6, pixelArray.width * SCALE_FACTOR, pixelArray.height * SCALE_FACTOR * index / 6]}
+                    stroke="#8b5cf6"
+                    strokeWidth={0.6 / stageScale}
+                    opacity={0.3}
+                    listening={false}
+                  />
+                </React.Fragment>
+              ))}
+              <Text
+                text={`PIXEL ARRAY\n${formatGridValue(pixelArray.width, gridSize)} × ${formatGridValue(pixelArray.height, gridSize)} um`}
+                width={pixelArray.width * SCALE_FACTOR}
+                y={pixelArray.height * SCALE_FACTOR / 2}
+                offsetY={14 / stageScale}
+                align="center"
+                fill="#6d28d9"
+                fontSize={11 / stageScale}
+                fontFamily="Inter"
+                fontStyle="bold"
+                lineHeight={1.35}
+                scaleY={-1}
+                listening={false}
+              />
+            </Group>
+          )}
+
+          {appMode === 'pixel-array' && pendingPixelArraySize && mousePos && (() => {
+            try {
+              const position = clampInstancePosition(
+                mousePos.x - pendingPixelArraySize.width / 2,
+                mousePos.y - pendingPixelArraySize.height / 2,
+                'R0',
+                pendingPixelArraySize.width,
+                pendingPixelArraySize.height,
+                topWidth,
+                topHeight,
+                gridSize,
+              );
+              return (
+                <Rect
+                  x={position.x * SCALE_FACTOR}
+                  y={position.y * SCALE_FACTOR}
+                  width={pendingPixelArraySize.width * SCALE_FACTOR}
+                  height={pendingPixelArraySize.height * SCALE_FACTOR}
+                  fill="rgba(139, 92, 246, 0.13)"
+                  stroke="#7c3aed"
+                  strokeWidth={2 / stageScale}
+                  dash={[7 / stageScale, 5 / stageScale]}
+                  listening={false}
+                />
+              );
+            } catch {
+              return null;
+            }
+          })()}
 
           {/* Grid Axes (Infinite lines) */}
           <Line points={[-100000, 0, 100000, 0]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.8} />
@@ -1456,6 +1550,11 @@ export const FloorplanCanvas: React.FC = () => {
       {appMode === 'measure' && (
         <div className="coordinate-overlay" style={{ top: 'auto', bottom: '16px', left: '50%', transform: 'translateX(-50%)', backgroundColor: 'rgba(234, 179, 8, 0.9)', color: '#0f172a', fontWeight: 'bold' }}>
           Measure Mode | Click two snapped points | Press 'o' to toggle Ortho [ {orthogonalRuler ? 'ON' : 'OFF'} ] | Press 'Esc' to cancel
+        </div>
+      )}
+      {appMode === 'pixel-array' && pendingPixelArraySize && (
+        <div className="coordinate-overlay pixel-array-placement-hint">
+          Pixel Array {formatGridValue(pendingPixelArraySize.width, gridSize)} × {formatGridValue(pendingPixelArraySize.height, gridSize)} um · Click inside the top cell to place · Esc cancels
         </div>
       )}
       {showAutoDim && appMode !== 'measure' && (

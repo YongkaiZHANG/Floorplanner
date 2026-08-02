@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
 import type { Cell, PadSide } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
 
@@ -25,6 +25,7 @@ export const Sidebar: React.FC = () => {
     setTopDimensions, setTopNames,
     masterCells, instances, selectedInstanceIds, setSelectedInstance,
     addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, createPadRow,
+    pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
     setPlacement, leftSidebarPinned, setLeftSidebarPinned, gridSize,
@@ -59,6 +60,9 @@ export const Sidebar: React.FC = () => {
   const [padSide, setPadSide] = useState<PadSide>('top');
   const [padOffset, setPadOffset] = useState('0');
   const [padColor, setPadColor] = useState('#f59e0b');
+  const [showPixelArrayModal, setShowPixelArrayModal] = useState(false);
+  const [pixelArrayWidth, setPixelArrayWidth] = useState('60');
+  const [pixelArrayHeight, setPixelArrayHeight] = useState('60');
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,6 +95,22 @@ export const Sidebar: React.FC = () => {
       setShowPadModal(false);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to create the pad row.');
+    }
+  };
+
+  const openPixelArrayModal = () => {
+    setPixelArrayWidth(String(pixelArray?.width ?? Math.max(gridSize, topWidth * 0.6)));
+    setPixelArrayHeight(String(pixelArray?.height ?? Math.max(gridSize, topHeight * 0.6)));
+    setShowPixelArrayModal(true);
+  };
+
+  const handlePixelArraySubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      startPixelArrayPlacement(Number(pixelArrayWidth), Number(pixelArrayHeight));
+      setShowPixelArrayModal(false);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to configure the pixel array.');
     }
   };
 
@@ -178,6 +198,27 @@ export const Sidebar: React.FC = () => {
             <FiGrid />
             <span><strong>Place edge pads</strong><small>Choose an edge, count, and pitch</small></span>
           </button>
+          <div className={`pixel-array-card${pixelArray?.visible ? ' active' : ''}`}>
+            <button
+              className="pixel-array-toggle"
+              type="button"
+              onClick={() => pixelArray ? setPixelArrayVisible(!pixelArray.visible) : openPixelArrayModal()}
+            >
+              {pixelArray?.visible ? <FiEyeOff /> : <FiEye />}
+              <span>
+                <strong>{pixelArray?.visible ? 'Disable Pixel Array' : 'Enable Pixel Array'}</strong>
+                <small>{pixelArray ? `${pixelArray.width} × ${pixelArray.height} um · position kept when hidden` : 'Define its size, then click to place'}</small>
+              </span>
+            </button>
+            {pixelArray && (
+              <div className="pixel-array-actions">
+                <button type="button" onClick={() => {
+                  startPixelArrayPlacement(pixelArray.width, pixelArray.height);
+                }} title="Move Pixel Array"><FiMove /></button>
+                <button type="button" onClick={openPixelArrayModal} title="Edit Pixel Array"><FiSettings /></button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="sidebar-section">
@@ -562,6 +603,55 @@ export const Sidebar: React.FC = () => {
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setShowPadModal(false)}>Cancel</button>
               <button type="submit" className="btn btn-primary"><FiGrid /> Place {Number(padCount) || 0} Pads</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
+
+    {showPixelArrayModal && (
+      <div className="modal-overlay">
+        <div className="modal-content glass-panel pixel-array-modal">
+          <div className="modal-header">
+            <div>
+              <span className="modal-eyebrow">Top-cell overlay</span>
+              <h2 className="modal-title">{pixelArray ? 'Edit Pixel Array' : 'Enable Pixel Array'}</h2>
+            </div>
+            <button type="button" className="modal-close-btn" onClick={() => setShowPixelArrayModal(false)} aria-label="Close pixel array setup">
+              <FiX />
+            </button>
+          </div>
+          <form onSubmit={handlePixelArraySubmit}>
+            <div className="pixel-array-guide">
+              <FiGrid />
+              <div><strong>Define the active-array region</strong><span>It must be smaller than the {topWidth} × {topHeight} um top cell. The size and final position snap to the {gridSize} um grid.</span></div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="label">Array Width (um)</label>
+                <input type="number" min={gridSize} max={topWidth - gridSize} step="any" className="input-field" value={pixelArrayWidth} onChange={event => setPixelArrayWidth(event.target.value)} required autoFocus />
+              </div>
+              <div className="form-group">
+                <label className="label">Array Height (um)</label>
+                <input type="number" min={gridSize} max={topHeight - gridSize} step="any" className="input-field" value={pixelArrayHeight} onChange={event => setPixelArrayHeight(event.target.value)} required />
+              </div>
+            </div>
+            <div className="pixel-array-place-note">
+              <FiMove />
+              <span>After confirming, move the preview over the top cell and click once to place it. You can drag the array later.</span>
+            </div>
+            <div className="modal-actions pixel-array-modal-actions">
+              {pixelArray && (
+                <button type="button" className="btn danger-btn" onClick={() => {
+                  if (confirm('Remove the pixel array from this floorplan?')) {
+                    deletePixelArray();
+                    setShowPixelArrayModal(false);
+                  }
+                }}><FiTrash2 /> Remove</button>
+              )}
+              <span />
+              <button type="button" className="btn" onClick={() => setShowPixelArrayModal(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary"><FiCrosshair /> {pixelArray ? 'Resize & Relocate' : 'Attach to Cursor'}</button>
             </div>
           </form>
         </div>

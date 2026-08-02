@@ -15,6 +15,7 @@ IC Floorplanner is a browser-based ASIC floorplanning tool with a CAD-style canv
 - Full project Undo and Redo, including placement, transforms, rulers, master edits, alignment, and top-cell changes.
 - Manual rulers, orthogonal measurement, edge snapping, selected-IP gaps, and reduced-clutter Auto-Dim.
 - Edge-bound pad placement with a visual side picker, automatic edge filling, live span/gap feedback, and perimeter-constrained dragging.
+- Optional pixel-array region with grid-snapped sizing, click placement, bounded dragging, and a non-destructive visibility toggle.
 - Per-master planning appearance with custom color, fill transparency, and solid, dashed, dotted, or hidden outlines.
 - Browser-viewable SVG save with an embedded project payload for lossless re-import.
 - Cadence SKILL preview and export with real OpenAccess `prBoundary` objects.
@@ -54,6 +55,8 @@ Create Master IP definitions in the left sidebar. Each master has:
 Master geometry uses `(0, 0)` as its local origin, which is also the instance origin exported to Virtuoso.
 
 Click **Place edge pads** under Top Cell to create a continuous edge-pad row. Define one reusable pad, choose the top-cell edge with the visual picker, then click **Fill edge** for the maximum non-overlapping count or enter a custom count, center-to-center pitch, and shift. Live span and clear-gap feedback make the result predictable before placement. Top/bottom shifts move the row along X; left/right shifts move it along Y. Pads touch the chosen boundary from inside the top cell, and the complete master-plus-row creation is one Undo operation. Afterward, dragging any pad keeps it attached to the perimeter and automatically switches it to the nearest edge. Exact X/Y edits use the same constraint. The tool rejects overlapping pitch, off-grid origins, or rows that do not fit.
+
+Click **Enable Pixel Array** under Top Cell to define an optional active-array region. Enter a width and height smaller than the top cell, confirm, then click the desired canvas location. The dimensions and bottom-left origin are normalized to the placement grid, the complete region remains inside the top cell, and dragging keeps it bounded. **Disable Pixel Array** hides it without forgetting its size or position; enable it again to restore the same region. The move control attaches the existing size to the cursor, while Settings supports resize, relocation, or removal.
 
 ### 2. Place and edit instances
 
@@ -109,6 +112,8 @@ load("/absolute/path/to/top_cell.il")
 ```
 
 Loading the file calls `FPCreateFloorplan()` automatically. It creates or overwrites the generated `layout` cellviews using `maskLayout`, creates real `prBoundary` objects, opens masters read-only, and places instances with the same coordinates and orientations shown on the canvas.
+
+When the pixel array is enabled, SKILL also writes its exact rectangle on `("prBoundary" "drawing")` and its label on `("text" "drawing")` in the top cell. Disabling the array omits those shapes from SVG and SKILL output while keeping the saved configuration available for later re-enabling.
 
 > **Important:** the generated script uses write mode and can overwrite existing layout views with matching library/cell names. Review the preview before loading it.
 

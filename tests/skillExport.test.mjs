@@ -72,3 +72,13 @@ test('emits canonical grid coordinates and rejects off-grid geometry', () => {
     /off the 0\.005 um placement grid/,
   );
 });
+
+test('emits a visible pixel array on the requested drawing layers', () => {
+  const pixelArray = { x: -30, y: -20, width: 60, height: 40, visible: true };
+  const code = generateSkillCode('demoLib', 'top', 100, 80, {}, [], 0.005, pixelArray);
+  assert.match(code, /dbCreateRect\(cv list\("prBoundary" "drawing"\) list\(-30:-20 30:20\)\)/);
+  assert.match(code, /dbCreateLabel\(cv list\("text" "drawing"\) 0:0 "PIXEL ARRAY 60x40um"/);
+
+  const hiddenCode = generateSkillCode('demoLib', 'top', 100, 80, {}, [], 0.005, { ...pixelArray, visible: false });
+  assert.doesNotMatch(hiddenCode, /PIXEL ARRAY/);
+});

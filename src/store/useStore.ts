@@ -38,6 +38,18 @@ export type Ruler = {
   endY: number;
 };
 
+export type PixelArray = {
+  /** Bottom-left origin in top-cell coordinates. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  visible: boolean;
+};
+
+export type PixelArraySize = Pick<PixelArray, 'width' | 'height'>;
+export type AppMode = 'select' | 'measure' | 'place' | 'pixel-array';
+
 export type PadSide = 'top' | 'bottom' | 'left' | 'right';
 
 export type PadRowConfig = {
@@ -64,7 +76,7 @@ export type EdgeAlignmentSession = {
 
 export type ProjectState = {
   gridSize: number;
-  appMode: 'select' | 'measure' | 'place';
+  appMode: AppMode;
   
   topWidth: number;
   topHeight: number;
@@ -74,6 +86,8 @@ export type ProjectState = {
   masterCells: Record<string, Cell>;
   instances: Instance[];
   rulers: Ruler[];
+  pixelArray: PixelArray | null;
+  pendingPixelArraySize: PixelArraySize | null;
   
   selectedInstanceId: string | null;
   selectedInstanceIds: string[];
@@ -91,7 +105,7 @@ export type ProjectState = {
   lastAlignmentSpacing: string;
   
   setGridSize: (size: number) => void;
-  setAppMode: (mode: 'select' | 'measure' | 'place') => void;
+  setAppMode: (mode: AppMode) => void;
   setTopDimensions: (w: number, h: number) => void;
   setTopNames: (lib: string, cell: string) => void;
   setShowCreateModal: (show: boolean) => void;
@@ -105,6 +119,11 @@ export type ProjectState = {
   deleteMasterCell: (id: string) => void;
   placeInstance: (cellId: string, x?: number, y?: number, orientation?: string) => void;
   createPadRow: (config: PadRowConfig) => void;
+  startPixelArrayPlacement: (width: number, height: number) => void;
+  placePixelArray: (centerX: number, centerY: number) => void;
+  updatePixelArrayPosition: (x: number, y: number) => void;
+  setPixelArrayVisible: (visible: boolean) => void;
+  deletePixelArray: () => void;
   
   updateInstancePosition: (instanceId: string, x: number, y: number) => void;
   updateInstanceOrientation: (instanceId: string, orientation: string) => void;
@@ -232,6 +251,30 @@ export const snapPadToNearestEdge = (
   return { x: snapToGrid(closest.x, gridSize), y: snapToGrid(closest.y, gridSize) };
 };
 
+const normalizePixelArray = (
+  pixelArray: PixelArray,
+  topWidth: number,
+  topHeight: number,
+  gridSize: number,
+): PixelArray => {
+  const maxWidth = snapToGrid(Math.floor((topWidth - 1e-9) / gridSize) * gridSize, gridSize);
+  const maxHeight = snapToGrid(Math.floor((topHeight - 1e-9) / gridSize) * gridSize, gridSize);
+  if (maxWidth <= 0 || maxHeight <= 0) throw new RangeError('The top cell is too small for a pixel array');
+  const width = Math.min(maxWidth, Math.max(gridSize, snapToGrid(pixelArray.width, gridSize)));
+  const height = Math.min(maxHeight, Math.max(gridSize, snapToGrid(pixelArray.height, gridSize)));
+  const position = clampInstancePosition(
+    pixelArray.x,
+    pixelArray.y,
+    'R0',
+    width,
+    height,
+    topWidth,
+    topHeight,
+    gridSize,
+  );
+  return { ...pixelArray, ...position, width, height };
+};
+
 const getNextInstanceName = (instances: Instance[]) => {
   const usedNames = new Set(instances.map(instance => instance.name));
   let index = 0;
@@ -271,6 +314,7 @@ export const getProjectSnapshot = (state: ProjectState): ProjectSnapshot => ({
   masterCells: state.masterCells,
   instances: state.instances,
   rulers: state.rulers,
+  pixelArray: state.pixelArray,
 });
 
 const commitProjectPatch = (
@@ -432,6 +476,8 @@ export const useStore = create<ProjectState>((set) => ({
   masterCells: {},
   instances: [],
   rulers: [],
+  pixelArray: null,
+  pendingPixelArraySize: null,
   selectedInstanceId: null,
   selectedInstanceIds: [],
   showCreateModal: false,
@@ -466,9 +512,16 @@ export const useStore = create<ProjectState>((set) => ({
           );
       return { ...instance, ...position };
     });
-    return commitProjectPatch(state, 'Change grid', { gridSize: size, instances });
+    const pixelArray = state.pixelArray
+      ? normalizePixelArray(state.pixelArray, state.topWidth, state.topHeight, size)
+      : null;
+    return commitProjectPatch(state, 'Change grid', { gridSize: size, instances, pixelArray });
   }),
-  setAppMode: (mode) => set({ appMode: mode, edgeAlignmentSession: null }),
+  setAppMode: (mode) => set({
+    appMode: mode,
+    edgeAlignmentSession: null,
+    ...(mode === 'pixel-array' ? {} : { pendingPixelArraySize: null }),
+  }),
   setTopDimensions: (w, h) => set((state) => {
     const instances = state.instances.map(instance => {
       const master = state.masterCells[instance.cellId];
@@ -478,14 +531,23 @@ export const useStore = create<ProjectState>((set) => ({
         : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, w, h, state.gridSize);
       return { ...instance, ...position };
     });
-    return commitProjectPatch(state, 'Resize top cell', { topWidth: w, topHeight: h, instances });
+    const pixelArray = state.pixelArray
+      ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
+      : null;
+    return commitProjectPatch(state, 'Resize top cell', { topWidth: w, topHeight: h, instances, pixelArray });
   }),
   setTopNames: (lib, cell) => set((state) => commitProjectPatch(state, 'Rename top cell', { topLibName: lib, topCellName: cell })),
   setShowCreateModal: (show) => set({ showCreateModal: show }),
   setShowInstantiateModal: (show) => set({ showInstantiateModal: show }),
   setLeftSidebarPinned: (pinned) => set({ leftSidebarPinned: pinned }),
   setRightSidebarPinned: (pinned) => set({ rightSidebarPinned: pinned }),
-  setPlacement: (masterId, orientation = 'R0') => set({ placementMasterId: masterId, placementOrientation: orientation, appMode: masterId ? 'place' : 'select', edgeAlignmentSession: null }),
+  setPlacement: (masterId, orientation = 'R0') => set({
+    placementMasterId: masterId,
+    placementOrientation: orientation,
+    appMode: masterId ? 'place' : 'select',
+    pendingPixelArraySize: null,
+    edgeAlignmentSession: null,
+  }),
   
   addMasterCell: (libName, cellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
     const existing = Object.values(state.masterCells).find(c => c.cellName === cellName && c.libName === libName);
@@ -663,6 +725,76 @@ export const useStore = create<ProjectState>((set) => ({
     };
   }),
 
+  startPixelArrayPlacement: (width, height) => set((state) => {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      throw new RangeError('Pixel array width and height must be positive finite numbers');
+    }
+    const snappedWidth = snapToGrid(width, state.gridSize);
+    const snappedHeight = snapToGrid(height, state.gridSize);
+    if (snappedWidth <= 0 || snappedHeight <= 0) {
+      throw new RangeError('Pixel array dimensions must be at least one placement-grid step');
+    }
+    if (snappedWidth >= state.topWidth || snappedHeight >= state.topHeight) {
+      throw new RangeError('Pixel array must be smaller than the top cell in both dimensions');
+    }
+    return {
+      pendingPixelArraySize: { width: snappedWidth, height: snappedHeight },
+      appMode: 'pixel-array',
+      placementMasterId: null,
+      edgeAlignmentSession: null,
+      selectedInstanceId: null,
+      selectedInstanceIds: [],
+    };
+  }),
+
+  placePixelArray: (centerX, centerY) => set((state) => {
+    const size = state.pendingPixelArraySize;
+    if (!size) return state;
+    const position = clampInstancePosition(
+      centerX - size.width / 2,
+      centerY - size.height / 2,
+      'R0',
+      size.width,
+      size.height,
+      state.topWidth,
+      state.topHeight,
+      state.gridSize,
+    );
+    const pixelArray: PixelArray = { ...size, ...position, visible: true };
+    return {
+      ...commitProjectPatch(state, state.pixelArray ? 'Move pixel array' : 'Place pixel array', { pixelArray }),
+      pendingPixelArraySize: null,
+      appMode: 'select',
+    };
+  }),
+
+  updatePixelArrayPosition: (x, y) => set((state) => {
+    if (!state.pixelArray) return state;
+    const pixelArray = normalizePixelArray(
+      { ...state.pixelArray, x, y },
+      state.topWidth,
+      state.topHeight,
+      state.gridSize,
+    );
+    return commitProjectPatch(state, 'Move pixel array', { pixelArray });
+  }),
+
+  setPixelArrayVisible: (visible) => set((state) => {
+    if (!state.pixelArray || state.pixelArray.visible === visible) return state;
+    return commitProjectPatch(state, `${visible ? 'Show' : 'Hide'} pixel array`, {
+      pixelArray: { ...state.pixelArray, visible },
+    });
+  }),
+
+  deletePixelArray: () => set((state) => {
+    if (!state.pixelArray) return state;
+    return {
+      ...commitProjectPatch(state, 'Delete pixel array', { pixelArray: null }),
+      pendingPixelArraySize: null,
+      appMode: 'select',
+    };
+  }),
+
   updateInstancePosition: (instanceId, x, y) => set((state) => {
     const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
@@ -767,6 +899,8 @@ export const useStore = create<ProjectState>((set) => ({
       history: result.history,
       ...selectionAfterInstancesChange(state, result.snapshot.instances),
       edgeAlignmentSession: null,
+      pendingPixelArraySize: null,
+      appMode: 'select',
     };
   }),
 
@@ -778,6 +912,8 @@ export const useStore = create<ProjectState>((set) => ({
       history: result.history,
       ...selectionAfterInstancesChange(state, result.snapshot.instances),
       edgeAlignmentSession: null,
+      pendingPixelArraySize: null,
+      appMode: 'select',
     };
   }),
 
@@ -1019,6 +1155,9 @@ export const useStore = create<ProjectState>((set) => ({
           );
       return { ...instance, ...position };
     });
+    const pixelArray = data.pixelArray
+      ? normalizePixelArray(data.pixelArray, topWidth, topHeight, gridSize)
+      : null;
     return {
       ...state,
       gridSize,
@@ -1029,6 +1168,8 @@ export const useStore = create<ProjectState>((set) => ({
       masterCells,
       instances,
       rulers: data.rulers ?? [],
+      pixelArray,
+      pendingPixelArraySize: null,
       history: { past: [], future: [] },
       edgeAlignmentSession: null,
       selectedInstanceId: null,

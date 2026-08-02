@@ -80,6 +80,10 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
               <div><strong>Place edge pads</strong><p>Click Place edge pads under Top Cell, choose an edge visually, then use Fill edge or enter a count and pitch. Pads remain attached when dragged around the perimeter.</p></div>
             </article>
             <article className="tutorial-card">
+              <FiGrid />
+              <div><strong>Place a pixel array</strong><p>Click Enable Pixel Array, define a region smaller than the top cell, then click to place it. Drag to move it or disable it temporarily without losing its position.</p></div>
+            </article>
+            <article className="tutorial-card">
               <FiSave />
               <div><strong>Protect your work</strong><p>Save stores the current editable workspace in this browser. Exported SVGs also embed project metadata and can be imported later.</p></div>
             </article>
