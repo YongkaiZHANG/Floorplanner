@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { alignInstanceToTarget, alignInstances, distributeInstances, getPhysicalBounds } from '../utils/alignment.ts';
+import { alignInstanceToCoordinate, alignInstanceToTarget, alignInstances, distributeInstances, getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment.ts';
 import type { AlignmentEdge, AlignmentOperation, DistributionAxis } from '../utils/alignment.ts';
 import type { ProjectSnapshot } from './projectDocument.ts';
 import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
@@ -103,6 +103,8 @@ export type ProjectState = {
   setEdgeAlignmentEdge: (instanceId: string, edge: AlignmentEdge) => void;
   setEdgeAlignmentOffset: (value: string) => void;
   completeEdgeAlignment: (targetId: string, targetEdge: AlignmentEdge) => void;
+  completeEdgeAlignmentToBoundary: (targetEdge: 'left' | 'right' | 'bottom' | 'top') => void;
+  completeEdgeAlignmentToRuler: (rulerId: string) => void;
   cancelEdgeAlignment: () => void;
   applyEdgeAlignment: () => void;
   distributeSelectedInstances: (axis: DistributionAxis) => void;
@@ -275,6 +277,43 @@ const edgeAlignmentPatch = (
     `Align ${source.name}.${sourceEdge} to ${target.name}.${targetEdge}${offsetLabel}`,
     { instances },
   );
+};
+
+const edgeAlignmentCoordinatePatch = (
+  state: ProjectState,
+  sourceId: string,
+  sourceEdge: AlignmentEdge,
+  targetCoordinate: number,
+  offset: number,
+  referenceLabel: string,
+) => {
+  const source = state.instances.find(instance => instance.id === sourceId);
+  if (!source) throw new Error('The source instance no longer exists');
+  const sourceMaster = state.masterCells[source.cellId];
+  if (!sourceMaster) throw new Error('The source master cell no longer exists');
+  const position = alignInstanceToCoordinate(
+    { ...source, width: sourceMaster.width, height: sourceMaster.height },
+    sourceEdge,
+    targetCoordinate,
+    offset,
+    { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize },
+  );
+  const instances = state.instances.map(instance => (
+    instance.id === sourceId ? { ...instance, x: position.x, y: position.y } : instance
+  ));
+  const offsetLabel = offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`;
+  return commitProjectPatch(
+    state,
+    `Align ${source.name}.${sourceEdge} to ${referenceLabel}${offsetLabel}`,
+    { instances },
+  );
+};
+
+const parseEdgeAlignmentOffset = (session: EdgeAlignmentSession) => {
+  const trimmedOffset = session.offset.trim();
+  const offset = trimmedOffset === '' ? Number.NaN : Number(trimmedOffset);
+  if (!Number.isFinite(offset)) throw new RangeError('Alignment offset must be a finite number');
+  return offset;
 };
 
 export const useStore = create<ProjectState>((set) => ({
@@ -574,9 +613,7 @@ export const useStore = create<ProjectState>((set) => ({
   completeEdgeAlignment: (targetId, targetEdge) => set((state) => {
     const session = state.edgeAlignmentSession;
     if (!session?.sourceEdge) throw new Error('Choose the source edge first');
-    const trimmedOffset = session.offset.trim();
-    const offset = trimmedOffset === '' ? Number.NaN : Number(trimmedOffset);
-    if (!Number.isFinite(offset)) throw new RangeError('Alignment offset must be a finite number');
+    const offset = parseEdgeAlignmentOffset(session);
     return {
       ...edgeAlignmentPatch(
         state,
@@ -585,6 +622,54 @@ export const useStore = create<ProjectState>((set) => ({
         session.sourceEdge,
         targetEdge,
         offset,
+      ),
+      edgeAlignmentSession: null,
+    };
+  }),
+
+  completeEdgeAlignmentToBoundary: (targetEdge) => set((state) => {
+    const session = state.edgeAlignmentSession;
+    if (!session?.sourceEdge) throw new Error('Choose the source edge first');
+    if (getAlignmentEdgeAxis(session.sourceEdge) !== getAlignmentEdgeAxis(targetEdge)) {
+      throw new Error('Source and top-cell edges must be on the same axis');
+    }
+    const coordinate = targetEdge === 'left' ? -state.topWidth / 2
+      : targetEdge === 'right' ? state.topWidth / 2
+      : targetEdge === 'bottom' ? -state.topHeight / 2
+      : state.topHeight / 2;
+    return {
+      ...edgeAlignmentCoordinatePatch(
+        state,
+        session.sourceId,
+        session.sourceEdge,
+        coordinate,
+        parseEdgeAlignmentOffset(session),
+        `top.${targetEdge}`,
+      ),
+      edgeAlignmentSession: null,
+    };
+  }),
+
+  completeEdgeAlignmentToRuler: (rulerId) => set((state) => {
+    const session = state.edgeAlignmentSession;
+    if (!session?.sourceEdge) throw new Error('Choose the source edge first');
+    const ruler = state.rulers.find(item => item.id === rulerId);
+    if (!ruler) throw new Error('The ruler no longer exists');
+    const axis = getAlignmentEdgeAxis(session.sourceEdge);
+    const verticalRuler = Math.abs(ruler.endX - ruler.startX) <= 1e-9;
+    const horizontalRuler = Math.abs(ruler.endY - ruler.startY) <= 1e-9;
+    if ((axis === 'horizontal' && !verticalRuler) || (axis === 'vertical' && !horizontalRuler)) {
+      throw new Error('Only an orthogonal ruler on the matching axis can be an alignment reference');
+    }
+    const coordinate = axis === 'horizontal' ? ruler.startX : ruler.startY;
+    return {
+      ...edgeAlignmentCoordinatePatch(
+        state,
+        session.sourceId,
+        session.sourceEdge,
+        coordinate,
+        parseEdgeAlignmentOffset(session),
+        'ruler line',
       ),
       edgeAlignmentSession: null,
     };

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  alignInstanceToCoordinate,
   alignInstanceToTarget,
   alignInstances,
   distributeInstances,
@@ -130,6 +131,17 @@ test('supports vertical edge-to-edge alignment without changing the perpendicula
   const fixed = getPhysicalBounds(target);
   assert.equal(position.x, source.x);
   assert.equal(moved.bottom, fixed.top + 2);
+});
+
+test('aligns an instance edge to an explicit boundary or ruler coordinate', () => {
+  const source = block('source', 10, -7, 10, 5, 'R0');
+  const atBoundary = alignInstanceToCoordinate(source, 'left', -50, 0, options);
+  assert.equal(getPhysicalBounds({ ...source, ...atBoundary }).left, -50);
+  assert.equal(atBoundary.y, source.y);
+
+  const atRuler = alignInstanceToCoordinate(source, 'top', 12, -2, options);
+  assert.equal(getPhysicalBounds({ ...source, ...atRuler }).top, 10);
+  assert.equal(atRuler.x, source.x);
 });
 
 test('rejects cross-axis, off-grid, out-of-bounds, and self edge alignments', () => {

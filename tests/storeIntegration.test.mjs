@@ -200,3 +200,35 @@ test('target edge click can complete interactive alignment in one atomic action'
     getPhysicalBounds({ ...fixed, width: master.width, height: master.height }).left,
   );
 });
+
+test('top-cell edges and orthogonal rulers can complete edge alignment', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'referenceAlign', 10, 5, '#fff');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, 0, 0);
+  const source = useStore.getState().instances[0];
+
+  useStore.getState().startEdgeAlignment(source.id);
+  useStore.getState().setEdgeAlignmentEdge(source.id, 'left');
+  useStore.getState().completeEdgeAlignmentToBoundary('left');
+  let moved = useStore.getState().instances[0];
+  assert.equal(getPhysicalBounds({ ...moved, width: master.width, height: master.height }).left, -50);
+
+  useStore.getState().addRuler(15, -20, 15, 20);
+  const ruler = useStore.getState().rulers[0];
+  useStore.getState().startEdgeAlignment(source.id);
+  useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
+  useStore.getState().setEdgeAlignmentOffset('-5');
+  useStore.getState().completeEdgeAlignmentToRuler(ruler.id);
+  moved = useStore.getState().instances[0];
+  assert.equal(getPhysicalBounds({ ...moved, width: master.width, height: master.height }).right, 10);
+
+  useStore.getState().addRuler(-20, -20, 20, 20);
+  const diagonal = useStore.getState().rulers[1];
+  useStore.getState().startEdgeAlignment(source.id);
+  useStore.getState().setEdgeAlignmentEdge(source.id, 'left');
+  assert.throws(
+    () => useStore.getState().completeEdgeAlignmentToRuler(diagonal.id),
+    /orthogonal ruler/,
+  );
+});

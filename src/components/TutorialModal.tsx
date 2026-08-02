@@ -50,7 +50,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             <li><span>1</span><div><strong>Configure the Top Cell</strong><p>Set its Cadence library, cell name, width, height, and placement grid.</p></div></li>
             <li><span>2</span><div><strong>Create Master IPs</strong><p>Use the left sidebar’s + button to define reusable blocks, dimensions, and planning colors.</p></div></li>
             <li><span>3</span><div><strong>Place instances</strong><p>Click a master’s crosshair or press <kbd>i</kbd>, then click the canvas. Press <kbd>Esc</kbd> when finished.</p></div></li>
-            <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select the IP to move, click Align (or press a), then click its edge and the fixed target edge. The second edge click applies immediately.</p></div></li>
+            <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select the IP to move, click Align (or press a), choose its edge, then click a green IP, top-cell, or ruler reference. The target click applies immediately.</p></div></li>
             <li><span>5</span><div><strong>Save and export</strong><p>Save an editable `.flp`, preview SKILL, then export only after checking destination libraries.</p></div></li>
           </ol>
         </section>
@@ -68,7 +68,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiAlignLeft />
-              <div><strong>Align by edges</strong><p>Select the moving source, click Align, choose its amber edge, then click a green target edge. Set the optional offset before the target click; the move applies immediately and remains undoable.</p></div>
+              <div><strong>Align by edges</strong><p>Select the moving source, click Align, choose its amber edge, then click a green IP edge, top-cell boundary, or compatible ruler. Set the offset before the target click.</p></div>
             </article>
             <article className="tutorial-card">
               <FiLayers />
@@ -90,6 +90,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
           <div className="tutorial-legend">
             <span><i className="tutorial-dot tutorial-dot--anchor" />Amber: primary alignment reference</span>
             <span><i className="tutorial-dot tutorial-dot--selected" />Blue: additional selected blocks</span>
+            <span><i className="tutorial-dot tutorial-dot--target" />Green: alignment target</span>
             <span><i className="tutorial-dot tutorial-dot--dimension" />Violet: Auto-Dim gap</span>
           </div>
         </section>

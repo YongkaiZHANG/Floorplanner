@@ -199,10 +199,30 @@ export const alignInstanceToTarget = (
   if (axis !== getAlignmentEdgeAxis(targetEdge)) {
     throw new Error('Source and target edges must be on the same axis');
   }
-
-  const sourceBounds = getPhysicalBounds(source);
   const targetBounds = getPhysicalBounds(target);
-  const desiredCoordinate = getEdgeCoordinate(targetBounds, targetEdge) + offset;
+  return alignInstanceToCoordinate(
+    source,
+    sourceEdge,
+    getEdgeCoordinate(targetBounds, targetEdge),
+    offset,
+    options,
+  );
+};
+
+/** Aligns one physical source edge to an explicit X or Y reference coordinate. */
+export const alignInstanceToCoordinate = (
+  source: AlignableInstance,
+  sourceEdge: AlignmentEdge,
+  targetCoordinate: number,
+  offset: number,
+  options: ArrangementOptions,
+): InstancePosition => {
+  validateOptions(options);
+  if (!Number.isFinite(targetCoordinate)) throw new RangeError('Alignment reference coordinate must be finite');
+  if (!Number.isFinite(offset)) throw new RangeError('Alignment offset must be finite');
+  const axis = getAlignmentEdgeAxis(sourceEdge);
+  const sourceBounds = getPhysicalBounds(source);
+  const desiredCoordinate = targetCoordinate + offset;
   const sourceCoordinate = getEdgeCoordinate(sourceBounds, sourceEdge);
   const delta = desiredCoordinate - sourceCoordinate;
   const position = placeInsideTop(

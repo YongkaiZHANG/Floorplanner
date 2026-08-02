@@ -60,6 +60,8 @@ export const FloorplanCanvas: React.FC = () => {
     setEdgeAlignmentEdge,
     setEdgeAlignmentOffset,
     completeEdgeAlignment,
+    completeEdgeAlignmentToBoundary,
+    completeEdgeAlignmentToRuler,
     cancelEdgeAlignment,
   } = useStore();
 
@@ -1200,7 +1202,7 @@ export const FloorplanCanvas: React.FC = () => {
               return [box.minX, box.maxY, box.maxX, box.maxY];
             };
 
-            return instances.flatMap(instance => {
+            const ipEdges = instances.flatMap(instance => {
               const box = computeInstanceBBox(instance);
               if (!box) return [];
               const isSource = instance.id === session.sourceId;
@@ -1242,11 +1244,84 @@ export const FloorplanCanvas: React.FC = () => {
                 );
               });
             });
+
+            if (!sourceAxis) return ipEdges;
+            const boundaryEdges: AlignmentEdge[] = sourceAxis === 'horizontal'
+              ? ['left', 'right']
+              : ['bottom', 'top'];
+            const boundaryBox: BBox = {
+              minX: -topWidth / 2,
+              maxX: topWidth / 2,
+              minY: -topHeight / 2,
+              maxY: topHeight / 2,
+            };
+            const boundaryTargets = boundaryEdges.map(edge => {
+              const key = `top-${edge}`;
+              return (
+                <Line
+                  key={`align-edge-${key}`}
+                  points={edgeLine(boundaryBox, edge).map(value => value * SCALE_FACTOR)}
+                  stroke="#10b981"
+                  strokeWidth={(hoveredAlignEdge === key ? 5 : 3) / stageScale}
+                  opacity={hoveredAlignEdge === key ? 1 : 0.78}
+                  hitStrokeWidth={18 / stageScale}
+                  lineCap="round"
+                  onMouseEnter={() => setHoveredAlignEdge(key)}
+                  onMouseLeave={() => setHoveredAlignEdge(null)}
+                  onClick={event => {
+                    event.cancelBubble = true;
+                    try {
+                      completeEdgeAlignmentToBoundary(edge as 'left' | 'right' | 'bottom' | 'top');
+                    } catch (error) {
+                      alert(error instanceof Error ? error.message : 'Unable to align to the top cell.');
+                    }
+                  }}
+                />
+              );
+            });
+            return [...ipEdges, ...boundaryTargets];
           })()}
 
           {/* Rulers */}
-          {rulers.map(r => renderRuler(r, r.id, () => deleteRuler(r.id)))}
+          {rulers.map(r => renderRuler(r, r.id, edgeAlignmentSession ? undefined : () => deleteRuler(r.id)))}
           {isMeasuring && currentRuler && renderRuler(currentRuler, 'temp_ruler')}
+
+          {/* Orthogonal rulers can serve as X/Y references during edge alignment. */}
+          {edgeAlignmentSession?.sourceEdge && (() => {
+            const axis = getAlignmentEdgeAxis(edgeAlignmentSession.sourceEdge);
+            return rulers.flatMap(ruler => {
+              const vertical = Math.abs(ruler.endX - ruler.startX) <= 1e-9;
+              const horizontal = Math.abs(ruler.endY - ruler.startY) <= 1e-9;
+              if ((axis === 'horizontal' && !vertical) || (axis === 'vertical' && !horizontal)) return [];
+              const key = `ruler-${ruler.id}`;
+              return [(
+                <Line
+                  key={`align-${key}`}
+                  points={[
+                    ruler.startX * SCALE_FACTOR,
+                    ruler.startY * SCALE_FACTOR,
+                    ruler.endX * SCALE_FACTOR,
+                    ruler.endY * SCALE_FACTOR,
+                  ]}
+                  stroke="#10b981"
+                  strokeWidth={(hoveredAlignEdge === key ? 5 : 3) / stageScale}
+                  opacity={hoveredAlignEdge === key ? 1 : 0.82}
+                  hitStrokeWidth={18 / stageScale}
+                  lineCap="round"
+                  onMouseEnter={() => setHoveredAlignEdge(key)}
+                  onMouseLeave={() => setHoveredAlignEdge(null)}
+                  onClick={event => {
+                    event.cancelBubble = true;
+                    try {
+                      completeEdgeAlignmentToRuler(ruler.id);
+                    } catch (error) {
+                      alert(error instanceof Error ? error.message : 'Unable to align to the ruler.');
+                    }
+                  }}
+                />
+              )];
+            });
+          })()}
 
           {/* Gap Annotations (selection-based + auto-dim) */}
           {renderGapAnnotations(
@@ -1356,7 +1431,7 @@ export const FloorplanCanvas: React.FC = () => {
         const source = instances.find(instance => instance.id === edgeAlignmentSession.sourceId);
         const step = !edgeAlignmentSession.sourceEdge
           ? `Click one highlighted edge of ${source?.name ?? 'the source block'}`
-          : 'Click a green target edge to apply immediately';
+          : 'Click a green IP, top-cell, or ruler edge to apply';
 
         return (
           <div className="edge-align-panel edge-align-panel--picking" role="dialog" aria-label="Align by edges">
@@ -1369,7 +1444,7 @@ export const FloorplanCanvas: React.FC = () => {
               <code>{source?.name ?? '—'}.{edgeAlignmentSession.sourceEdge ?? '?'}</code>
               <span>→</span>
               <span className="edge-align-panel__target">Fixed target</span>
-              <code>click green edge</code>
+              <code>IP · top cell · ruler</code>
             </div>
             <label>
               Offset (µm)
