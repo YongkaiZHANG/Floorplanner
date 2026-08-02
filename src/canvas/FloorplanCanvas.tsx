@@ -1,6 +1,7 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, getTransformProps } from '../store/useStore';
+import { useStore, getTransformProps, clampInstancePosition, rotateOrientationByQuarterTurns } from '../store/useStore';
+import { getPhysicalBounds } from '../utils/alignment';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import './FloorplanCanvas.css';
@@ -22,9 +23,16 @@ export const FloorplanCanvas: React.FC = () => {
   const [measureStart, setMeasureStart] = useState<{ x: number; y: number } | null>(null);
   const [currentRuler, setCurrentRuler] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
   const [hoveredRulerId, setHoveredRulerId] = useState<string | null>(null);
+  const [hoveredAutoDimKey, setHoveredAutoDimKey] = useState<string | null>(null);
   const [snapIndicator, setSnapIndicator] = useState<{ x: number; y: number } | null>(null);
 
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [rotationDrag, setRotationDrag] = useState<{
+    instanceId: string;
+    startAngle: number;
+    startOrientation: string;
+    previewOrientation: string;
+  } | null>(null);
 
   const { 
     appMode,
@@ -37,9 +45,10 @@ export const FloorplanCanvas: React.FC = () => {
     rulers,
     gridSize, 
     updateInstancePosition,
+    updateInstanceOrientation,
     selectedInstanceId,
+    selectedInstanceIds,
     setSelectedInstance,
-    deleteInstance,
     addRuler,
     deleteRuler,
     clearRulers,
@@ -51,7 +60,7 @@ export const FloorplanCanvas: React.FC = () => {
     showAutoDim,
   } = useStore();
 
-  const fitView = () => {
+  const fitView = useCallback(() => {
     if (containerRef.current) {
       const { offsetHeight, offsetWidth } = containerRef.current;
       const tw = topWidth * SCALE_FACTOR;
@@ -69,7 +78,7 @@ export const FloorplanCanvas: React.FC = () => {
         y: offsetHeight / 2 
       }); 
     }
-  };
+  }, [topWidth, topHeight]);
 
   useEffect(() => {
     fitView();
@@ -84,7 +93,7 @@ export const FloorplanCanvas: React.FC = () => {
     setTimeout(updateSize, 50);
     window.addEventListener('resize', updateSize);
     return () => window.removeEventListener('resize', updateSize);
-  }, []); // Only on mount.
+  }, [fitView]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -95,6 +104,25 @@ export const FloorplanCanvas: React.FC = () => {
       
       const key = e.key.toLowerCase();
       const state = useStore.getState();
+
+      if (e.ctrlKey || e.metaKey) {
+        if (key === 'z') {
+          e.preventDefault();
+          if (e.shiftKey) state.redo();
+          else state.undo();
+          return;
+        }
+        if (key === 'y') {
+          e.preventDefault();
+          state.redo();
+          return;
+        }
+        if (key === 'a') {
+          e.preventDefault();
+          state.selectAllInstances();
+          return;
+        }
+      }
       
       switch (key) {
         case 'f':
@@ -142,8 +170,8 @@ export const FloorplanCanvas: React.FC = () => {
           break;
         case 'backspace':
         case 'delete':
-          if (selectedInstanceId) {
-            deleteInstance(selectedInstanceId);
+          if (state.selectedInstanceIds.length > 0) {
+            state.deleteSelectedInstances();
           }
           break;
         case 'u':
@@ -153,6 +181,18 @@ export const FloorplanCanvas: React.FC = () => {
         case 'o':
           e.preventDefault();
           state.toggleOrthogonalRuler();
+          break;
+        case 'r':
+          e.preventDefault();
+          if (state.selectedInstanceId) {
+            const instance = state.instances.find(item => item.id === state.selectedInstanceId);
+            if (instance) {
+              state.updateInstanceOrientation(
+                instance.id,
+                rotateOrientationByQuarterTurns(instance.orientation, e.shiftKey ? -1 : 1),
+              );
+            }
+          }
           break;
         case 'escape':
           if (state.appMode === 'place') {
@@ -170,7 +210,7 @@ export const FloorplanCanvas: React.FC = () => {
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [appMode, selectedInstanceId, topWidth, topHeight, rightSidebarPinned]);
+  }, [appMode, selectedInstanceId, rightSidebarPinned, clearRulers, fitView, setAppMode, setSelectedInstance]);
 
   const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -296,6 +336,28 @@ export const FloorplanCanvas: React.FC = () => {
     const pointer = stageRef.current?.getPointerPosition();
     if (!pointer) return;
     const { umX, umY, isSnapped } = getSnappedWorldPos(pointer, appMode === 'measure');
+
+    if (rotationDrag) {
+      const instance = instances.find(item => item.id === rotationDrag.instanceId);
+      if (instance) {
+        const bounds = computeInstanceBBox(instance);
+        if (bounds) {
+          const centerX = (bounds.minX + bounds.maxX) / 2;
+          const centerY = (bounds.minY + bounds.maxY) / 2;
+          const angle = Math.atan2(umY - centerY, umX - centerX);
+          const delta = Math.atan2(
+            Math.sin(angle - rotationDrag.startAngle),
+            Math.cos(angle - rotationDrag.startAngle),
+          );
+          const quarterTurns = Math.round(delta / (Math.PI / 2));
+          const previewOrientation = rotateOrientationByQuarterTurns(rotationDrag.startOrientation, quarterTurns);
+          if (previewOrientation !== rotationDrag.previewOrientation) {
+            setRotationDrag(current => current ? { ...current, previewOrientation } : null);
+          }
+        }
+      }
+      return;
+    }
     
     setMousePos({ x: umX, y: umY });
     
@@ -325,10 +387,34 @@ export const FloorplanCanvas: React.FC = () => {
 
   const handleMouseLeave = () => {
     setMousePos(null);
+    if (rotationDrag) handleMouseUp();
   };
 
   const handleMouseUp = () => {
-    // We moved ruler finish logic to onClick
+    if (!rotationDrag) return;
+    if (rotationDrag.previewOrientation !== rotationDrag.startOrientation) {
+      updateInstanceOrientation(rotationDrag.instanceId, rotationDrag.previewOrientation);
+    }
+    setRotationDrag(null);
+  };
+
+  const startRotation = (instanceId: string, pointer: { x: number; y: number }) => {
+    const instance = instances.find(item => item.id === instanceId);
+    if (!instance) return;
+    const bounds = computeInstanceBBox(instance);
+    if (!bounds) return;
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+    const worldX = (pointer.x - stagePos.x) / stageScale / SCALE_FACTOR;
+    const worldY = (pointer.y - stagePos.y) / -stageScale / SCALE_FACTOR;
+    stageRef.current?.stopDrag();
+    setIsPanning(false);
+    setRotationDrag({
+      instanceId,
+      startAngle: Math.atan2(worldY - centerY, worldX - centerX),
+      startOrientation: instance.orientation,
+      previewOrientation: instance.orientation,
+    });
   };
 
   // Drag bound logic: compute physical bounds, clamp them in real-time, then snap to grid
@@ -433,7 +519,8 @@ export const FloorplanCanvas: React.FC = () => {
       x1: number, y1: number,
       x2: number, y2: number,
       label: string, color: string, key: string,
-      perpDir: 'up' | 'down' | 'left' | 'right' = 'up'
+      perpDir: 'up' | 'down' | 'left' | 'right' = 'up',
+      interactive = false,
     ) => {
       const isHoriz = Math.abs(y2 - y1) < 0.0001;
       const isVert  = Math.abs(x2 - x1) < 0.0001;
@@ -451,15 +538,25 @@ export const FloorplanCanvas: React.FC = () => {
       if (perpDir === 'down')  ly = my - labelGap;
       if (perpDir === 'right') lx = mx + labelGap;
       if (perpDir === 'left')  lx = mx - labelGap;
+      const isHovered = interactive && hoveredAutoDimKey === key;
+      const isMuted = interactive && hoveredAutoDimKey !== null && !isHovered;
+      const strokeWidth = (isHovered ? 2.6 : 1.5) / stageScale;
 
       return (
-        <Group key={key} listening={false}>
+        <Group
+          key={key}
+          listening={interactive}
+          opacity={isMuted ? 0.2 : 1}
+          onMouseEnter={interactive ? () => setHoveredAutoDimKey(key) : undefined}
+          onMouseLeave={interactive ? () => setHoveredAutoDimKey(null) : undefined}
+        >
           {/* Main dim line */}
           <Line
             points={[x1*sf, y1*sf, x2*sf, y2*sf]}
             stroke={color}
-            strokeWidth={1.5 / stageScale}
+            strokeWidth={strokeWidth}
             dash={[5/stageScale, 3/stageScale]}
+            hitStrokeWidth={interactive ? 14 / stageScale : undefined}
           />
           {/* Perpendicular end ticks */}
           {isHoriz && <>
@@ -470,19 +567,26 @@ export const FloorplanCanvas: React.FC = () => {
             <Line points={[x1*sf - tickLen, y1*sf, x1*sf + tickLen, y1*sf]} stroke={color} strokeWidth={1.5/stageScale} />
             <Line points={[x2*sf - tickLen, y2*sf, x2*sf + tickLen, y2*sf]} stroke={color} strokeWidth={1.5/stageScale} />
           </>}
+          {interactive && <>
+            <Circle x={x1*sf} y={y1*sf} radius={(isHovered ? 4 : 2.5)/stageScale} fill={color} />
+            <Circle x={x2*sf} y={y2*sf} radius={(isHovered ? 4 : 2.5)/stageScale} fill={color} />
+          </>}
           {/* Label — rendered with scaleY=-1 to flip text upright */}
           <Text
             x={lx}
             y={ly}
             text={label}
             fill={color}
+            stroke="rgba(15, 23, 42, 0.92)"
+            strokeWidth={(isHovered ? 5 : 3.5) / stageScale}
+            lineJoin="round"
             fontSize={fs}
             fontFamily="monospace"
             fontStyle="bold"
             scaleY={-1}
             offsetY={isHoriz ? -fs * 0.2 : fs * 0.5}
             align={isHoriz ? 'center' : 'left'}
-            listening={false}
+            listening={interactive}
           />
         </Group>
       );
@@ -493,6 +597,47 @@ export const FloorplanCanvas: React.FC = () => {
       return parseFloat(snapped.toFixed(4)).toString() + ' um';
     };
 
+    type Interval = { start: number; end: number };
+
+    const subtractCoveredIntervals = (interval: Interval, covered: Interval[]) => {
+      let visible = [interval];
+
+      covered.forEach(blocked => {
+        visible = visible.flatMap(segment => {
+          if (blocked.end <= segment.start || blocked.start >= segment.end) {
+            return [segment];
+          }
+
+          const remainder: Interval[] = [];
+          if (blocked.start > segment.start) {
+            remainder.push({ start: segment.start, end: blocked.start });
+          }
+          if (blocked.end < segment.end) {
+            remainder.push({ start: blocked.end, end: segment.end });
+          }
+          return remainder;
+        });
+      });
+
+      return visible.filter(segment => segment.end - segment.start > 0.0001);
+    };
+
+    const addCoveredInterval = (covered: Interval[], interval: Interval) => {
+      const sorted = [...covered, interval].sort((a, b) => a.start - b.start);
+      const merged: Interval[] = [];
+
+      sorted.forEach(segment => {
+        const previous = merged[merged.length - 1];
+        if (!previous || segment.start > previous.end + 0.0001) {
+          merged.push({ ...segment });
+        } else {
+          previous.end = Math.max(previous.end, segment.end);
+        }
+      });
+
+      return merged;
+    };
+
     if (selectedId) {
       const sel = instances.find(i => i.id === selectedId);
       if (sel) {
@@ -500,111 +645,148 @@ export const FloorplanCanvas: React.FC = () => {
         if (selBox) {
           const others = instances
             .filter(i => i.id !== selectedId)
-            .map(i => ({ id: i.id, box: computeInstanceBBox(i) }))
-            .filter(x => x.box !== null) as { id: string; box: BBox }[];
+            .map(i => ({ id: i.id, name: i.name, box: computeInstanceBBox(i) }))
+            .filter(x => x.box !== null) as { id: string; name: string; box: BBox }[];
 
-          // ── RIGHT gap ──────────────────────────────────────────────────
-          let rightEnd = topBox.maxX;
-          others.forEach(({ box: ob }) => {
-            // IP must be to the right AND share Y overlap with the selected cell
-            if (ob.minX > selBox.maxX - 0.0001 &&
-                ob.minY < selBox.maxY && ob.maxY > selBox.minY) {
-              if (ob.minX < rightEnd) rightEnd = ob.minX;
-            }
-          });
-          const rightGap = rightEnd - selBox.maxX;
-          if (rightGap > 0.0001) {
-            // Draw line at the overlap Y center (or selected cell center if boundary)
-            const yCenter = (selBox.minY + selBox.maxY) / 2;
-            annotations.push(renderDimLine(
-              selBox.maxX, yCenter, rightEnd, yCenter,
-              snapLabel(rightGap), SEL_COLOR, 'gap-right', 'up'
-            ));
-          }
+          type Direction = 'right' | 'left' | 'top' | 'bottom';
 
-          // ── LEFT gap ──────────────────────────────────────────────────
-          let leftStart = topBox.minX;
-          others.forEach(({ box: ob }) => {
-            if (ob.maxX < selBox.minX + 0.0001 &&
-                ob.minY < selBox.maxY && ob.maxY > selBox.minY) {
-              if (ob.maxX > leftStart) leftStart = ob.maxX;
-            }
-          });
-          const leftGap = selBox.minX - leftStart;
-          if (leftGap > 0.0001) {
-            const yCenter = (selBox.minY + selBox.maxY) / 2;
-            annotations.push(renderDimLine(
-              leftStart, yCenter, selBox.minX, yCenter,
-              snapLabel(leftGap), SEL_COLOR, 'gap-left', 'up'
-            ));
-          }
+          const renderVisibleNeighbors = (direction: Direction) => {
+            const horizontal = direction === 'right' || direction === 'left';
+            const projectionStart = horizontal ? selBox.minY : selBox.minX;
+            const projectionEnd = horizontal ? selBox.maxY : selBox.maxX;
 
-          // ── TOP gap ────────────────────────────────────────────────────
-          let topEnd = topBox.maxY;
-          others.forEach(({ box: ob }) => {
-            if (ob.minY > selBox.maxY - 0.0001 &&
-                ob.minX < selBox.maxX && ob.maxX > selBox.minX) {
-              if (ob.minY < topEnd) topEnd = ob.minY;
-            }
-          });
-          const topGap = topEnd - selBox.maxY;
-          if (topGap > 0.0001) {
-            const xCenter = (selBox.minX + selBox.maxX) / 2;
-            annotations.push(renderDimLine(
-              xCenter, selBox.maxY, xCenter, topEnd,
-              snapLabel(topGap), SEL_COLOR, 'gap-top', 'right'
-            ));
-          }
+            const candidates = others.flatMap(other => {
+              const ob = other.box;
+              let distance: number;
 
-          // ── BOTTOM gap ─────────────────────────────────────────────────
-          let botStart = topBox.minY;
-          others.forEach(({ box: ob }) => {
-            if (ob.maxY < selBox.minY + 0.0001 &&
-                ob.minX < selBox.maxX && ob.maxX > selBox.minX) {
-              if (ob.maxY > botStart) botStart = ob.maxY;
+              if (direction === 'right') distance = ob.minX - selBox.maxX;
+              else if (direction === 'left') distance = selBox.minX - ob.maxX;
+              else if (direction === 'top') distance = ob.minY - selBox.maxY;
+              else distance = selBox.minY - ob.maxY;
+
+              if (distance < -0.0001) return [];
+
+              const overlapStart = Math.max(
+                projectionStart,
+                horizontal ? ob.minY : ob.minX
+              );
+              const overlapEnd = Math.min(
+                projectionEnd,
+                horizontal ? ob.maxY : ob.maxX
+              );
+              if (overlapEnd - overlapStart <= 0.0001) return [];
+
+              return [{ ...other, distance, overlap: { start: overlapStart, end: overlapEnd } }];
+            }).sort((a, b) => a.distance - b.distance);
+
+            let covered: Interval[] = [];
+            let hasVisibleNeighbor = false;
+
+            candidates.forEach(candidate => {
+              const visibleSegments = subtractCoveredIntervals(candidate.overlap, covered);
+              if (visibleSegments.length === 0) return;
+
+              hasVisibleNeighbor = true;
+              const largestVisibleSegment = visibleSegments.reduce((largest, segment) =>
+                segment.end - segment.start > largest.end - largest.start ? segment : largest
+              );
+              const projectionCenter = (largestVisibleSegment.start + largestVisibleSegment.end) / 2;
+
+              // A touching IP still occludes anything behind it, but has no positive gap to label.
+              if (candidate.distance > 0.0001) {
+                const label = `${snapLabel(candidate.distance)} to ${candidate.name}`;
+                const key = `gap-${direction}-${candidate.id}`;
+
+                if (direction === 'right') {
+                  annotations.push(renderDimLine(selBox.maxX, projectionCenter, candidate.box.minX, projectionCenter, label, SEL_COLOR, key, 'up'));
+                } else if (direction === 'left') {
+                  annotations.push(renderDimLine(candidate.box.maxX, projectionCenter, selBox.minX, projectionCenter, label, SEL_COLOR, key, 'up'));
+                } else if (direction === 'top') {
+                  annotations.push(renderDimLine(projectionCenter, selBox.maxY, projectionCenter, candidate.box.minY, label, SEL_COLOR, key, 'right'));
+                } else {
+                  annotations.push(renderDimLine(projectionCenter, candidate.box.maxY, projectionCenter, selBox.minY, label, SEL_COLOR, key, 'right'));
+                }
+              }
+
+              // Nearer IPs hide farther IPs only across the projection they actually cover.
+              covered = addCoveredInterval(covered, candidate.overlap);
+            });
+
+            // Keep the original chip-edge dimension when no IP overlaps this side at all.
+            if (!hasVisibleNeighbor) {
+              const projectionCenter = (projectionStart + projectionEnd) / 2;
+              if (direction === 'right') {
+                const gap = topBox.maxX - selBox.maxX;
+                if (gap > 0.0001) annotations.push(renderDimLine(selBox.maxX, projectionCenter, topBox.maxX, projectionCenter, snapLabel(gap), SEL_COLOR, 'gap-right-boundary', 'up'));
+              } else if (direction === 'left') {
+                const gap = selBox.minX - topBox.minX;
+                if (gap > 0.0001) annotations.push(renderDimLine(topBox.minX, projectionCenter, selBox.minX, projectionCenter, snapLabel(gap), SEL_COLOR, 'gap-left-boundary', 'up'));
+              } else if (direction === 'top') {
+                const gap = topBox.maxY - selBox.maxY;
+                if (gap > 0.0001) annotations.push(renderDimLine(projectionCenter, selBox.maxY, projectionCenter, topBox.maxY, snapLabel(gap), SEL_COLOR, 'gap-top-boundary', 'right'));
+              } else {
+                const gap = selBox.minY - topBox.minY;
+                if (gap > 0.0001) annotations.push(renderDimLine(projectionCenter, topBox.minY, projectionCenter, selBox.minY, snapLabel(gap), SEL_COLOR, 'gap-bottom-boundary', 'right'));
+              }
             }
-          });
-          const botGap = selBox.minY - botStart;
-          if (botGap > 0.0001) {
-            const xCenter = (selBox.minX + selBox.maxX) / 2;
-            annotations.push(renderDimLine(
-              xCenter, botStart, xCenter, selBox.minY,
-              snapLabel(botGap), SEL_COLOR, 'gap-bot', 'right'
-            ));
-          }
+          };
+
+          renderVisibleNeighbors('right');
+          renderVisibleNeighbors('left');
+          renderVisibleNeighbors('top');
+          renderVisibleNeighbors('bottom');
         }
       }
     }
 
     if (autoMode) {
       const allBoxes = instances
-        .map(i => ({ id: i.id, box: computeInstanceBBox(i) }))
-        .filter(x => x.box !== null) as { id: string; box: BBox }[];
+        .map(i => ({ id: i.id, name: i.name, box: computeInstanceBBox(i) }))
+        .filter(x => x.box !== null) as { id: string; name: string; box: BBox }[];
       const seenPairs = new Set<string>();
 
-      allBoxes.forEach(({ id: idA, box: bA }) => {
-        allBoxes.forEach(({ id: idB, box: bB }) => {
-          if (idA === idB) return;
-          const pairKey = [idA, idB].sort().join('|');
-          if (seenPairs.has(pairKey)) return;
+      type AutoDirection = 'right' | 'left' | 'top' | 'bottom';
+      allBoxes.forEach(source => {
+        (['right', 'left', 'top', 'bottom'] as AutoDirection[]).forEach(direction => {
+          const horizontal = direction === 'right' || direction === 'left';
+          const candidates = allBoxes.flatMap(target => {
+            if (source.id === target.id) return [];
+            const overlapStart = Math.max(
+              horizontal ? source.box.minY : source.box.minX,
+              horizontal ? target.box.minY : target.box.minX,
+            );
+            const overlapEnd = Math.min(
+              horizontal ? source.box.maxY : source.box.maxX,
+              horizontal ? target.box.maxY : target.box.maxX,
+            );
+            if (overlapEnd - overlapStart <= 0.0001) return [];
 
-          const yOverlap = Math.min(bA.maxY, bB.maxY) - Math.max(bA.minY, bB.minY);
-          const xOverlap = Math.min(bA.maxX, bB.maxX) - Math.max(bA.minX, bB.minX);
+            let gap: number;
+            if (direction === 'right') gap = target.box.minX - source.box.maxX;
+            else if (direction === 'left') gap = source.box.minX - target.box.maxX;
+            else if (direction === 'top') gap = target.box.minY - source.box.maxY;
+            else gap = source.box.minY - target.box.maxY;
+            if (gap <= 0.0001) return [];
 
-          if (bB.minX >= bA.maxX - 0.0001 && yOverlap > 0) {
-            const gap = bB.minX - bA.maxX;
-            if (gap > 0.0001) {
-              seenPairs.add(pairKey);
-              const midY = (Math.max(bA.minY, bB.minY) + Math.min(bA.maxY, bB.maxY)) / 2;
-              annotations.push(renderDimLine(bA.maxX, midY, bB.minX, midY, snapLabel(gap), AUTO_COLOR, `auto-h-${pairKey}`, 'up'));
-            }
-          } else if (bB.minY >= bA.maxY - 0.0001 && xOverlap > 0) {
-            const gap = bB.minY - bA.maxY;
-            if (gap > 0.0001) {
-              seenPairs.add(pairKey);
-              const midX = (Math.max(bA.minX, bB.minX) + Math.min(bA.maxX, bB.maxX)) / 2;
-              annotations.push(renderDimLine(midX, bA.maxY, midX, bB.minY, snapLabel(gap), AUTO_COLOR, `auto-v-${pairKey}`, 'right'));
-            }
+            return [{ target, gap, projectionCenter: (overlapStart + overlapEnd) / 2 }];
+          }).sort((a, b) => a.gap - b.gap);
+
+          const nearest = candidates[0];
+          if (!nearest) return;
+          const pairKey = [source.id, nearest.target.id].sort().join('|');
+          if (seenPairs.has(pairKey) || source.id === selectedId || nearest.target.id === selectedId) return;
+          seenPairs.add(pairKey);
+
+          const label = `${source.name} ↔ ${nearest.target.name} · ${snapLabel(nearest.gap)}`;
+          const key = `auto-${horizontal ? 'h' : 'v'}-${pairKey}`;
+          if (direction === 'right') {
+            annotations.push(renderDimLine(source.box.maxX, nearest.projectionCenter, nearest.target.box.minX, nearest.projectionCenter, label, AUTO_COLOR, key, 'up', true));
+          } else if (direction === 'left') {
+            annotations.push(renderDimLine(nearest.target.box.maxX, nearest.projectionCenter, source.box.minX, nearest.projectionCenter, label, AUTO_COLOR, key, 'up', true));
+          } else if (direction === 'top') {
+            annotations.push(renderDimLine(nearest.projectionCenter, source.box.maxY, nearest.projectionCenter, nearest.target.box.minY, label, AUTO_COLOR, key, 'right', true));
+          } else {
+            annotations.push(renderDimLine(nearest.projectionCenter, nearest.target.box.maxY, nearest.projectionCenter, source.box.minY, label, AUTO_COLOR, key, 'right', true));
           }
         });
       });
@@ -804,7 +986,7 @@ export const FloorplanCanvas: React.FC = () => {
         width={dimensions.width}
         height={dimensions.height}
         onWheel={handleWheel}
-        draggable={appMode === 'select'}
+        draggable={appMode === 'select' && !rotationDrag}
         onDragStart={() => setIsPanning(true)}
         onDragEnd={() => setIsPanning(false)}
         onMouseDown={handleMouseDown}
@@ -874,12 +1056,12 @@ export const FloorplanCanvas: React.FC = () => {
           } else if (appMode === 'place' && placementMasterId && snapped) {
             placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation);
           } else if (appMode === 'select' && (e.target === e.target.getStage() || e.target.name() === 'bg' || e.target.name() === 'overlay')) {
-            setSelectedInstance(null);
+            if (!e.evt.shiftKey) setSelectedInstance(null);
           }
         }}
         ref={stageRef}
         style={{ 
-          cursor: appMode === 'measure' ? 'crosshair' : (isPanning ? 'grabbing' : 'grab')
+          cursor: rotationDrag ? 'grabbing' : appMode === 'measure' ? 'crosshair' : (isPanning ? 'grabbing' : 'grab')
         }}
       >
         <Layer>
@@ -954,16 +1136,38 @@ export const FloorplanCanvas: React.FC = () => {
             if (!masterCell) return null;
             const w = masterCell.width * SCALE_FACTOR;
             const h = masterCell.height * SCALE_FACTOR;
-            const isSelected = selectedInstanceId === inst.id;
+            const isSelected = selectedInstanceIds.includes(inst.id);
 
-            const t = getTransformProps(inst.orientation);
+            const displayOrientation = rotationDrag?.instanceId === inst.id
+              ? rotationDrag.previewOrientation
+              : inst.orientation;
+            let displayX = inst.x;
+            let displayY = inst.y;
+            if (displayOrientation !== inst.orientation) {
+              const currentBounds = getPhysicalBounds({ ...inst, width: masterCell.width, height: masterCell.height });
+              const nextLocalBounds = getPhysicalBounds({ ...inst, x: 0, y: 0, orientation: displayOrientation, width: masterCell.width, height: masterCell.height });
+              const centered = clampInstancePosition(
+                currentBounds.centerX - nextLocalBounds.centerX,
+                currentBounds.centerY - nextLocalBounds.centerY,
+                displayOrientation,
+                masterCell.width,
+                masterCell.height,
+                topWidth,
+                topHeight,
+                gridSize,
+              );
+              displayX = centered.x;
+              displayY = centered.y;
+            }
+
+            const t = getTransformProps(displayOrientation);
 
             return (
               <Group
                 key={inst.id}
                 id={inst.id}
-                x={inst.x * SCALE_FACTOR}
-                y={inst.y * SCALE_FACTOR}
+                x={displayX * SCALE_FACTOR}
+                y={displayY * SCALE_FACTOR}
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
@@ -973,7 +1177,7 @@ export const FloorplanCanvas: React.FC = () => {
                 onClick={(e) => {
                   e.cancelBubble = true;
                   if (appMode === 'select') {
-                    setSelectedInstance(inst.id);
+                    setSelectedInstance(inst.id, e.evt.shiftKey);
                   }
                 }}
               >
@@ -1058,6 +1262,62 @@ export const FloorplanCanvas: React.FC = () => {
               </Group>
             );
           })}
+
+          {/* Mouse rotation handle: drag around the block center, snapping to 90-degree Cadence orientations. */}
+          {appMode === 'select' && selectedInstanceIds.length === 1 && (() => {
+            const instance = instances.find(item => item.id === selectedInstanceIds[0]);
+            if (!instance) return null;
+            const bounds = computeInstanceBBox(instance);
+            if (!bounds) return null;
+            const centerX = (bounds.minX + bounds.maxX) / 2 * SCALE_FACTOR;
+            const topY = bounds.maxY * SCALE_FACTOR;
+            const handleY = topY + 28 / stageScale;
+            const radius = 10 / stageScale;
+            const beginRotation = (event: KonvaEventObject<MouseEvent | TouchEvent>) => {
+              event.cancelBubble = true;
+              const pointer = stageRef.current?.getPointerPosition();
+              if (pointer) startRotation(instance.id, pointer);
+            };
+
+            return (
+              <Group key={`rotate-${instance.id}`}>
+                <Line
+                  points={[centerX, topY, centerX, handleY - radius]}
+                  stroke="#0ea5e9"
+                  strokeWidth={1.5 / stageScale}
+                  dash={[3 / stageScale, 3 / stageScale]}
+                  listening={false}
+                />
+                <Group
+                  x={centerX}
+                  y={handleY}
+                  onMouseDown={beginRotation}
+                  onTouchStart={beginRotation}
+                >
+                  <Circle
+                    radius={radius}
+                    fill={rotationDrag ? '#0284c7' : '#0ea5e9'}
+                    stroke="#ffffff"
+                    strokeWidth={2 / stageScale}
+                    shadowColor="rgba(15,23,42,0.35)"
+                    shadowBlur={5 / stageScale}
+                  />
+                  <Text
+                    text="↻"
+                    x={-radius}
+                    y={-radius * 0.72}
+                    width={radius * 2}
+                    align="center"
+                    fill="#ffffff"
+                    fontSize={radius * 1.35}
+                    fontStyle="bold"
+                    scaleY={-1}
+                    listening={false}
+                  />
+                </Group>
+              </Group>
+            );
+          })()}
 
           {/* Rulers */}
           {rulers.map(r => renderRuler(r, r.id, () => deleteRuler(r.id)))}
@@ -1156,6 +1416,12 @@ export const FloorplanCanvas: React.FC = () => {
       {appMode === 'measure' && (
         <div className="coordinate-overlay" style={{ top: 'auto', bottom: '16px', left: '50%', transform: 'translateX(-50%)', backgroundColor: 'rgba(234, 179, 8, 0.9)', color: '#0f172a', fontWeight: 'bold' }}>
           Measure Mode | Double-Click IP to Auto-Dimension | Press 'o' to toggle Ortho [ {orthogonalRuler ? 'ON' : 'OFF'} ] | Press 'Esc' to cancel
+        </div>
+      )}
+      {showAutoDim && appMode !== 'measure' && (
+        <div className="autodim-legend">
+          <span className="autodim-legend__swatch" />
+          Nearest visible gaps only · labels identify both IPs · hover a dimension to isolate it
         </div>
       )}
     </div>

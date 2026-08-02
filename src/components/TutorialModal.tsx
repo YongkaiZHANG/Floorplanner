@@ -28,7 +28,9 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => {
             </h3>
             <p style={{ color: 'var(--text-secondary)', lineHeight: '1.6' }}>
               <strong>Master IP (Cell):</strong> A template defining the size and name of an IP block. You create these in the left sidebar.<br/>
-              <strong>Instance:</strong> An actual copy of a Master IP placed on your top-level ASIC canvas. You can place multiple instances of the same Master IP.
+              <strong>Instance:</strong> An actual copy of a Master IP placed on your top-level ASIC canvas. You can place multiple instances of the same Master IP.<br/>
+              <strong>Rotate:</strong> Select one instance and drag its blue handle, use the Properties buttons, or press <kbd style={kbdStyle}>r</kbd>.<br/>
+              <strong>Auto-Dim:</strong> Shows nearest visible gaps with both instance names. Hover one violet dimension to isolate it.
             </p>
           </section>
 
@@ -65,8 +67,14 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => {
               <div><kbd style={kbdStyle}>k</kbd> Ruler (Measure distance)</div>
               <div><kbd style={kbdStyle}>Shift + k</kbd> Clear all rulers</div>
               <div><kbd style={kbdStyle}>o</kbd> Toggle Orthogonal measuring</div>
+              <div><kbd style={kbdStyle}>r / Shift + r</kbd> Rotate selected block ±90°</div>
               <div><kbd style={kbdStyle}>f</kbd> Fit view to screen</div>
               <div><kbd style={kbdStyle}>u</kbd> Undo last action</div>
+              <div><kbd style={kbdStyle}>Ctrl/Cmd + Z</kbd> Undo project edit</div>
+              <div><kbd style={kbdStyle}>Ctrl/Cmd + Shift + Z</kbd> Redo project edit</div>
+              <div><kbd style={kbdStyle}>Ctrl/Cmd + S</kbd> Save .flp project</div>
+              <div><kbd style={kbdStyle}>Shift + Click</kbd> Multi-select blocks</div>
+              <div><kbd style={kbdStyle}>Ctrl/Cmd + A</kbd> Select all blocks</div>
               <div><kbd style={kbdStyle}>Del</kbd> Delete selected instance</div>
               <div><kbd style={kbdStyle}>Esc</kbd> Cancel current action</div>
             </div>

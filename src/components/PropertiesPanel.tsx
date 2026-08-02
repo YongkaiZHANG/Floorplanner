@@ -1,17 +1,49 @@
 import React from 'react';
-import { useStore } from '../store/useStore';
-import { FiInfo, FiTrash2, FiPaperclip } from 'react-icons/fi';
+import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
+import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw } from 'react-icons/fi';
 import './PropertiesPanel.css';
 
 const ORIENTATIONS = ['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'];
 
 export const PropertiesPanel: React.FC = () => {
-  const { masterCells, instances, selectedInstanceId, updateInstancePosition, updateInstanceOrientation, deleteInstance, rightSidebarPinned, setRightSidebarPinned } = useStore();
+  const { masterCells, instances, selectedInstanceId, selectedInstanceIds, updateInstancePosition, updateInstanceOrientation, deleteSelectedInstances, rightSidebarPinned, setRightSidebarPinned } = useStore();
   const [isHovered, setIsHovered] = React.useState(false);
   const hoverTimeout = React.useRef<number | null>(null);
   
   const selectedInstance = instances.find(inst => inst.id === selectedInstanceId);
   const masterCell = selectedInstance ? masterCells[selectedInstance.cellId] : null;
+  const [draftX, setDraftX] = React.useState('0');
+  const [draftY, setDraftY] = React.useState('0');
+
+  React.useEffect(() => {
+    if (!selectedInstance) return;
+    setDraftX(selectedInstance.x.toString());
+    setDraftY(selectedInstance.y.toString());
+  }, [selectedInstance]);
+
+  const commitPosition = (axis: 'x' | 'y') => {
+    if (!selectedInstance) return;
+    const value = Number.parseFloat(axis === 'x' ? draftX : draftY);
+    if (!Number.isFinite(value)) {
+      setDraftX(selectedInstance.x.toString());
+      setDraftY(selectedInstance.y.toString());
+      return;
+    }
+    updateInstancePosition(
+      selectedInstance.id,
+      axis === 'x' ? value : selectedInstance.x,
+      axis === 'y' ? value : selectedInstance.y,
+    );
+  };
+
+  const handlePositionKeyDown = (event: React.KeyboardEvent<HTMLInputElement>, axis: 'x' | 'y') => {
+    if (event.key === 'Enter') event.currentTarget.blur();
+    if (event.key === 'Escape' && selectedInstance) {
+      if (axis === 'x') setDraftX(selectedInstance.x.toString());
+      else setDraftY(selectedInstance.y.toString());
+      event.currentTarget.blur();
+    }
+  };
 
   const handleMouseEnter = () => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
@@ -49,11 +81,14 @@ export const PropertiesPanel: React.FC = () => {
           <>
             <div className="panel-header">
               <h3 className="section-title">Properties</h3>
+              {selectedInstanceIds.length > 1 && (
+                <span className="selection-count">{selectedInstanceIds.length} blocks selected</span>
+              )}
             </div>
             
             <div className="prop-section">
               <div className="prop-row">
-                <span className="prop-label">Instance</span>
+                <span className="prop-label">{selectedInstanceIds.length > 1 ? 'Primary' : 'Instance'}</span>
                 <span className="prop-value highlight">{selectedInstance.name}</span>
               </div>
               <div className="prop-row">
@@ -79,11 +114,10 @@ export const PropertiesPanel: React.FC = () => {
                     type="number" 
                     step="any"
                     className="input-field" 
-                    value={selectedInstance.x}
-                    onChange={e => {
-                      const num = parseFloat(e.target.value) || 0;
-                      updateInstancePosition(selectedInstance.id, num, selectedInstance.y);
-                    }}
+                    value={draftX}
+                    onChange={e => setDraftX(e.target.value)}
+                    onBlur={() => commitPosition('x')}
+                    onKeyDown={event => handlePositionKeyDown(event, 'x')}
                   />
                 </div>
                 <div className="form-group">
@@ -92,11 +126,10 @@ export const PropertiesPanel: React.FC = () => {
                     type="number" 
                     step="any"
                     className="input-field" 
-                    value={selectedInstance.y}
-                    onChange={e => {
-                      const num = parseFloat(e.target.value) || 0;
-                      updateInstancePosition(selectedInstance.id, selectedInstance.x, num);
-                    }}
+                    value={draftY}
+                    onChange={e => setDraftY(e.target.value)}
+                    onBlur={() => commitPosition('y')}
+                    onKeyDown={event => handlePositionKeyDown(event, 'y')}
                   />
                 </div>
               </div>
@@ -111,12 +144,31 @@ export const PropertiesPanel: React.FC = () => {
                     <option key={ort} value={ort}>{ort}</option>
                   ))}
                 </select>
+                <div className="rotation-actions">
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => updateInstanceOrientation(selectedInstance.id, rotateOrientationByQuarterTurns(selectedInstance.orientation, -1))}
+                    title="Rotate 90° clockwise"
+                  >
+                    <FiRotateCw /> −90°
+                  </button>
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => updateInstanceOrientation(selectedInstance.id, rotateOrientationByQuarterTurns(selectedInstance.orientation, 1))}
+                    title="Rotate 90° counter-clockwise"
+                  >
+                    <FiRotateCcw /> +90°
+                  </button>
+                </div>
+                <p className="rotation-hint">You can also drag the blue rotate handle above the selected block.</p>
               </div>
             </div>
 
             <div className="prop-section">
-              <button className="btn btn-danger" onClick={() => deleteInstance(selectedInstance.id)}>
-                <FiTrash2 /> Delete Instance
+              <button className="btn btn-danger" onClick={deleteSelectedInstances}>
+                <FiTrash2 /> Delete {selectedInstanceIds.length > 1 ? `${selectedInstanceIds.length} Instances` : 'Instance'}
               </button>
             </div>
           </>

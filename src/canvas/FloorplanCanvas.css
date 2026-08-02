@@ -26,3 +26,29 @@
   backdrop-filter: blur(4px);
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
 }
+
+.autodim-legend {
+  position: absolute;
+  right: 18px;
+  bottom: 16px;
+  z-index: 5;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.88);
+  color: #ddd6fe;
+  font-size: 11px;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
+}
+
+.autodim-legend__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #a78bfa;
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.18);
+}

@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
+import { alignInstances, distributeInstances, getPhysicalBounds } from '../utils/alignment.ts';
+import type { AlignmentOperation, DistributionAxis } from '../utils/alignment.ts';
+import type { ProjectSnapshot } from './projectDocument.ts';
+import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
+import type { ProjectHistory } from './projectHistory.ts';
 
 export type Instance = {
   id: string;
@@ -27,7 +32,7 @@ export type Ruler = {
   endY: number;
 };
 
-type ProjectState = {
+export type ProjectState = {
   gridSize: number;
   appMode: 'select' | 'measure' | 'place';
   
@@ -41,6 +46,7 @@ type ProjectState = {
   rulers: Ruler[];
   
   selectedInstanceId: string | null;
+  selectedInstanceIds: string[];
   showCreateModal: boolean;
   showInstantiateModal: boolean;
   leftSidebarPinned: boolean;
@@ -50,7 +56,7 @@ type ProjectState = {
   
   placementMasterId: string | null;
   placementOrientation: string;
-  pastStates: { instances: Instance[]; rulers: Ruler[] }[];
+  history: ProjectHistory;
   
   setGridSize: (size: number) => void;
   setAppMode: (mode: 'select' | 'measure' | 'place') => void;
@@ -69,17 +75,22 @@ type ProjectState = {
   
   updateInstancePosition: (instanceId: string, x: number, y: number) => void;
   updateInstanceOrientation: (instanceId: string, orientation: string) => void;
-  setSelectedInstance: (id: string | null) => void;
+  setSelectedInstance: (id: string | null, additive?: boolean) => void;
+  selectAllInstances: () => void;
   deleteInstance: (id: string) => void;
+  deleteSelectedInstances: () => void;
   
   addRuler: (startX: number, startY: number, endX: number, endY: number) => void;
   deleteRuler: (id: string) => void;
   clearRulers: () => void;
   
   undo: () => void;
+  redo: () => void;
+  alignSelectedInstances: (operation: AlignmentOperation) => void;
+  distributeSelectedInstances: (axis: DistributionAxis) => void;
   toggleOrthogonalRuler: () => void;
   toggleAutoDim: () => void;
-  loadProject: (data: Partial<ProjectState>) => void;
+  loadProject: (data: ProjectSnapshot) => void;
 };
 
 export const getTransformProps = (orientation: string) => {
@@ -146,6 +157,59 @@ export const clampInstancePosition = (
   return { x: clampedX, y: clampedY };
 };
 
+const getNextInstanceName = (instances: Instance[]) => {
+  const usedNames = new Set(instances.map(instance => instance.name));
+  let index = 0;
+  while (usedNames.has(`I${index}`)) index += 1;
+  return `I${index}`;
+};
+
+const ORIENTATION_ROTATION_CYCLES = [
+  ['R0', 'R90', 'R180', 'R270'],
+  ['MX', 'MXR90', 'MY', 'MYR90'],
+] as const;
+
+export const rotateOrientationByQuarterTurns = (orientation: string, quarterTurns: number) => {
+  const cycle = ORIENTATION_ROTATION_CYCLES.find(values => values.includes(orientation as never));
+  if (!cycle) return orientation;
+  const currentIndex = cycle.indexOf(orientation as never);
+  const nextIndex = ((currentIndex + quarterTurns) % cycle.length + cycle.length) % cycle.length;
+  return cycle[nextIndex];
+};
+
+export const getProjectSnapshot = (state: ProjectState): ProjectSnapshot => ({
+  gridSize: state.gridSize,
+  topWidth: state.topWidth,
+  topHeight: state.topHeight,
+  topLibName: state.topLibName,
+  topCellName: state.topCellName,
+  masterCells: state.masterCells,
+  instances: state.instances,
+  rulers: state.rulers,
+});
+
+const commitProjectPatch = (
+  state: ProjectState,
+  label: string,
+  patch: Partial<ProjectSnapshot>,
+) => {
+  const before = getProjectSnapshot(state);
+  const after = { ...before, ...patch };
+  return {
+    ...patch,
+    history: recordHistory(state.history, label, before, after),
+  };
+};
+
+const selectionAfterInstancesChange = (state: ProjectState, instances: Instance[]) => {
+  const existingIds = new Set(instances.map(instance => instance.id));
+  const selectedInstanceIds = state.selectedInstanceIds.filter(id => existingIds.has(id));
+  const selectedInstanceId = state.selectedInstanceId && existingIds.has(state.selectedInstanceId)
+    ? state.selectedInstanceId
+    : selectedInstanceIds.at(-1) ?? null;
+  return { selectedInstanceId, selectedInstanceIds };
+};
+
 export const useStore = create<ProjectState>((set) => ({
   gridSize: 0.005,
   appMode: 'select',
@@ -159,6 +223,7 @@ export const useStore = create<ProjectState>((set) => ({
   instances: [],
   rulers: [],
   selectedInstanceId: null,
+  selectedInstanceIds: [],
   showCreateModal: false,
   showInstantiateModal: false,
   leftSidebarPinned: false,
@@ -166,14 +231,22 @@ export const useStore = create<ProjectState>((set) => ({
   
   placementMasterId: null,
   placementOrientation: 'R0',
-  pastStates: [],
+  history: { past: [], future: [] },
   orthogonalRuler: false,
   showAutoDim: false,
 
-  setGridSize: (size) => set({ gridSize: size }),
+  setGridSize: (size) => set((state) => commitProjectPatch(state, 'Change grid', { gridSize: size })),
   setAppMode: (mode) => set({ appMode: mode }),
-  setTopDimensions: (w, h) => set({ topWidth: w, topHeight: h }),
-  setTopNames: (lib, cell) => set({ topLibName: lib, topCellName: cell }),
+  setTopDimensions: (w, h) => set((state) => {
+    const instances = state.instances.map(instance => {
+      const master = state.masterCells[instance.cellId];
+      if (!master) return instance;
+      const position = clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, w, h, state.gridSize);
+      return { ...instance, ...position };
+    });
+    return commitProjectPatch(state, 'Resize top cell', { topWidth: w, topHeight: h, instances });
+  }),
+  setTopNames: (lib, cell) => set((state) => commitProjectPatch(state, 'Rename top cell', { topLibName: lib, topCellName: cell })),
   setShowCreateModal: (show) => set({ showCreateModal: show }),
   setShowInstantiateModal: (show) => set({ showInstantiateModal: show }),
   setLeftSidebarPinned: (pinned) => set({ leftSidebarPinned: pinned }),
@@ -185,22 +258,26 @@ export const useStore = create<ProjectState>((set) => ({
     if (existing) return state; 
     
     const id = uuidv4();
-    return {
+    return commitProjectPatch(state, `Create ${cellName}`, {
       masterCells: {
         ...state.masterCells,
         [id]: { id, libName, cellName, width: w, height: h, color }
-      }
-    };
+      },
+    });
   }),
 
   updateMasterCell: (id, libName, cellName, w, h, color) => set((state) => {
     if (!state.masterCells[id]) return state;
-    return {
-      masterCells: {
-        ...state.masterCells,
-        [id]: { ...state.masterCells[id], libName, cellName, width: w, height: h, color }
-      }
+    const masterCells = {
+      ...state.masterCells,
+      [id]: { ...state.masterCells[id], libName, cellName, width: w, height: h, color },
     };
+    const instances = state.instances.map(instance => {
+      if (instance.cellId !== id) return instance;
+      const position = clampInstancePosition(instance.x, instance.y, instance.orientation, w, h, state.topWidth, state.topHeight, state.gridSize);
+      return { ...instance, ...position };
+    });
+    return commitProjectPatch(state, `Edit ${cellName}`, { masterCells, instances });
   }),
 
   deleteMasterCell: (id) => set((state) => {
@@ -210,9 +287,11 @@ export const useStore = create<ProjectState>((set) => ({
     // Also remove instances of this cell
     const newInstances = state.instances.filter(inst => inst.cellId !== id);
     return {
-      masterCells: newMasterCells,
-      instances: newInstances,
-      selectedInstanceId: state.selectedInstanceId && state.instances.find(i => i.id === state.selectedInstanceId)?.cellId === id ? null : state.selectedInstanceId,
+      ...commitProjectPatch(state, `Delete ${state.masterCells[id].cellName}`, {
+        masterCells: newMasterCells,
+        instances: newInstances,
+      }),
+      ...selectionAfterInstancesChange(state, newInstances),
     };
   }),
 
@@ -225,79 +304,164 @@ export const useStore = create<ProjectState>((set) => ({
     const newInst: Instance = {
       id: uuidv4(),
       cellId,
-      name: `I${state.instances.length}`,
+      name: getNextInstanceName(state.instances),
       x: clamped.x,
       y: clamped.y,
       orientation: orientation,
     };
+    const instances = [...state.instances, newInst];
     return {
-      pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
-      instances: [...state.instances, newInst],
+      ...commitProjectPatch(state, `Place ${newInst.name}`, { instances }),
       selectedInstanceId: newInst.id,
+      selectedInstanceIds: [newInst.id],
       // Cadence keeps placement mode active so you can place multiple. We won't change appMode.
     };
   }),
 
-  updateInstancePosition: (instanceId, x, y) => set((state) => ({
-    pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
-    instances: state.instances.map(inst => {
+  updateInstancePosition: (instanceId, x, y) => set((state) => {
+    const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
         const master = state.masterCells[inst.cellId];
         const clamped = clampInstancePosition(x, y, inst.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
         return { ...inst, x: clamped.x, y: clamped.y };
       }
       return inst;
-    })
-  })),
+    });
+    return commitProjectPatch(state, `Move ${state.instances.find(instance => instance.id === instanceId)?.name ?? 'instance'}`, { instances });
+  }),
   
-  updateInstanceOrientation: (instanceId, orientation) => set((state) => ({
-    pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
-    instances: state.instances.map(inst => {
+  updateInstanceOrientation: (instanceId, orientation) => set((state) => {
+    const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
         const master = state.masterCells[inst.cellId];
-        const clamped = clampInstancePosition(inst.x, inst.y, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+        const currentBounds = getPhysicalBounds({ ...inst, width: master.width, height: master.height });
+        const nextLocalBounds = getPhysicalBounds({ ...inst, x: 0, y: 0, orientation, width: master.width, height: master.height });
+        const centeredX = currentBounds.centerX - nextLocalBounds.centerX;
+        const centeredY = currentBounds.centerY - nextLocalBounds.centerY;
+        const clamped = clampInstancePosition(centeredX, centeredY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
         return { ...inst, orientation, x: clamped.x, y: clamped.y };
       }
       return inst;
-    })
+    });
+    return commitProjectPatch(state, `Orient ${state.instances.find(instance => instance.id === instanceId)?.name ?? 'instance'}`, { instances });
+  }),
+
+  setSelectedInstance: (id, additive = false) => set((state) => {
+    if (!id) return { selectedInstanceId: null, selectedInstanceIds: [] };
+    if (!additive) return { selectedInstanceId: id, selectedInstanceIds: [id] };
+
+    const isSelected = state.selectedInstanceIds.includes(id);
+    const selectedInstanceIds = isSelected
+      ? state.selectedInstanceIds.filter(selectedId => selectedId !== id)
+      : [...state.selectedInstanceIds, id];
+    return {
+      selectedInstanceIds,
+      selectedInstanceId: isSelected
+        ? (state.selectedInstanceId === id ? selectedInstanceIds.at(-1) ?? null : state.selectedInstanceId)
+        : id,
+    };
+  }),
+
+  selectAllInstances: () => set((state) => ({
+    selectedInstanceIds: state.instances.map(instance => instance.id),
+    selectedInstanceId: state.instances.at(-1)?.id ?? null,
   })),
 
-  setSelectedInstance: (id) => set({ selectedInstanceId: id }),
+  deleteInstance: (id) => set((state) => {
+    const instances = state.instances.filter(inst => inst.id !== id);
+    return {
+      ...commitProjectPatch(state, `Delete ${state.instances.find(instance => instance.id === id)?.name ?? 'instance'}`, { instances }),
+      ...selectionAfterInstancesChange(state, instances),
+    };
+  }),
 
-  deleteInstance: (id) => set((state) => ({
-    pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
-    instances: state.instances.filter(inst => inst.id !== id),
-    selectedInstanceId: state.selectedInstanceId === id ? null : state.selectedInstanceId
-  })),
+  deleteSelectedInstances: () => set((state) => {
+    if (state.selectedInstanceIds.length === 0) return state;
+    const selectedIds = new Set(state.selectedInstanceIds);
+    const instances = state.instances.filter(instance => !selectedIds.has(instance.id));
+    return {
+      ...commitProjectPatch(state, `Delete ${state.selectedInstanceIds.length} block${state.selectedInstanceIds.length === 1 ? '' : 's'}`, { instances }),
+      selectedInstanceId: null,
+      selectedInstanceIds: [],
+    };
+  }),
 
-  addRuler: (startX, startY, endX, endY) => set((state) => ({
-    pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
-    rulers: [...state.rulers, { id: uuidv4(), startX, startY, endX, endY }]
+  addRuler: (startX, startY, endX, endY) => set((state) => commitProjectPatch(state, 'Add ruler', {
+    rulers: [...state.rulers, { id: uuidv4(), startX, startY, endX, endY }],
   })),
-  deleteRuler: (id) => set((state) => ({
-    pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
-    rulers: state.rulers.filter(r => r.id !== id)
+  deleteRuler: (id) => set((state) => commitProjectPatch(state, 'Delete ruler', {
+    rulers: state.rulers.filter(r => r.id !== id),
   })),
-  clearRulers: () => set((state) => ({ 
-    pastStates: [...state.pastStates.slice(-19), { instances: state.instances, rulers: state.rulers }],
-    rulers: [] 
-  })),
+  clearRulers: () => set((state) => commitProjectPatch(state, 'Clear rulers', { rulers: [] })),
   
   undo: () => set((state) => {
-    if (state.pastStates.length === 0) return state;
-    const previous = state.pastStates[state.pastStates.length - 1];
+    const result = undoHistory(state.history, getProjectSnapshot(state));
+    if (!result) return state;
     return {
-      instances: previous.instances,
-      rulers: previous.rulers,
-      pastStates: state.pastStates.slice(0, -1),
-      selectedInstanceId: null
+      ...result.snapshot,
+      history: result.history,
+      ...selectionAfterInstancesChange(state, result.snapshot.instances),
     };
+  }),
+
+  redo: () => set((state) => {
+    const result = redoHistory(state.history, getProjectSnapshot(state));
+    if (!result) return state;
+    return {
+      ...result.snapshot,
+      history: result.history,
+      ...selectionAfterInstancesChange(state, result.snapshot.instances),
+    };
+  }),
+
+  alignSelectedInstances: (operation) => set((state) => {
+    if (state.selectedInstanceIds.length < 2) return state;
+    const selectedIds = new Set(state.selectedInstanceIds);
+    const selected = state.instances
+      .filter(instance => selectedIds.has(instance.id))
+      .map(instance => {
+        const master = state.masterCells[instance.cellId];
+        return { ...instance, width: master.width, height: master.height };
+      });
+    const positions = alignInstances(selected, operation, {
+      topWidth: state.topWidth,
+      topHeight: state.topHeight,
+      gridSize: state.gridSize,
+    });
+    const positionById = new Map(positions.map(position => [position.id, position]));
+    const instances = state.instances.map(instance => {
+      const position = positionById.get(instance.id);
+      return position ? { ...instance, x: position.x, y: position.y } : instance;
+    });
+    return commitProjectPatch(state, `Align ${operation.replace('-', ' ')}`, { instances });
+  }),
+
+  distributeSelectedInstances: (axis) => set((state) => {
+    if (state.selectedInstanceIds.length < 3) return state;
+    const selectedIds = new Set(state.selectedInstanceIds);
+    const selected = state.instances
+      .filter(instance => selectedIds.has(instance.id))
+      .map(instance => {
+        const master = state.masterCells[instance.cellId];
+        return { ...instance, width: master.width, height: master.height };
+      });
+    const positions = distributeInstances(selected, axis, {
+      topWidth: state.topWidth,
+      topHeight: state.topHeight,
+      gridSize: state.gridSize,
+    });
+    const positionById = new Map(positions.map(position => [position.id, position]));
+    const instances = state.instances.map(instance => {
+      const position = positionById.get(instance.id);
+      return position ? { ...instance, x: position.x, y: position.y } : instance;
+    });
+    return commitProjectPatch(state, `Distribute ${axis}`, { instances });
   }),
   
   toggleOrthogonalRuler: () => set((state) => ({ orthogonalRuler: !state.orthogonalRuler })),
   toggleAutoDim: () => set((state) => ({ showAutoDim: !state.showAutoDim })),
 
-  loadProject: (data: Partial<ProjectState>) => set((state) => ({
+  loadProject: (data) => set((state) => ({
     ...state,
     gridSize: data.gridSize ?? state.gridSize,
     topWidth: data.topWidth ?? state.topWidth,
@@ -307,8 +471,9 @@ export const useStore = create<ProjectState>((set) => ({
     masterCells: data.masterCells ?? {},
     instances: data.instances ?? [],
     rulers: data.rulers ?? [],
-    pastStates: [],
+    history: { past: [], future: [] },
     selectedInstanceId: null,
+    selectedInstanceIds: [],
     appMode: 'select'
   })),
 }));

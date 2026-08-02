@@ -72,7 +72,24 @@
 .topbar-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
+}
+
+.save-status {
+  padding-left: 7px;
+  border-left: 1px solid var(--border-color);
+  color: #86efac;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.save-status.dirty {
+  color: #fbbf24;
+}
+
+.save-status.new {
+  color: var(--text-secondary);
 }
 
 .config-btn {
@@ -95,4 +112,38 @@
 .export-btn {
   font-weight: 600;
   letter-spacing: 0.5px;
+}
+
+@media (max-width: 1500px) {
+  .topbar {
+    padding: 0 12px;
+  }
+
+  .topbar-left {
+    gap: 12px;
+  }
+
+  .topbar-right {
+    gap: 6px;
+  }
+
+  .topbar-right .btn {
+    padding-inline: 10px;
+  }
+
+  .shortcuts-btn,
+  .save-status {
+    display: none;
+  }
+}
+
+@media (max-width: 1250px) {
+  .logo h1,
+  .grid-settings label {
+    display: none;
+  }
+
+  .mode-btn {
+    padding-inline: 8px;
+  }
 }

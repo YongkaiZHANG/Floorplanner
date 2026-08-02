@@ -176,3 +176,32 @@
   padding: 8px;
   text-align: center;
 }
+.custom-color-picker {
+  margin-top: 12px;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.custom-color-picker input[type='color'] {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.custom-color-picker code {
+  color: var(--text-primary);
+  font-size: 11px;
+}

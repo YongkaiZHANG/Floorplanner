@@ -1,13 +1,18 @@
-import React, { useState } from 'react';
-import { useStore } from '../store/useStore';
+import React, { useEffect, useState } from 'react';
+import { getProjectSnapshot, useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
 import { exportSVG } from '../utils/svgExport';
-import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid } from 'react-icons/fi';
+import { parseProjectDocument, serializeProjectDocument } from '../store/projectDocument';
+import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
+import { EditingToolbar } from './EditingToolbar';
+import type { AlignmentAction } from './EditingToolbar';
+import { ToastViewport } from './ToastViewport';
+import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [tempW, setTempW] = useState(topWidth.toString());
@@ -15,14 +20,72 @@ export const Topbar: React.FC = () => {
   
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
+  const [savedSignature, setSavedSignature] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const projectSignature = JSON.stringify(getProjectSnapshot(useStore.getState()));
+  const isDirty = savedSignature === null ? history.past.length > 0 : projectSignature !== savedSignature;
+  const saveStatus = isDirty ? 'Unsaved' : savedSignature === null ? 'Not saved' : 'Saved';
+
+  const showToast = (message: string, kind: ToastKind = 'success') => {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts(current => [...current, { id, message, kind }].slice(-3));
+    window.setTimeout(() => setToasts(current => current.filter(toast => toast.id !== id)), 3200);
+  };
+
+  const createSkillCode = () => {
+    try {
+      return generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to generate Cadence SKILL code.');
+      return null;
+    }
+  };
 
   const handleExport = () => {
-    const skillCode = generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize);
+    const skillCode = createSkillCode();
+    if (!skillCode) return;
     downloadSkillFile(`${topCellName}.il`, skillCode);
   };
+
+  const handleSaveProject = () => {
+    const snapshot = getProjectSnapshot(useStore.getState());
+    const blob = new Blob([serializeProjectDocument(snapshot)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${snapshot.topCellName}.flp`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setSavedSignature(JSON.stringify(snapshot));
+    showToast(`${snapshot.topCellName}.flp saved`);
+  };
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        handleSaveProject();
+      }
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  });
+
+  useEffect(() => {
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      if (!isDirty) return;
+      event.preventDefault();
+    };
+    window.addEventListener('beforeunload', warnBeforeLeaving);
+    return () => window.removeEventListener('beforeunload', warnBeforeLeaving);
+  }, [isDirty]);
   
   const handlePreview = () => {
-    const code = generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize);
+    const code = createSkillCode();
+    if (!code) return;
     setGeneratedCode(code);
     setShowCodePreview(true);
   };
@@ -30,6 +93,10 @@ export const Topbar: React.FC = () => {
   const handleLoadProject = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (isDirty && !confirm('Open another project and discard the current unsaved changes?')) {
+      e.target.value = '';
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
@@ -38,24 +105,36 @@ export const Topbar: React.FC = () => {
         if (text.includes('<metadata class="floorplan-data">')) {
           const match = text.match(/<!\[CDATA\[(.*?)\]\]>/s);
           if (match && match[1]) {
-            jsonData = JSON.parse(match[1]);
+            jsonData = parseProjectDocument(match[1]);
           }
         } else {
-          // fallback to standard json parsing
-          jsonData = JSON.parse(text);
+          jsonData = parseProjectDocument(text);
         }
         
         if (jsonData) {
           useStore.getState().loadProject(jsonData);
+          setSavedSignature(JSON.stringify(jsonData));
+          showToast(`${jsonData.topCellName} opened`);
         } else {
           throw new Error("No valid data found");
         }
-      } catch (err) {
+      } catch {
         alert('Invalid project or SVG file format. Please ensure it was exported from this tool.');
       }
     };
     reader.readAsText(file);
     e.target.value = '';
+  };
+
+  const handleAlignment = (action: AlignmentAction) => {
+    try {
+      if (action === 'distribute-horizontal') distributeSelectedInstances('horizontal');
+      else if (action === 'distribute-vertical') distributeSelectedInstances('vertical');
+      else alignSelectedInstances(action);
+      showToast(`Applied ${action.replaceAll('-', ' ')}`, 'info');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to arrange the selected blocks.');
+    }
   };
 
   const handleSaveConfig = () => {
@@ -99,7 +178,7 @@ export const Topbar: React.FC = () => {
           <button
             className={`mode-btn${showAutoDim ? ' active' : ''}`}
             onClick={toggleAutoDim}
-            title="Auto-Dimension: show all IP gaps (violet). Also, select any IP to see its gaps (blue)."
+            title="Auto-Dimension: show nearest visible IP gaps with named endpoints. Hover a dimension to isolate it."
             style={showAutoDim ? { color: '#a78bfa', borderColor: '#a78bfa' } : {}}
           >
             <FiGrid /> Auto-Dim
@@ -108,8 +187,21 @@ export const Topbar: React.FC = () => {
       </div>
 
       <div className="topbar-right">
-        <label className="btn" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }} title="Import SVG or .flp Project">
-          <FiUpload /> Import SVG
+        <EditingToolbar
+          canUndo={history.past.length > 0}
+          canRedo={history.future.length > 0}
+          selectionCount={selectedInstanceIds.length}
+          onUndo={undo}
+          onRedo={redo}
+          onAlign={handleAlignment}
+        />
+
+        <button className="btn" onClick={handleSaveProject} title="Save Project (Ctrl/Cmd+S)">
+          <FiSave /> Save
+          <span className={`save-status ${isDirty ? 'dirty' : savedSignature === null ? 'new' : ''}`}>{saveStatus}</span>
+        </button>
+        <label className="btn" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }} title="Open SVG, .flp, or JSON Project">
+          <FiUpload /> Open Project
           <input type="file" accept=".svg,.flp,.json" style={{ display: 'none' }} onChange={handleLoadProject} />
         </label>
         <button className="btn" onClick={exportSVG} style={{ display: 'flex', alignItems: 'center', gap: '8px' }} title="Export SVG Project">
@@ -119,7 +211,7 @@ export const Topbar: React.FC = () => {
         <div className="vertical-divider" style={{ width: '1px', height: '24px', backgroundColor: 'var(--border-color)', margin: '0 8px' }}></div>
 
         <button className="btn config-btn" onClick={() => setShowConfig(true)}>
-          <FiSettings /> top_asic ({topWidth}x{topHeight})
+          <FiSettings /> {topCellName} ({topWidth}x{topHeight})
         </button>
         <div className="grid-settings">
           <label>Grid (um):</label>
@@ -132,7 +224,7 @@ export const Topbar: React.FC = () => {
           />
         </div>
         <div className="vertical-divider" style={{ width: '1px', height: '24px', backgroundColor: 'var(--border-color)', margin: '0 4px' }}></div>
-        <button className="btn" onClick={() => setShowTutorial(true)} style={{ backgroundColor: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+        <button className="btn shortcuts-btn" onClick={() => setShowTutorial(true)} style={{ backgroundColor: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
           <FiBookOpen /> Shortcuts
         </button>
         <button className="btn btn-primary preview-btn" onClick={handlePreview}>
@@ -188,8 +280,9 @@ export const Topbar: React.FC = () => {
             <div className="modal-actions">
               <button className="btn" onClick={() => setShowCodePreview(false)}>Close</button>
               <button className="btn" onClick={() => { 
-                navigator.clipboard.writeText(generatedCode);
-                // Can use a lightweight notification or just rely on native OS toast
+                navigator.clipboard.writeText(generatedCode)
+                  .then(() => showToast('SKILL code copied'))
+                  .catch(() => showToast('Could not copy SKILL code', 'error'));
               }}>
                 <FiCopy /> Copy to Clipboard
               </button>
@@ -200,6 +293,7 @@ export const Topbar: React.FC = () => {
           </div>
         </div>
       )}
+      <ToastViewport messages={toasts} onDismiss={id => setToasts(current => current.filter(toast => toast.id !== id))} />
     </div>
   );
 };

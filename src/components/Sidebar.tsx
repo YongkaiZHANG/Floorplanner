@@ -4,15 +4,17 @@ import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, F
 import './Sidebar.css';
 
 const PRESET_COLORS = [
-  '#3b82f6', '#ef4444', '#f97316', '#eab308', '#22c55e', 
-  '#06b6d4', '#8b5cf6', '#d946ef', '#64748b', '#ffffff'
+  '#2563eb', '#3b82f6', '#60a5fa', '#0ea5e9', '#06b6d4', '#14b8a6',
+  '#16a34a', '#22c55e', '#84cc16', '#ca8a04', '#eab308', '#f59e0b',
+  '#ea580c', '#f97316', '#dc2626', '#ef4444', '#e11d48', '#ec4899',
+  '#c026d3', '#a855f7', '#7c3aed', '#6366f1', '#64748b', '#ffffff',
 ];
 
 export const Sidebar: React.FC = () => {
   const { 
     topWidth, topHeight, topLibName, topCellName, 
     setTopDimensions, setTopNames,
-    masterCells, instances, selectedInstanceId, setSelectedInstance, 
+    masterCells, instances, selectedInstanceIds, setSelectedInstance,
     addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, 
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
@@ -157,8 +159,8 @@ export const Sidebar: React.FC = () => {
               return (
                 <li 
                   key={inst.id}
-                  className={`instance-item ${selectedInstanceId === inst.id ? 'active' : ''}`}
-                  onClick={() => setSelectedInstance(inst.id)}
+                  className={`instance-item ${selectedInstanceIds.includes(inst.id) ? 'active' : ''}`}
+                  onClick={(event) => setSelectedInstance(inst.id, event.shiftKey)}
                 >
                   <div className="inst-header">
                     <FiTarget className="inst-icon" />
@@ -248,6 +250,16 @@ export const Sidebar: React.FC = () => {
                       />
                     ))}
                   </div>
+                  <label className="custom-color-picker">
+                    <input
+                      type="color"
+                      value={newColor}
+                      onChange={event => setNewColor(event.target.value)}
+                      aria-label="Choose a custom IP color"
+                    />
+                    <span>Custom color</span>
+                    <code>{newColor.toUpperCase()}</code>
+                  </label>
                 </div>
                 <div className="modal-actions">
                   <button type="button" className="btn" onClick={() => { setShowCreateModal(false); setEditingCellId(null); }}>Cancel</button>
