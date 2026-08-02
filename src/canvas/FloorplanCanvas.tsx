@@ -4,6 +4,7 @@ import { useStore, clampInstancePosition, computePadGroupPositions, getTransform
 import { getAlignmentEdgeAxis } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
 import { formatGridValue } from '../utils/grid';
+import { getIpPixelArrayEdgeMeasurements } from '../utils/pixelArrayDimensions';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import './FloorplanCanvas.css';
@@ -661,7 +662,7 @@ export const FloorplanCanvas: React.FC = () => {
               );
               if (overlapEnd - overlapStart <= 0.0001) return [];
 
-              return [{ ...other, distance, overlap: { start: overlapStart, end: overlapEnd }, occludes: true }];
+              return [{ ...other, distance, overlap: { start: overlapStart, end: overlapEnd }, occludes: true, relationship: 'gap' as const }];
             });
 
             const pixelCandidates = pixelArray?.visible ? (() => {
@@ -671,45 +672,23 @@ export const FloorplanCanvas: React.FC = () => {
                 minY: pixelArray.y,
                 maxY: pixelArray.y + pixelArray.height,
               };
-              const overlapStart = Math.max(projectionStart, horizontal ? pixelBox.minY : pixelBox.minX);
-              const overlapEnd = Math.min(projectionEnd, horizontal ? pixelBox.maxY : pixelBox.maxX);
-              if (overlapEnd - overlapStart <= 0.0001) return [];
-
-              let distance: number;
+              const measurement = getIpPixelArrayEdgeMeasurements(selBox, pixelBox)
+                .find(item => item.direction === direction);
+              if (!measurement) return [];
               const targetBox = { ...pixelBox };
-              if (direction === 'right') {
-                if (pixelBox.minX >= selBox.maxX - 0.0001) distance = pixelBox.minX - selBox.maxX;
-                else if (pixelBox.maxX > selBox.maxX + 0.0001) {
-                  distance = pixelBox.maxX - selBox.maxX;
-                  targetBox.minX = pixelBox.maxX;
-                } else return [];
-              } else if (direction === 'left') {
-                if (pixelBox.maxX <= selBox.minX + 0.0001) distance = selBox.minX - pixelBox.maxX;
-                else if (pixelBox.minX < selBox.minX - 0.0001) {
-                  distance = selBox.minX - pixelBox.minX;
-                  targetBox.maxX = pixelBox.minX;
-                } else return [];
-              } else if (direction === 'top') {
-                if (pixelBox.minY >= selBox.maxY - 0.0001) distance = pixelBox.minY - selBox.maxY;
-                else if (pixelBox.maxY > selBox.maxY + 0.0001) {
-                  distance = pixelBox.maxY - selBox.maxY;
-                  targetBox.minY = pixelBox.maxY;
-                } else return [];
-              } else {
-                if (pixelBox.maxY <= selBox.minY + 0.0001) distance = selBox.minY - pixelBox.maxY;
-                else if (pixelBox.minY < selBox.minY - 0.0001) {
-                  distance = selBox.minY - pixelBox.minY;
-                  targetBox.maxY = pixelBox.minY;
-                } else return [];
-              }
+              if (direction === 'right') targetBox.minX = measurement.arrayCoordinate;
+              else if (direction === 'left') targetBox.maxX = measurement.arrayCoordinate;
+              else if (direction === 'top') targetBox.minY = measurement.arrayCoordinate;
+              else targetBox.maxY = measurement.arrayCoordinate;
 
               return [{
                 id: 'pixel-array',
                 name: 'Pixel Array',
                 box: targetBox,
-                distance,
-                overlap: { start: overlapStart, end: overlapEnd },
+                distance: measurement.distance,
+                overlap: { start: measurement.projectionStart, end: measurement.projectionEnd },
                 occludes: false,
+                relationship: measurement.kind,
               }];
             })() : [];
 
@@ -731,7 +710,11 @@ export const FloorplanCanvas: React.FC = () => {
 
               // A touching IP still occludes anything behind it, but has no positive gap to label.
               if (candidate.distance > 0.0001) {
-                const label = `${snapLabel(candidate.distance)} to ${candidate.name}`;
+                const label = candidate.relationship === 'overlap'
+                  ? `${snapLabel(candidate.distance)} overlap`
+                  : candidate.relationship === 'inside'
+                    ? `${snapLabel(candidate.distance)} to array edge`
+                    : `${snapLabel(candidate.distance)} to ${candidate.name}`;
                 const key = `gap-${direction}-${candidate.id}`;
 
                 if (direction === 'right') {

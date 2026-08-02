@@ -73,7 +73,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiLayers />
-              <div><strong>Read Auto-Dim</strong><p>Selecting an IP shows focused blue gaps to visible IPs, boundaries, and pixel-array edges. Hiding the pixel array removes its distances; no selection restores the violet overview.</p></div>
+              <div><strong>Read Auto-Dim</strong><p>Selecting an IP shows focused blue gaps. With a visible pixel array, outside edges show gaps, fully contained edges show inside clearance, and partially embedded edges show the penetration depth as “overlap.” Hiding the array removes those distances.</p></div>
             </article>
             <article className="tutorial-card">
               <FiGrid />

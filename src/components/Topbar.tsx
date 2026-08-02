@@ -16,7 +16,7 @@ export const Topbar: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v17') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v18') !== 'yes';
     } catch {
       return true;
     }
@@ -178,7 +178,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v17', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v18', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
