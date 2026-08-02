@@ -28,6 +28,9 @@ test('store integrates unique naming, full undo/redo, multi-selection, and align
   useStore.getState().setSelectedInstance(ids[0]);
   useStore.getState().setSelectedInstance(ids[1], true);
   useStore.getState().setSelectedInstance(ids[2], true);
+  useStore.getState().setSelectedInstance(ids[0]);
+  assert.equal(useStore.getState().selectedInstanceIds.length, 3);
+  assert.equal(useStore.getState().selectedInstanceId, ids[0]);
   const beforeAlign = structuredClone(useStore.getState().instances);
   useStore.getState().alignSelectedInstances('left');
 

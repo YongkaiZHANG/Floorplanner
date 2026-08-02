@@ -348,7 +348,12 @@ export const useStore = create<ProjectState>((set) => ({
 
   setSelectedInstance: (id, additive = false) => set((state) => {
     if (!id) return { selectedInstanceId: null, selectedInstanceIds: [] };
-    if (!additive) return { selectedInstanceId: id, selectedInstanceIds: [id] };
+    if (!additive) {
+      if (state.selectedInstanceIds.length > 1 && state.selectedInstanceIds.includes(id)) {
+        return { selectedInstanceId: id };
+      }
+      return { selectedInstanceId: id, selectedInstanceIds: [id] };
+    }
 
     const isSelected = state.selectedInstanceIds.includes(id);
     const selectedInstanceIds = isSelected
@@ -427,6 +432,7 @@ export const useStore = create<ProjectState>((set) => ({
       topWidth: state.topWidth,
       topHeight: state.topHeight,
       gridSize: state.gridSize,
+      anchorId: state.selectedInstanceId ?? undefined,
     });
     const positionById = new Map(positions.map(position => [position.id, position]));
     const instances = state.instances.map(instance => {

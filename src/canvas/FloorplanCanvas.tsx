@@ -56,6 +56,7 @@ export const FloorplanCanvas: React.FC = () => {
     placementOrientation,
     placeInstance,
     rightSidebarPinned,
+    setRightSidebarPinned,
     orthogonalRuler,
     showAutoDim,
   } = useStore();
@@ -1003,38 +1004,19 @@ export const FloorplanCanvas: React.FC = () => {
           }
         }}
         onDblClick={(e) => {
-          if (appMode === 'measure') {
-            let clickedInstId = null;
-            let node = e.target as any;
-            while (node && node.parent) {
-              if (node.id && typeof node.id === 'function') {
-                const id = node.id();
-                if (instances.find(i => i.id === id)) {
-                  clickedInstId = id;
-                  break;
-                }
-              }
-              node = node.parent;
+          if (appMode !== 'select') return;
+          let node = e.target as Konva.Node | null;
+          while (node) {
+            const id = node.id();
+            if (id && instances.some(instance => instance.id === id)) {
+              setSelectedInstance(id);
+              setRightSidebarPinned(true);
+              return;
             }
-
-            if (clickedInstId) {
-              const inst = instances.find(i => i.id === clickedInstId);
-              if (inst) {
-                const corners = getInstanceCorners(inst);
-                if (corners) {
-                  const a = corners[0];
-                  const b = corners[1]; // width vector
-                  const d = corners[3]; // height vector
-                  addRuler(a.x, a.y, b.x, b.y);
-                  addRuler(a.x, a.y, d.x, d.y);
-                }
-              }
-            } else if (e.target.name() === 'bg' || e.target === e.target.getStage()) {
-              const tw = topWidth;
-              const th = topHeight;
-              addRuler(-tw/2, -th/2, tw/2, -th/2); // bottom edge width
-              addRuler(-tw/2, -th/2, -tw/2, th/2); // left edge height
-            }
+            node = node.getParent();
+          }
+          if (e.target.name() === 'bg' || e.target === e.target.getStage()) {
+            fitView();
           }
         }}
         onClick={(e) => {
@@ -1137,6 +1119,7 @@ export const FloorplanCanvas: React.FC = () => {
             const w = masterCell.width * SCALE_FACTOR;
             const h = masterCell.height * SCALE_FACTOR;
             const isSelected = selectedInstanceIds.includes(inst.id);
+            const isPrimarySelection = selectedInstanceId === inst.id;
 
             const displayOrientation = rotationDrag?.instanceId === inst.id
               ? rotationDrag.previewOrientation
@@ -1186,7 +1169,7 @@ export const FloorplanCanvas: React.FC = () => {
                   height={h}
                   fill={masterCell.color}
                   opacity={0.5}
-                  stroke={isSelected ? '#f8fafc' : '#334155'}
+                  stroke={isPrimarySelection ? '#f59e0b' : isSelected ? '#38bdf8' : '#334155'}
                   strokeWidth={isSelected ? 3 / stageScale : 1 / stageScale}
                 />
                 
@@ -1415,7 +1398,7 @@ export const FloorplanCanvas: React.FC = () => {
       )}
       {appMode === 'measure' && (
         <div className="coordinate-overlay" style={{ top: 'auto', bottom: '16px', left: '50%', transform: 'translateX(-50%)', backgroundColor: 'rgba(234, 179, 8, 0.9)', color: '#0f172a', fontWeight: 'bold' }}>
-          Measure Mode | Double-Click IP to Auto-Dimension | Press 'o' to toggle Ortho [ {orthogonalRuler ? 'ON' : 'OFF'} ] | Press 'Esc' to cancel
+          Measure Mode | Click two snapped points | Press 'o' to toggle Ortho [ {orthogonalRuler ? 'ON' : 'OFF'} ] | Press 'Esc' to cancel
         </div>
       )}
       {showAutoDim && appMode !== 'measure' && (

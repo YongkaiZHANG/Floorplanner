@@ -32,6 +32,8 @@ export interface ArrangementOptions {
   topWidth: number;
   topHeight: number;
   gridSize: number;
+  /** The reference block that must remain fixed while the others move. */
+  anchorId?: string;
 }
 
 export interface InstancePosition {
@@ -148,12 +150,9 @@ const placeInsideTop = (
   };
 };
 
-const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
-
 /**
- * Aligns displayed (transformed) block bounds. The conventional group edge or
- * group-bounds center is used unless that target cannot fit every selected block,
- * in which case the closest common in-bounds target is used.
+ * Aligns displayed (transformed) block bounds to one fixed reference block.
+ * The explicit anchorId is used when provided; otherwise the first item is the anchor.
  */
 export const alignInstances = (
   instances: readonly AlignableInstance[],
@@ -164,33 +163,21 @@ export const alignInstances = (
   if (instances.length < 2) return instances.map(({ id, x, y }) => ({ id, x, y }));
 
   const entries = instances.map(instance => ({ instance, bounds: getPhysicalBounds(instance) }));
-  const halfW = options.topWidth / 2;
-  const halfH = options.topHeight / 2;
-  const groupLeft = Math.min(...entries.map(entry => entry.bounds.left));
-  const groupRight = Math.max(...entries.map(entry => entry.bounds.right));
-  const groupBottom = Math.min(...entries.map(entry => entry.bounds.bottom));
-  const groupTop = Math.max(...entries.map(entry => entry.bounds.top));
-
+  const anchor = entries.find(entry => entry.instance.id === options.anchorId) ?? entries[0];
+  // Validate that the fixed reference itself is physically compatible with the top cell.
+  placeInsideTop(anchor.instance, anchor.instance.x, anchor.instance.y, options);
   let target = 0;
-  if (operation === 'left') {
-    target = clamp(groupLeft, -halfW, halfW - Math.max(...entries.map(entry => entry.bounds.width)));
-  } else if (operation === 'right') {
-    target = clamp(groupRight, -halfW + Math.max(...entries.map(entry => entry.bounds.width)), halfW);
-  } else if (operation === 'bottom') {
-    target = clamp(groupBottom, -halfH, halfH - Math.max(...entries.map(entry => entry.bounds.height)));
-  } else if (operation === 'top') {
-    target = clamp(groupTop, -halfH + Math.max(...entries.map(entry => entry.bounds.height)), halfH);
-  } else if (operation === 'horizontal-center') {
-    const minCenter = Math.max(...entries.map(entry => -halfW + entry.bounds.width / 2));
-    const maxCenter = Math.min(...entries.map(entry => halfW - entry.bounds.width / 2));
-    target = clamp((groupLeft + groupRight) / 2, minCenter, maxCenter);
-  } else {
-    const minCenter = Math.max(...entries.map(entry => -halfH + entry.bounds.height / 2));
-    const maxCenter = Math.min(...entries.map(entry => halfH - entry.bounds.height / 2));
-    target = clamp((groupBottom + groupTop) / 2, minCenter, maxCenter);
-  }
+  if (operation === 'left') target = anchor.bounds.left;
+  else if (operation === 'right') target = anchor.bounds.right;
+  else if (operation === 'bottom') target = anchor.bounds.bottom;
+  else if (operation === 'top') target = anchor.bounds.top;
+  else if (operation === 'horizontal-center') target = anchor.bounds.centerX;
+  else target = anchor.bounds.centerY;
 
   return entries.map(({ instance, bounds }) => {
+    if (instance.id === anchor.instance.id) {
+      return { id: instance.id, x: instance.x, y: instance.y };
+    }
     let x = instance.x;
     let y = instance.y;
     if (operation === 'left') x += target - bounds.left;
@@ -199,7 +186,18 @@ export const alignInstances = (
     else if (operation === 'top') y += target - bounds.top;
     else if (operation === 'horizontal-center') x += target - bounds.centerX;
     else y += target - bounds.centerY;
-    return placeInsideTop(instance, x, y, options);
+    const position = placeInsideTop(instance, x, y, options);
+    const alignedBounds = getPhysicalBounds({ ...instance, ...position });
+    const actual = operation === 'left' ? alignedBounds.left
+      : operation === 'right' ? alignedBounds.right
+      : operation === 'bottom' ? alignedBounds.bottom
+      : operation === 'top' ? alignedBounds.top
+      : operation === 'horizontal-center' ? alignedBounds.centerX
+      : alignedBounds.centerY;
+    if (Math.abs(actual - target) > 1e-6) {
+      throw new RangeError(`Cannot align ${instance.id} to the reference edge while keeping it on-grid and inside the top cell`);
+    }
+    return position;
   });
 };
 

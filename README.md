@@ -64,17 +64,17 @@ Mouse rotation snaps to legal Cadence quarter turns and keeps the block's physic
 
 ### 3. Select and arrange blocks
 
-Shift-click blocks on the canvas or in the instance list to build a multi-selection. The Align menu supports:
+Shift-click blocks on the canvas or in the instance list to build a multi-selection. The amber block is the fixed reference; plain-click another already-selected block to make it the primary reference without clearing the group. The Align menu supports:
 
 - Left, right, top, and bottom physical edges
 - Horizontal and vertical physical centers
 - Horizontal or vertical equal-gap distribution for three or more blocks
 
-Alignment is calculated from the displayed transformed bounds, so rotated and mirrored blocks align correctly. A complete alignment operation creates one Undo entry.
+Every selected block moves to the chosen physical edge or center of the amber reference block. Alignment uses displayed transformed bounds, so rotated and mirrored blocks behave correctly. A complete alignment operation creates one Undo entry.
 
 ### 4. Measure and inspect spacing
 
-Ruler mode supports grid and object-edge snapping. Press `o` for orthogonal measurement or double-click a block to create width and height rulers.
+Ruler mode supports grid and object-edge snapping. Press `o` for orthogonal measurement and click two snapped points to create a ruler. Double-clicking a block in Select mode opens and pins its Properties panel; double-clicking empty canvas fits the view.
 
 Selecting a block shows its directly visible neighboring gaps in blue. Auto-Dim shows only the nearest visible neighbor in each direction instead of every possible pair. Violet labels name both endpoint instances, and hovering a dimension fades the others so the relationship is easy to trace.
 

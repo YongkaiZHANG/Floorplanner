@@ -25,6 +25,7 @@ type EditingToolbarProps = {
   canUndo: boolean;
   canRedo: boolean;
   selectionCount: number;
+  anchorName?: string;
   onUndo: () => void;
   onRedo: () => void;
   onAlign: (action: AlignmentAction) => void;
@@ -50,6 +51,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
   canUndo,
   canRedo,
   selectionCount,
+  anchorName,
   onUndo,
   onRedo,
   onAlign,
@@ -108,7 +110,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
         onClick={() => setIsAlignOpen((open) => !open)}
         aria-expanded={isAlignOpen}
         aria-haspopup="menu"
-        title={canAlign ? 'Align selected blocks' : 'Select at least two blocks to align'}
+        title={canAlign ? `Align selected blocks to ${anchorName ?? 'the primary block'}` : 'Select at least two blocks to align'}
       >
         <FiAlignLeft />
         <span>Align</span>
@@ -118,7 +120,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
       {isAlignOpen && (
         <div className="editing-toolbar__menu" role="menu" aria-label="Alignment actions">
           <div className="editing-toolbar__menu-label">
-            {selectionCount} blocks selected
+            <strong>{anchorName ?? 'Primary block'}</strong> is the fixed reference · {selectionCount} selected
           </div>
           {alignmentItems.map((item) => (
             <button

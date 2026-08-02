@@ -1,0 +1,221 @@
+.tutorial-overlay {
+  z-index: 1000;
+}
+
+.tutorial-modal {
+  width: min(880px, 94vw);
+  height: min(820px, 90vh);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tutorial-header {
+  padding: 24px 26px 20px;
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid var(--border-color);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.18), transparent 58%);
+}
+
+.tutorial-header h2 {
+  margin: 4px 0 6px;
+  color: var(--text-primary);
+  font-size: 24px;
+}
+
+.tutorial-header p,
+.tutorial-card p,
+.tutorial-steps p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.tutorial-eyebrow {
+  color: #60a5fa;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.tutorial-scroll {
+  flex: 1;
+  padding: 22px 26px 28px;
+  overflow-y: auto;
+}
+
+.tutorial-section + .tutorial-section {
+  margin-top: 28px;
+}
+
+.tutorial-section h3 {
+  margin: 0 0 14px;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.tutorial-steps {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  list-style: none;
+}
+
+.tutorial-steps li {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+
+.tutorial-steps li > span {
+  width: 24px;
+  height: 24px;
+  margin-bottom: 10px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-color);
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tutorial-steps strong,
+.tutorial-card strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.tutorial-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tutorial-card {
+  padding: 14px;
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: rgba(26, 26, 26, 0.78);
+}
+
+.tutorial-card > svg {
+  margin-top: 2px;
+  color: #60a5fa;
+  font-size: 20px;
+}
+
+.tutorial-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.tutorial-legend span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tutorial-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.tutorial-dot--anchor { background: #f59e0b; }
+.tutorial-dot--selected { background: #38bdf8; }
+.tutorial-dot--dimension { background: #a78bfa; }
+
+.tutorial-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tutorial-shortcuts > div {
+  min-width: 0;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.tutorial-modal kbd {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid #475569;
+  border-radius: 4px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font: 11px/1.5 monospace;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+}
+
+.tutorial-warning {
+  margin-top: 26px;
+  padding: 13px 14px;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 10px;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-lg);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fbbf24;
+}
+
+.tutorial-warning p {
+  margin: 0;
+  color: #d6d3d1;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.tutorial-footer {
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .tutorial-steps,
+  .tutorial-card-grid,
+  .tutorial-shortcuts {
+    grid-template-columns: 1fr;
+  }
+
+  .tutorial-steps li {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 10px;
+  }
+
+  .tutorial-steps li > span {
+    margin: 0;
+  }
+}

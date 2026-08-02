@@ -56,7 +56,7 @@ test('aligns right and bottom edges for mirrored and rotated blocks', () => {
   const right = alignInstances(source, 'right', options);
   assert.deepEqual(
     right.map((position, index) => getPhysicalBounds({ ...source[index], ...position }).right),
-    [25, 25, 25],
+    [-10, -10, -10],
   );
   const bottom = alignInstances(source, 'bottom', options);
   assert.deepEqual(
@@ -72,19 +72,19 @@ test('aligns tops and both center axes using displayed bounds', () => {
     block('b', 20, 15, 8, 12, 'R90'),
   ];
   const top = alignInstances(source, 'top', halfGridOptions);
-  assert.deepEqual(top.map((position, index) => getPhysicalBounds({ ...source[index], ...position }).top), [23, 23]);
+  assert.deepEqual(top.map((position, index) => getPhysicalBounds({ ...source[index], ...position }).top), [-10, -10]);
 
   const centerX = alignInstances(source, 'horizontal-center', halfGridOptions);
-  assert.deepEqual(centerX.map((position, index) => getPhysicalBounds({ ...source[index], ...position }).centerX), [-5, -5]);
+  assert.deepEqual(centerX.map((position, index) => getPhysicalBounds({ ...source[index], ...position }).centerX), [-25, -25]);
 
   const centerY = alignInstances(source, 'vertical-center', halfGridOptions);
-  assert.deepEqual(centerY.map((position, index) => getPhysicalBounds({ ...source[index], ...position }).centerY), [1.5, 1.5]);
+  assert.deepEqual(centerY.map((position, index) => getPhysicalBounds({ ...source[index], ...position }).centerY), [-15, -15]);
 });
 
 test('keeps every result grid-snapped and inside the top cell', () => {
   const tight = { topWidth: 30, topHeight: 20, gridSize: 2 };
   const source = [
-    block('small', -13, -8, 4, 4),
+    block('small', -12, -8, 4, 4),
     block('wide', 4, 5, 20, 8),
   ];
   const result = alignInstances(source, 'left', tight);
@@ -95,6 +95,19 @@ test('keeps every result grid-snapped and inside the top cell', () => {
     assert.ok(bounds.left >= -15 && bounds.right <= 15);
     assert.ok(bounds.bottom >= -10 && bounds.top <= 10);
   }
+});
+
+test('uses the explicit primary block as the fixed alignment reference', () => {
+  const source = [
+    block('first', -30, 0, 10, 5),
+    block('anchor', 12, 8, 8, 6, 'MY'),
+    block('third', 30, -10, 5, 10, 'R90'),
+  ];
+  const result = alignInstances(source, 'left', { ...options, anchorId: 'anchor' });
+  const bounds = result.map((position, index) => getPhysicalBounds({ ...source[index], ...position }));
+  const anchorPosition = result.find(position => position.id === 'anchor');
+  assert.deepEqual(anchorPosition, { id: 'anchor', x: 12, y: 8 });
+  assert.deepEqual(bounds.map(item => item.left), [4, 4, 4]);
 });
 
 test('distributes equal horizontal physical gaps and preserves input order', () => {

@@ -72,6 +72,10 @@
   letter-spacing: 0.5px;
 }
 
+.editing-toolbar__menu-label strong {
+  color: #fbbf24;
+}
+
 .editing-toolbar__menu-item {
   width: 100%;
   min-height: 34px;

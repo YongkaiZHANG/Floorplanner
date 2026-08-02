@@ -12,9 +12,15 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances } = useStore();
   const [showConfig, setShowConfig] = useState(false);
-  const [showTutorial, setShowTutorial] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(() => {
+    try {
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v2') !== 'yes';
+    } catch {
+      return true;
+    }
+  });
   const [tempW, setTempW] = useState(topWidth.toString());
   const [tempH, setTempH] = useState(topHeight.toString());
   
@@ -137,6 +143,15 @@ export const Topbar: React.FC = () => {
     }
   };
 
+  const closeTutorial = () => {
+    setShowTutorial(false);
+    try {
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v2', 'yes');
+    } catch {
+      // The tutorial still closes when browser storage is unavailable.
+    }
+  };
+
   const handleSaveConfig = () => {
     setTopDimensions(parseFloat(tempW) || 100, parseFloat(tempH) || 100);
     setShowConfig(false);
@@ -191,6 +206,7 @@ export const Topbar: React.FC = () => {
           canUndo={history.past.length > 0}
           canRedo={history.future.length > 0}
           selectionCount={selectedInstanceIds.length}
+          anchorName={instances.find(instance => instance.id === selectedInstanceId)?.name}
           onUndo={undo}
           onRedo={redo}
           onAlign={handleAlignment}
@@ -225,7 +241,7 @@ export const Topbar: React.FC = () => {
         </div>
         <div className="vertical-divider" style={{ width: '1px', height: '24px', backgroundColor: 'var(--border-color)', margin: '0 4px' }}></div>
         <button className="btn shortcuts-btn" onClick={() => setShowTutorial(true)} style={{ backgroundColor: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-          <FiBookOpen /> Shortcuts
+          <FiBookOpen /> Help
         </button>
         <button className="btn btn-primary preview-btn" onClick={handlePreview}>
           <FiCode /> Preview Code
@@ -260,7 +276,7 @@ export const Topbar: React.FC = () => {
       )}
 
       {showTutorial && (
-        <TutorialModal onClose={() => setShowTutorial(false)} />
+        <TutorialModal onClose={closeTutorial} />
       )}
       
       {showCodePreview && (
