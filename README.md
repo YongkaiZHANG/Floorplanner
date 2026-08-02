@@ -65,7 +65,7 @@ Mouse rotation snaps to legal Cadence quarter turns and keeps the block's physic
 
 ### 3. Select and arrange blocks
 
-For Cadence-style alignment, first select the IP that should move. Click **Align** (or press `a`), click an amber source edge, then click a compatible green reference: another IP edge, a top-cell boundary, or an orthogonal ruler line. Vertical rulers provide X references and horizontal rulers provide Y references; diagonal rulers remain measurement-only. The target click applies immediately. Set the optional signed offset before that click: positive moves the source right/up and negative moves it left/down. Only the source moves, and the operation creates one Undo entry.
+For Cadence-style alignment, first select the IP that should move. Click **Align** (or press `a`); the compact alignment controls replace the right side of the top toolbar so no window covers the canvas. Click an amber source edge, then click a compatible green reference: another IP edge, a top-cell boundary, or an orthogonal ruler line. Vertical rulers provide X references and horizontal rulers provide Y references; diagonal rulers remain measurement-only. The target click applies immediately. Set the optional signed offset in the top toolbar before that click: positive moves the source right/up and negative moves it left/down. Only the source moves, and the operation creates one Undo entry.
 
 For quick group alignment, Shift-click blocks on the canvas or in the instance list to build a multi-selection. The amber block is the fixed reference; plain-click another already-selected block to make it the primary reference without clearing the group. The Align menu also supports:
 

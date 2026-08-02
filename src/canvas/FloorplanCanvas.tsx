@@ -58,11 +58,9 @@ export const FloorplanCanvas: React.FC = () => {
     showAutoDim,
     edgeAlignmentSession,
     setEdgeAlignmentEdge,
-    setEdgeAlignmentOffset,
     completeEdgeAlignment,
     completeEdgeAlignmentToBoundary,
     completeEdgeAlignmentToRuler,
-    cancelEdgeAlignment,
   } = useStore();
 
   const fitView = useCallback(() => {
@@ -1427,39 +1425,6 @@ export const FloorplanCanvas: React.FC = () => {
           Nearest visible gaps · select a block to focus its local dimensions
         </div>
       )}
-      {edgeAlignmentSession && (() => {
-        const source = instances.find(instance => instance.id === edgeAlignmentSession.sourceId);
-        const step = !edgeAlignmentSession.sourceEdge
-          ? `Click one highlighted edge of ${source?.name ?? 'the source block'}`
-          : 'Click a green IP, top-cell, or ruler edge to apply';
-
-        return (
-          <div className="edge-align-panel edge-align-panel--picking" role="dialog" aria-label="Align by edges">
-            <div className="edge-align-panel__header">
-              <div><strong>Align by edges</strong><span>{step}</span></div>
-              <button type="button" onClick={cancelEdgeAlignment} aria-label="Cancel edge alignment">×</button>
-            </div>
-            <div className="edge-align-panel__status">
-              <span className="edge-align-panel__source">Source</span>
-              <code>{source?.name ?? '—'}.{edgeAlignmentSession.sourceEdge ?? '?'}</code>
-              <span>→</span>
-              <span className="edge-align-panel__target">Fixed target</span>
-              <code>IP · top cell · ruler</code>
-            </div>
-            <label>
-              Offset (µm)
-              <input
-                type="text"
-                inputMode="decimal"
-                value={edgeAlignmentSession.offset}
-                onChange={event => setEdgeAlignmentOffset(event.target.value)}
-                onKeyDown={event => { if (event.key === 'Escape') cancelEdgeAlignment(); }}
-              />
-            </label>
-            <p>Target click applies the move. 0 aligns edges; + is right/up and − is left/down.</p>
-          </div>
-        );
-      })()}
     </div>
   );
 };

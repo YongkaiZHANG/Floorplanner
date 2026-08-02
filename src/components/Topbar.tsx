@@ -12,11 +12,11 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v5') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v6') !== 'yes';
     } catch {
       return true;
     }
@@ -31,6 +31,12 @@ export const Topbar: React.FC = () => {
   const projectSignature = JSON.stringify(getProjectSnapshot(useStore.getState()));
   const isDirty = savedSignature === null ? history.past.length > 0 : projectSignature !== savedSignature;
   const saveStatus = isDirty ? 'Unsaved' : savedSignature === null ? 'Not saved' : 'Saved';
+  const alignmentSource = edgeAlignmentSession
+    ? instances.find(instance => instance.id === edgeAlignmentSession.sourceId)
+    : null;
+  const alignmentStep = edgeAlignmentSession?.sourceEdge
+    ? 'Click a green IP, top-cell, or ruler edge'
+    : `Click an amber edge of ${alignmentSource?.name ?? 'the source IP'}`;
 
   const showToast = (message: string, kind: ToastKind = 'success') => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -146,7 +152,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v5', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v6', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -202,7 +208,34 @@ export const Topbar: React.FC = () => {
       </div>
 
       <div className="topbar-right">
-        <EditingToolbar
+        {edgeAlignmentSession ? (
+          <div className="topbar-align" role="status" aria-label="Align by edges">
+            <div className="topbar-align__identity">
+              <span className="topbar-align__dot" />
+              <div>
+                <strong>Align {alignmentSource?.name ?? 'IP'}.{edgeAlignmentSession.sourceEdge ?? '?'}</strong>
+                <span>{alignmentStep}</span>
+              </div>
+            </div>
+            <label className="topbar-align__offset">
+              Offset
+              <input
+                type="text"
+                inputMode="decimal"
+                value={edgeAlignmentSession.offset}
+                onChange={event => setEdgeAlignmentOffset(event.target.value)}
+                onKeyDown={event => { if (event.key === 'Escape') cancelEdgeAlignment(); }}
+                aria-label="Alignment offset in micrometers"
+              />
+              <span>µm</span>
+            </label>
+            <span className="topbar-align__hint">Target click applies · + right/up · − left/down</span>
+            <button className="topbar-align__cancel" type="button" onClick={cancelEdgeAlignment} aria-label="Cancel edge alignment" title="Cancel alignment (Esc)">
+              <FiX />
+            </button>
+          </div>
+        ) : <>
+          <EditingToolbar
           canUndo={history.past.length > 0}
           canRedo={history.future.length > 0}
           selectionCount={selectedInstanceIds.length}
@@ -256,6 +289,7 @@ export const Topbar: React.FC = () => {
         <button className="btn btn-primary preview-btn" onClick={handlePreview}>
           <FiCode /> Preview Code
         </button>
+        </>}
       </div>
 
       {showConfig && (

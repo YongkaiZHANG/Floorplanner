@@ -68,7 +68,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiAlignLeft />
-              <div><strong>Align by edges</strong><p>Select the moving source, click Align, choose its amber edge, then click a green IP edge, top-cell boundary, or compatible ruler. Set the offset before the target click.</p></div>
+              <div><strong>Align by edges</strong><p>Select the moving source and click Align. Guidance and offset stay in the top toolbar while the canvas shows only amber and green reference edges.</p></div>
             </article>
             <article className="tutorial-card">
               <FiLayers />
