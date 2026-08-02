@@ -25,7 +25,7 @@ const shortcuts = [
   ['o', 'Toggle orthogonal ruler'],
   ['Ctrl/Cmd + Z', 'Undo'],
   ['Ctrl/Cmd + Shift + Z', 'Redo'],
-  ['Ctrl/Cmd + S', 'Save the project'],
+  ['Ctrl/Cmd + S', 'Save an editable SVG'],
   ['f', 'Fit the top cell'],
   ['Delete', 'Delete the selection'],
   ['Esc', 'Cancel or clear selection'],
@@ -51,7 +51,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             <li><span>2</span><div><strong>Create Master IPs</strong><p>Use the left sidebar’s + button to define reusable blocks, dimensions, and planning colors.</p></div></li>
             <li><span>3</span><div><strong>Place instances</strong><p>Click a master’s crosshair or press <kbd>i</kbd>, then click the canvas. Press <kbd>Esc</kbd> when finished.</p></div></li>
             <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select the IP to move, click Align (or press a), choose its edge, then click a green IP, top-cell, or ruler reference. The target click applies immediately.</p></div></li>
-            <li><span>5</span><div><strong>Save and export</strong><p>Save an editable `.flp`, preview SKILL, then export only after checking destination libraries.</p></div></li>
+            <li><span>5</span><div><strong>Save and export</strong><p>Save an editable SVG you can inspect in any browser. Use `.flp` Backup for a compact project-only copy, then preview SKILL before Cadence export.</p></div></li>
           </ol>
         </section>
 
@@ -76,7 +76,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiSave />
-              <div><strong>Protect your work</strong><p>Save creates a validated `.flp`. SVG also carries editable metadata. Undo and Redo cover geometry, masters, rulers, and alignment.</p></div>
+              <div><strong>Protect your work</strong><p>Save SVG creates a visual file with editable project metadata embedded inside it. Floorplanner can reopen either that SVG or a compact `.flp` backup.</p></div>
             </article>
             <article className="tutorial-card">
               <FiDownload />

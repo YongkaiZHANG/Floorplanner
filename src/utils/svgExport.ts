@@ -220,8 +220,12 @@ export const exportSVG = () => {
   const blob = new Blob([svg], { type: 'image/svg+xml' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
+  const filename = `${state.topCellName}_floorplan.svg`;
   a.href = url;
-  a.download = `${state.topCellName}_floorplan.svg`;
+  a.download = filename;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   URL.revokeObjectURL(url);
+  return filename;
 };

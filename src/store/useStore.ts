@@ -68,6 +68,7 @@ export type ProjectState = {
   placementOrientation: string;
   history: ProjectHistory;
   edgeAlignmentSession: EdgeAlignmentSession | null;
+  lastAlignmentSpacing: string;
   
   setGridSize: (size: number) => void;
   setAppMode: (mode: 'select' | 'measure' | 'place') => void;
@@ -338,6 +339,28 @@ const sourceEdgeOutsideTarget = (targetEdge: AlignmentEdge): AlignmentEdge | nul
   return null;
 };
 
+const ALIGNMENT_SPACING_STORAGE_KEY = 'ic-floorplanner:alignment-spacing:v1';
+
+const readStoredAlignmentSpacing = () => {
+  if (typeof window === 'undefined') return '0';
+  try {
+    const value = window.localStorage.getItem(ALIGNMENT_SPACING_STORAGE_KEY)?.trim();
+    if (value && Number.isFinite(Number(value)) && Number(value) >= 0) return value;
+  } catch {
+    // Browser storage is optional; the in-memory preference still works.
+  }
+  return '0';
+};
+
+const storeAlignmentSpacing = (value: string) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(ALIGNMENT_SPACING_STORAGE_KEY, value);
+  } catch {
+    // Keep alignment usable when storage is blocked or unavailable.
+  }
+};
+
 export const useStore = create<ProjectState>((set) => ({
   gridSize: 0.005,
   appMode: 'select',
@@ -361,6 +384,7 @@ export const useStore = create<ProjectState>((set) => ({
   placementOrientation: 'R0',
   history: { past: [], future: [] },
   edgeAlignmentSession: null,
+  lastAlignmentSpacing: readStoredAlignmentSpacing(),
   orthogonalRuler: false,
   showAutoDim: false,
 
@@ -606,7 +630,7 @@ export const useStore = create<ProjectState>((set) => ({
         sourceEdge: null,
         targetId: null,
         targetEdge: null,
-        offset: '0',
+        offset: state.lastAlignmentSpacing,
       },
     };
   }),
@@ -626,11 +650,17 @@ export const useStore = create<ProjectState>((set) => ({
     };
   }),
 
-  setEdgeAlignmentOffset: (value) => set((state) => (
-    state.edgeAlignmentSession
-      ? { edgeAlignmentSession: { ...state.edgeAlignmentSession, offset: value } }
-      : state
-  )),
+  setEdgeAlignmentOffset: (value) => set((state) => {
+    if (!state.edgeAlignmentSession) return state;
+    const edgeAlignmentSession = { ...state.edgeAlignmentSession, offset: value };
+    const normalized = value.trim();
+    const spacing = Number(normalized);
+    if (normalized !== '' && Number.isFinite(spacing) && spacing >= 0) {
+      storeAlignmentSpacing(normalized);
+      return { edgeAlignmentSession, lastAlignmentSpacing: normalized };
+    }
+    return { edgeAlignmentSession };
+  }),
 
   completeEdgeAlignment: (targetId, targetEdge) => set((state) => {
     const session = state.edgeAlignmentSession;

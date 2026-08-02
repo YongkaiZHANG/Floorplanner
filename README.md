@@ -10,12 +10,12 @@ IC Floorplanner is a browser-based ASIC floorplanning tool with a CAD-style canv
 - Grid-snapped placement with top-cell boundary enforcement.
 - All eight Cadence orientations: `R0`, `R90`, `R180`, `R270`, `MX`, `MY`, `MXR90`, and `MYR90`.
 - Mouse right-click rotation with 90-degree snapping, plus keyboard and Properties controls.
-- Cadence-style source-edge to fixed-target-edge alignment with an exact numeric offset.
+- Cadence-style side placement with an exact, remembered face-to-face spacing.
 - Shift-click multi-selection with quick transformed-edge alignment and equal-gap distribution.
 - Full project Undo and Redo, including placement, transforms, rulers, master edits, alignment, and top-cell changes.
 - Manual rulers, orthogonal measurement, edge snapping, selected-IP gaps, and reduced-clutter Auto-Dim.
-- Versioned `.flp` project save/open with validation and unsaved-change protection.
-- SVG export with an embedded project payload for lossless re-import.
+- Browser-viewable SVG save with an embedded project payload for lossless re-import.
+- Versioned `.flp` backup/open with validation and unsaved-change protection.
 - Cadence SKILL preview and export with real OpenAccess `prBoundary` objects.
 
 ## Quick start
@@ -65,7 +65,7 @@ Mouse rotation snaps to legal Cadence quarter turns and keeps the block's physic
 
 ### 3. Select and arrange blocks
 
-For Cadence-style alignment, first select the IP that should move. Click **Align** (or press `a`); the compact alignment controls replace the right side of the top toolbar so no window covers the canvas. Click an amber source edge to choose the alignment axis, then click a compatible green reference: another IP side, a top-cell boundary, or an orthogonal ruler line. Vertical rulers provide X references and horizontal rulers provide Y references; diagonal rulers remain measurement-only. The target click applies immediately. The toolbar spacing is a non-negative clear gap between the nearest faces: a right/top target places the whole source outside to its right/top, a left/bottom target places it outside to its left/bottom, and top-cell boundaries place it inward. Only the source moves, and the operation creates one Undo entry.
+For Cadence-style alignment, first select the IP that should move. Click **Align** (or press `a`); the compact alignment controls replace the right side of the top toolbar so no window covers the canvas. Click an amber source edge to choose the alignment axis, then click a compatible green reference: another IP side, a top-cell boundary, or an orthogonal ruler line. Vertical rulers provide X references and horizontal rulers provide Y references; diagonal rulers remain measurement-only. The target click applies immediately. The toolbar spacing is a non-negative clear gap between the nearest faces: a right/top target places the whole source outside to its right/top, a left/bottom target places it outside to its left/bottom, and top-cell boundaries place it inward. The last valid spacing is remembered for the next alignment, including after reopening the app. Only the source moves, and the operation creates one Undo entry.
 
 For quick group alignment, Shift-click blocks on the canvas or in the instance list to build a multi-selection. The amber block is the fixed reference; plain-click another already-selected block to make it the primary reference without clearing the group. The Align menu also supports:
 
@@ -83,12 +83,12 @@ Selecting a block shows its directly visible neighboring gaps in blue. Auto-Dim 
 
 ### 5. Save or export
 
-- **Save** downloads a validated, versioned `.flp` project.
+- **Save SVG** (or `Ctrl/Cmd+S`) downloads a visual SVG that opens in a browser and embeds the editable project.
 - **Open Project** accepts `.flp`, legacy JSON, or an SVG exported by this application.
-- **Export SVG** creates a presentation-ready vector drawing and embeds editable project metadata.
+- **Backup .flp** downloads a compact validated project file without the visual drawing.
 - **Preview Code** displays the generated Cadence SKILL before download.
 
-The Saved/Unsaved indicator tracks the last explicit project save or open. The application warns before replacing unsaved work or closing the page.
+The Saved/Unsaved indicator tracks the last SVG save, `.flp` backup, or project open. The application warns before replacing unsaved work or closing the page.
 
 Changing the placement grid re-snaps every existing instance to an exact multiple of the new grid. Coordinate fields, lists, SVG tables, and generated SKILL use precision derived from that grid. For example, `3452u` is valid on a `0.005u` grid because it equals exactly 690,400 grid steps; Cadence may display it as `3452.0000000u` according to its own display precision.
 
@@ -131,7 +131,7 @@ Geometry, hierarchy, coordinates, and orientation are portable. Canvas colors ar
 | `Ctrl/Cmd+Z` | Undo |
 | `Ctrl/Cmd+Shift+Z` | Redo |
 | `Ctrl+Y` | Redo |
-| `Ctrl/Cmd+S` | Save a `.flp` project |
+| `Ctrl/Cmd+S` | Save an editable, browser-viewable SVG |
 | `Ctrl/Cmd+A` | Select all instances |
 | `Delete` / `Backspace` | Delete the selection |
 | `Escape` | Cancel placement/measurement or clear selection |

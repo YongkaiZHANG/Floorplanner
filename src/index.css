@@ -19,6 +19,7 @@
   
   --radius: 4px;
   --radius-lg: 8px;
+  --radius-md: 6px;
 }
 
 * {
@@ -33,29 +34,6 @@ body {
   color: var(--text-primary);
   overflow: hidden;
   user-select: none;
-}
-
-.app-container {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  width: 100vw;
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: var(--bg-sidebar);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
 }
 
 /* Common UI Elements */
@@ -81,6 +59,16 @@ body {
 
 .btn:hover {
   background-color: var(--bg-panel-hover);
+}
+
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.mode-btn:focus-visible,
+.modal-close-btn:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
 }
 
 .btn:active {
@@ -153,38 +141,6 @@ body {
   width: 400px;
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
   animation: modalScaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.app-container {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  width: 100vw;
-  background-color: var(--bg-main);
-  overflow: hidden;
-}
-
-.main-content {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-  position: relative;
-}
-
-.sidebar-wrapper {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  z-index: 10;
-}
-
-.properties-wrapper {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  z-index: 10;
 }
 
 .modal-header {

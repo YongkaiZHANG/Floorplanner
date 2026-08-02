@@ -69,10 +69,29 @@
   box-shadow: var(--shadow-sm);
 }
 
+.mode-btn--danger {
+  color: #f87171;
+}
+
+.mode-btn--danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #fca5a5;
+}
+
+.mode-btn--autodim.active {
+  color: #c4b5fd;
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.55);
+}
+
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.topbar-right .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .topbar-align {
@@ -138,6 +157,12 @@
   border-radius: 4px;
   background: #0f172a;
   color: #f8fafc;
+  outline: none;
+}
+
+.topbar-align__offset input:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.16);
 }
 
 .topbar-align__cancel {
@@ -162,18 +187,47 @@
 .save-status {
   padding-left: 7px;
   border-left: 1px solid var(--border-color);
-  color: #86efac;
+  color: rgba(255, 255, 255, 0.82);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
 
 .save-status.dirty {
-  color: #fbbf24;
+  color: #fef3c7;
 }
 
 .save-status.new {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.save-svg-btn {
+  min-width: 96px;
+  justify-content: center;
+}
+
+.file-open-btn {
+  cursor: pointer;
+}
+
+.file-open-btn input {
+  display: none;
+}
+
+.backup-btn {
   color: var(--text-secondary);
+}
+
+.vertical-divider {
+  width: 1px;
+  height: 24px;
+  margin: 0 8px;
+  flex: 0 0 auto;
+  background: var(--border-color);
+}
+
+.vertical-divider--compact {
+  margin-inline: 4px;
 }
 
 .config-btn {
@@ -198,6 +252,43 @@
   letter-spacing: 0.5px;
 }
 
+.shortcuts-btn {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.config-modal {
+  z-index: 100;
+}
+
+.code-preview-modal {
+  z-index: 100;
+  width: 80%;
+  max-width: 800px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-container {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #0f172a;
+}
+
+.code-container pre {
+  margin: 0;
+  color: #38bdf8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
 @media (max-width: 1500px) {
   .topbar {
     padding: 0 12px;
@@ -218,9 +309,13 @@
   .save-status {
     display: none;
   }
+
+  .save-svg-btn {
+    min-width: auto;
+  }
 }
 
-@media (max-width: 1250px) {
+@media (max-width: 1400px) {
   .logo h1,
   .grid-settings label {
     display: none;
@@ -228,6 +323,23 @@
 
   .mode-btn {
     padding-inline: 8px;
+  }
+
+  .backup-btn {
+    width: 34px;
+    padding-inline: 8px;
+  }
+
+  .backup-btn span {
+    display: none;
+  }
+}
+
+@media (max-width: 1250px) {
+  .config-btn {
+    max-width: 118px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 

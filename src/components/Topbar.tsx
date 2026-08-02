@@ -16,7 +16,7 @@ export const Topbar: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v7') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v8') !== 'yes';
     } catch {
       return true;
     }
@@ -64,7 +64,7 @@ export const Topbar: React.FC = () => {
     downloadSkillFile(`${topCellName}.il`, skillCode);
   };
 
-  const handleSaveProject = () => {
+  const handleDownloadProject = () => {
     const snapshot = getProjectSnapshot(useStore.getState());
     const blob = new Blob([serializeProjectDocument(snapshot)], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -76,7 +76,18 @@ export const Topbar: React.FC = () => {
     anchor.remove();
     URL.revokeObjectURL(url);
     setSavedSignature(JSON.stringify(snapshot));
-    showToast(`${snapshot.topCellName}.flp saved`);
+    showToast(`${snapshot.topCellName}.flp backup downloaded`);
+  };
+
+  const handleSaveSvg = () => {
+    try {
+      const filename = exportSVG();
+      const snapshot = getProjectSnapshot(useStore.getState());
+      setSavedSignature(JSON.stringify(snapshot));
+      showToast(`${filename} saved — open it in any browser`);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to save the SVG floorplan.');
+    }
   };
 
   useEffect(() => {
@@ -84,7 +95,7 @@ export const Topbar: React.FC = () => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
         if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-        handleSaveProject();
+        handleSaveSvg();
       }
     };
     window.addEventListener('keydown', handleShortcut);
@@ -130,7 +141,7 @@ export const Topbar: React.FC = () => {
         
         if (jsonData) {
           useStore.getState().loadProject(jsonData);
-          setSavedSignature(JSON.stringify(jsonData));
+          setSavedSignature(JSON.stringify(getProjectSnapshot(useStore.getState())));
           showToast(`${jsonData.topCellName} opened`);
         } else {
           throw new Error("No valid data found");
@@ -157,7 +168,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v7', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v8', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -193,19 +204,17 @@ export const Topbar: React.FC = () => {
           </button>
           {appMode === 'measure' && (
             <button 
-              className="mode-btn"
+              className="mode-btn mode-btn--danger"
               onClick={() => clearRulers()}
               title="Clear Rulers"
-              style={{ color: '#ef4444' }}
             >
               <FiTrash2 /> Clear Rulers
             </button>
           )}
           <button
-            className={`mode-btn${showAutoDim ? ' active' : ''}`}
+            className={`mode-btn mode-btn--autodim${showAutoDim ? ' active' : ''}`}
             onClick={toggleAutoDim}
             title="Auto-Dimension: show a nearest-gap overview, then select one IP to focus only its local gaps."
-            style={showAutoDim ? { color: '#a78bfa', borderColor: '#a78bfa' } : {}}
           >
             <FiGrid /> Auto-Dim
           </button>
@@ -255,19 +264,19 @@ export const Topbar: React.FC = () => {
           }}
         />
 
-        <button className="btn" onClick={handleSaveProject} title="Save Project (Ctrl/Cmd+S)">
-          <FiSave /> Save
+        <button className="btn btn-primary save-svg-btn" onClick={handleSaveSvg} title="Save an editable SVG you can inspect in any browser (Ctrl/Cmd+S)">
+          <FiSave /> Save SVG
           <span className={`save-status ${isDirty ? 'dirty' : savedSignature === null ? 'new' : ''}`}>{saveStatus}</span>
         </button>
-        <label className="btn" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }} title="Open SVG, .flp, or JSON Project">
+        <label className="btn file-open-btn" title="Open an SVG, .flp, or legacy JSON project">
           <FiUpload /> Open Project
-          <input type="file" accept=".svg,.flp,.json" style={{ display: 'none' }} onChange={handleLoadProject} />
+          <input type="file" accept=".svg,.flp,.json" onChange={handleLoadProject} />
         </label>
-        <button className="btn" onClick={exportSVG} style={{ display: 'flex', alignItems: 'center', gap: '8px' }} title="Export SVG Project">
-          <FiDownload /> Export SVG
+        <button className="btn backup-btn" onClick={handleDownloadProject} title="Download a compact editable .flp backup">
+          <FiDownload /> <span>Backup .flp</span>
         </button>
         
-        <div className="vertical-divider" style={{ width: '1px', height: '24px', backgroundColor: 'var(--border-color)', margin: '0 8px' }}></div>
+        <div className="vertical-divider" />
 
         <button className="btn config-btn" onClick={() => setShowConfig(true)}>
           <FiSettings /> {topCellName} ({topWidth}x{topHeight})
@@ -287,8 +296,8 @@ export const Topbar: React.FC = () => {
             title="Changing the grid re-snaps every instance to an exact grid multiple"
           />
         </div>
-        <div className="vertical-divider" style={{ width: '1px', height: '24px', backgroundColor: 'var(--border-color)', margin: '0 4px' }}></div>
-        <button className="btn shortcuts-btn" onClick={() => setShowTutorial(true)} style={{ backgroundColor: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+        <div className="vertical-divider vertical-divider--compact" />
+        <button className="btn shortcuts-btn" onClick={() => setShowTutorial(true)}>
           <FiBookOpen /> Help
         </button>
         <button className="btn btn-primary preview-btn" onClick={handlePreview}>
@@ -299,7 +308,7 @@ export const Topbar: React.FC = () => {
 
       {showConfig && (
         <div className="modal-overlay">
-          <div className="modal-content glass-panel" style={{ zIndex: 100 }}>
+          <div className="modal-content glass-panel config-modal">
             <div className="modal-header">
               <h2 className="modal-title">Configure Top ASIC</h2>
               <button className="modal-close-btn" onClick={() => setShowConfig(false)}>
@@ -330,15 +339,15 @@ export const Topbar: React.FC = () => {
       
       {showCodePreview && (
         <div className="modal-overlay">
-          <div className="modal-content glass-panel code-preview-modal" style={{ zIndex: 100, width: '80%', maxWidth: '800px', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+          <div className="modal-content glass-panel code-preview-modal">
             <div className="modal-header">
               <h2 className="modal-title">SKILL Code Preview</h2>
               <button className="modal-close-btn" onClick={() => setShowCodePreview(false)}>
                 <FiX />
               </button>
             </div>
-            <div className="code-container" style={{ flex: 1, overflow: 'auto', backgroundColor: '#0f172a', padding: '16px', borderRadius: '8px', border: '1px solid #334155' }}>
-              <pre style={{ margin: 0, fontFamily: 'monospace', fontSize: '13px', color: '#38bdf8', whiteSpace: 'pre-wrap' }}>
+            <div className="code-container">
+              <pre>
                 {generatedCode}
               </pre>
             </div>

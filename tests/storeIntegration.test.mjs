@@ -190,6 +190,7 @@ test('target edge click can complete interactive alignment in one atomic action'
 
   useStore.getState().startEdgeAlignment(source.id);
   useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
+  useStore.getState().setEdgeAlignmentOffset('0');
   useStore.getState().completeEdgeAlignment(target.id, 'left');
 
   assert.equal(useStore.getState().edgeAlignmentSession, null);
@@ -210,6 +211,7 @@ test('top-cell edges and orthogonal rulers can complete edge alignment', () => {
 
   useStore.getState().startEdgeAlignment(source.id);
   useStore.getState().setEdgeAlignmentEdge(source.id, 'left');
+  useStore.getState().setEdgeAlignmentOffset('0');
   useStore.getState().completeEdgeAlignmentToBoundary('left');
   let moved = useStore.getState().instances[0];
   assert.equal(getPhysicalBounds({ ...moved, width: master.width, height: master.height }).left, -50);
@@ -269,4 +271,23 @@ test('interactive spacing rejects negative values instead of reversing across th
     () => useStore.getState().completeEdgeAlignment(target.id, 'left'),
     /greater than or equal to zero/,
   );
+});
+
+test('a valid alignment spacing is reused by the next alignment session', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'rememberSpacing', 10, 10, '#fff');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, 0, 0);
+  const source = useStore.getState().instances[0];
+
+  useStore.getState().startEdgeAlignment(source.id);
+  useStore.getState().setEdgeAlignmentOffset('12.5');
+  useStore.getState().cancelEdgeAlignment();
+  useStore.getState().startEdgeAlignment(source.id);
+  assert.equal(useStore.getState().edgeAlignmentSession?.offset, '12.5');
+
+  useStore.getState().setEdgeAlignmentOffset('-4');
+  useStore.getState().cancelEdgeAlignment();
+  useStore.getState().startEdgeAlignment(source.id);
+  assert.equal(useStore.getState().edgeAlignmentSession?.offset, '12.5');
 });
