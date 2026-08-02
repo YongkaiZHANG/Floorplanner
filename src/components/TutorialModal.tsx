@@ -25,6 +25,7 @@ const shortcuts = [
   ['r / Shift + r', 'Rotate ±90°'],
   ['k', 'Measure with a ruler'],
   ['o', 'Toggle orthogonal ruler'],
+  ['Arrow keys', 'Pan the zoomed view (Shift for a larger step)'],
   ['Ctrl/Cmd + Z', 'Undo'],
   ['Ctrl/Cmd + Shift + Z', 'Redo'],
   ['Ctrl/Cmd + S', 'Save the browser workspace'],

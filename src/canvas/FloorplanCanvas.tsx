@@ -7,6 +7,8 @@ import { formatGridValue } from '../utils/grid';
 import { getIpPixelArrayEdgeMeasurements } from '../utils/pixelArrayDimensions';
 import { resolveOrthogonalRulerEnd } from '../utils/ruler';
 import type { SnapEdgeAxis } from '../utils/ruler';
+import { panViewportByArrow } from '../utils/viewport';
+import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import './FloorplanCanvas.css';
@@ -112,12 +114,20 @@ export const FloorplanCanvas: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't trigger if user is typing in an input
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement ||
+          e.target instanceof HTMLSelectElement || (e.target instanceof HTMLElement && e.target.isContentEditable)) {
         return;
       }
       
       const key = e.key.toLowerCase();
       const state = useStore.getState();
+
+      if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key)) {
+        e.preventDefault();
+        const panDistance = e.shiftKey ? 160 : 48;
+        setStagePos(position => panViewportByArrow(position, key as ArrowPanKey, panDistance));
+        return;
+      }
 
       if (e.ctrlKey || e.metaKey) {
         if (key === 'z') {

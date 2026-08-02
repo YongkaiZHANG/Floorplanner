@@ -129,6 +129,8 @@ Geometry, hierarchy, coordinates, and orientation are portable. Canvas colors ar
 | --- | --- |
 | Mouse wheel | Zoom around the pointer |
 | Middle-drag | Pan the canvas |
+| Arrow keys | Pan the view by a consistent screen distance |
+| `Shift` + Arrow keys | Pan the view by a larger step |
 | Shift-click | Add or remove a block from the selection |
 | `n` | Create a Master IP |
 | `i` | Instantiate an IP |
