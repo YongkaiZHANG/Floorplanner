@@ -30,6 +30,9 @@ test('emits exact canvas dimensions and all Cadence orientations', () => {
   assert.match(code, /dbCreatePRBoundary\(cv list\(-50\.625:-40\.375 -50\.625:40\.375 50\.625:40\.375 50\.625:-40\.375\)\)/);
   assert.match(code, /dbCreateLabel\(cv list\("text" "drawing"\)/);
   assert.doesNotMatch(code, /list\("instance" "drawing"\)/);
+  assert.match(code, /"top_block_PLACED"/);
+  assert.match(code, /"top_block_PLACED_2"/);
+  assert.doesNotMatch(code, /"top_I0_PLACED"/);
   orientations.forEach((orientation, index) => {
     assert.match(code, new RegExp(`dbCreateInst\\(cv master "I${index}_MASTER" [^\\n]+ "${orientation}" 1\\)`));
     assert.match(code, new RegExp(`dbCreateInst\\(cv master "I${index}" 0:0 "R0" 1\\)`));
@@ -61,18 +64,39 @@ test('escapes names before inserting them into SKILL strings', () => {
   assert.match(code, /"block\\"quoted"/);
 });
 
-test('IP masters receive centered adaptive name and size labels on text drawing', () => {
+test('placed IP wrappers receive centered adaptive name and size labels on text drawing', () => {
   const cells = {
     short: { id: 'short', libName: 'demoLib', cellName: 'IP', width: 100, height: 40, color: '#fff' },
     long: { id: 'long', libName: 'demoLib', cellName: 'VERY_LONG_ANALOG_PROCESSING_BLOCK', width: 100, height: 40, color: '#fff' },
   };
-  const code = generateSkillCode('demoLib', 'top', 200, 200, cells, [], 0.005);
-  const shortMatch = code.match(/dbCreateLabel\(cv list\("text" "drawing"\) 50:23\.6 "IP" "centerCenter" "R0" "roman" ([\d.]+)\)/);
-  const longMatch = code.match(/dbCreateLabel\(cv list\("text" "drawing"\) 50:23\.6 "VERY_LONG_ANALOG_PROCESSING_BLOCK" "centerCenter" "R0" "roman" ([\d.]+)\)/);
+  const instances = [
+    { id: 'short-inst', cellId: 'short', name: 'I3', x: -80, y: -20, orientation: 'R0' },
+    { id: 'long-inst', cellId: 'long', name: 'I4', x: 50, y: -20, orientation: 'R0' },
+  ];
+  const code = generateSkillCode('demoLib', 'top', 300, 200, cells, instances, 0.005);
+  const shortMatch = code.match(/dbCreateLabel\(cv list\("text" "drawing"\) -30:3\.6 "IP" "centerCenter" "R0" "roman" ([\d.]+)\)/);
+  const longMatch = code.match(/dbCreateLabel\(cv list\("text" "drawing"\) 100:3\.6 "VERY_LONG_ANALOG_PROCESSING_BLOCK" "centerCenter" "R0" "roman" ([\d.]+)\)/);
   assert.ok(shortMatch);
   assert.ok(longMatch);
   assert.ok(Number(longMatch[1]) < Number(shortMatch[1]));
-  assert.equal((code.match(/50:16\.4 "100 x 40 um"/g) ?? []).length, 2);
+  assert.match(code, /-30:-3\.6 "100 x 40 um"/);
+  assert.match(code, /100:-3\.6 "100 x 40 um"/);
+  assert.match(code, /dbOpenCellViewByType\("demoLib" "top_IP_PLACED" "layout" "maskLayout" "w"\)/);
+  assert.doesNotMatch(code, /top_I3_PLACED/);
+});
+
+test('rotated wrapper labels use the transformed physical IP center', () => {
+  const cells = {
+    adc: { id: 'adc', libName: 'demoLib', cellName: 'ADC', width: 20, height: 10, color: '#fff' },
+  };
+  const instances = [
+    { id: 'adc-inst', cellId: 'adc', name: 'I3', x: 30, y: 40, orientation: 'R90' },
+  ];
+  const code = generateSkillCode('demoLib', 'top_asic', 200, 200, cells, instances, 0.005);
+  assert.match(code, /top_asic_ADC_PLACED/);
+  assert.doesNotMatch(code, /top_asic_I3_PLACED/);
+  assert.match(code, /dbCreateLabel\(cv list\("text" "drawing"\) 25:51\.8 "ADC"/);
+  assert.match(code, /dbCreateLabel\(cv list\("text" "drawing"\) 25:48\.2 "20 x 10 um"/);
 });
 
 test('pad masters keep one compact label instead of the two-line IP label', () => {

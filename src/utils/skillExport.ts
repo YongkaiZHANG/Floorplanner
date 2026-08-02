@@ -1,4 +1,5 @@
 import type { Cell, Instance, PixelArray } from '../store/useStore';
+import { getPhysicalBounds } from './alignment.ts';
 import { formatGridValue, isOnGrid } from './grid.ts';
 
 const VALID_ORIENTATIONS = new Set(['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90']);
@@ -56,8 +57,9 @@ const buildExportHierarchy = (
   const ipWrapperNames = new Map<string, string>();
 
   instances.forEach(instance => {
-    if (masterCells[instance.cellId]?.kind === 'pad') return;
-    ipWrapperNames.set(instance.id, allocateUniqueName(`${topCellName}_${instance.name}_PLACED`, usedCellNames));
+    const masterCell = masterCells[instance.cellId];
+    if (!masterCell || masterCell.kind === 'pad') return;
+    ipWrapperNames.set(instance.id, allocateUniqueName(`${topCellName}_${masterCell.cellName}_PLACED`, usedCellNames));
   });
 
   const hasPads = instances.some(instance => masterCells[instance.cellId]?.kind === 'pad');
@@ -193,12 +195,7 @@ export const generateSkillCode = (
     const exactCX = cleanNumber(cell.width / 2);
     const exactCY = cleanNumber(cell.height / 2);
     const isPad = cell.kind === 'pad';
-    const sizeTextValue = `${formatGridValue(cell.width, gridSize)} x ${formatGridValue(cell.height, gridSize)} um`;
-    const sizeText = skillString(sizeTextValue);
-    const nameLabelHeight = fitLabelHeight(cell.cellName, cell.width, cell.height, isPad ? 0.12 : 0.16);
-    const sizeLabelHeight = fitLabelHeight(sizeTextValue, cell.width, cell.height, 0.1);
-    const nameLabelY = cleanNumber(exactCY + cell.height * 0.09);
-    const sizeLabelY = cleanNumber(exactCY - cell.height * 0.09);
+    const nameLabelHeight = fitLabelHeight(cell.cellName, cell.width, cell.height, 0.12);
 
     const lib = skillString(cell.libName);
     const cellName = skillString(cell.cellName);
@@ -215,14 +212,7 @@ export const generateSkillCode = (
       code += `      printf("WARNING: label layer text/drawing is unavailable for %s/%s.\\n" ${lib} ${cellName})\n`;
       code += `    )\n`;
     } else {
-      code += `    ; Centered IP name and size labels on ("text" "drawing").\n`;
-      code += `    ; Text heights adapt to both the IP height and the available width.\n`;
-      code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${nameLabelY} ${cellName} "centerCenter" "R0" "roman" ${nameLabelHeight}) t)\n`;
-      code += `      printf("WARNING: cannot create the IP name label for %s/%s.\\n" ${lib} ${cellName})\n`;
-      code += `    )\n`;
-      code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${sizeLabelY} ${sizeText} "centerCenter" "R0" "roman" ${sizeLabelHeight}) t)\n`;
-      code += `      printf("WARNING: cannot create the IP size label for %s/%s.\\n" ${lib} ${cellName})\n`;
-      code += `    )\n`;
+      code += `    ; IP information labels are added to the placed wrapper at its transformed center.\n`;
     }
     code += `    dbSave(cv)\n`;
     code += `    dbClose(cv)\n`;
@@ -245,6 +235,16 @@ export const generateSkillCode = (
     const snapX = formatGridValue(inst.x, gridSize);
     const snapY = formatGridValue(inst.y, gridSize);
     const orientation = skillString(inst.orientation);
+    const bounds = getPhysicalBounds({ ...inst, width: masterCell.width, height: masterCell.height });
+    const physicalWidth = bounds.right - bounds.left;
+    const physicalHeight = bounds.top - bounds.bottom;
+    const sizeTextValue = `${formatGridValue(masterCell.width, gridSize)} x ${formatGridValue(masterCell.height, gridSize)} um`;
+    const sizeText = skillString(sizeTextValue);
+    const labelX = cleanNumber(bounds.centerX);
+    const nameLabelY = cleanNumber(bounds.centerY + physicalHeight * 0.09);
+    const sizeLabelY = cleanNumber(bounds.centerY - physicalHeight * 0.09);
+    const nameLabelHeight = fitLabelHeight(masterCell.cellName, physicalWidth, physicalHeight, 0.16);
+    const sizeLabelHeight = fitLabelHeight(sizeTextValue, physicalWidth, physicalHeight, 0.1);
     code += `\n    ; --- Placed IP wrapper ${skillComment(wrapperName)} ---\n`;
     code += `    cv = dbOpenCellViewByType(${topLib} ${wrapperCell} "layout" "maskLayout" "w")\n`;
     code += `    unless(cv error("Floorplanner: cannot create placed IP cell %s/%s/layout.\\n" ${topLib} ${wrapperCell}))\n`;
@@ -254,6 +254,13 @@ export const generateSkillCode = (
     code += `    inst = dbCreateInst(cv master ${internalName} ${snapX}:${snapY} ${orientation} 1)\n`;
     code += `    unless(inst error("Floorplanner: cannot place IP master inside %s.\\n" ${wrapperCell}))\n`;
     code += `    dbClose(master)\n`;
+    code += `    ; Explicit wrapper labels at the transformed IP center on ("text" "drawing").\n`;
+    code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${labelX}:${nameLabelY} ${masterName} "centerCenter" "R0" "roman" ${nameLabelHeight}) t)\n`;
+    code += `      printf("WARNING: cannot create the placed IP name label in %s.\\n" ${wrapperCell})\n`;
+    code += `    )\n`;
+    code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${labelX}:${sizeLabelY} ${sizeText} "centerCenter" "R0" "roman" ${sizeLabelHeight}) t)\n`;
+    code += `      printf("WARNING: cannot create the placed IP size label in %s.\\n" ${wrapperCell})\n`;
+    code += `    )\n`;
     code += `    dbSave(cv)\n`;
     code += `    dbClose(cv)\n`;
   });

@@ -95,7 +95,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiDownload />
-              <div><strong>Export to Virtuoso</strong><p>SKILL adds adaptive centered name/size labels to IP masters, then creates origin-placed IP wrappers, one <code>Top_PAD_BANK</code>, and—when visible—one <code>Top_PIXEL_ARRAY</code>.</p></div>
+              <div><strong>Export to Virtuoso</strong><p>SKILL creates cell-name-based IP wrappers such as <code>Top_ADC_PLACED</code>, with explicit adaptive labels at each transformed center, plus one <code>Top_PAD_BANK</code> and optional pixel-array cell.</p></div>
             </article>
           </div>
         </section>
