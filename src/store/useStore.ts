@@ -33,6 +33,21 @@ export type Ruler = {
   endY: number;
 };
 
+export type PadSide = 'top' | 'bottom' | 'left' | 'right';
+
+export type PadRowConfig = {
+  libName: string;
+  cellName: string;
+  width: number;
+  height: number;
+  color: string;
+  count: number;
+  pitch: number;
+  side: PadSide;
+  /** Row-center displacement from the top-cell center: X on top/bottom, Y on left/right. */
+  offset: number;
+};
+
 export type EdgeAlignmentSession = {
   sourceId: string;
   sourceEdge: AlignmentEdge | null;
@@ -84,6 +99,7 @@ export type ProjectState = {
   updateMasterCell: (id: string, libName: string, cellName: string, w: number, h: number, color: string) => void;
   deleteMasterCell: (id: string) => void;
   placeInstance: (cellId: string, x?: number, y?: number, orientation?: string) => void;
+  createPadRow: (config: PadRowConfig) => void;
   
   updateInstancePosition: (instanceId: string, x: number, y: number) => void;
   updateInstanceOrientation: (instanceId: string, orientation: string) => void;
@@ -487,6 +503,104 @@ export const useStore = create<ProjectState>((set) => ({
       selectedInstanceId: newInst.id,
       selectedInstanceIds: [newInst.id],
       // Cadence keeps placement mode active so you can place multiple. We won't change appMode.
+    };
+  }),
+
+  createPadRow: (config) => set((state) => {
+    const libName = config.libName.trim();
+    const cellName = config.cellName.trim();
+    if (!libName || !cellName) throw new Error('Pad library and cell names are required');
+    if (!Number.isFinite(config.width) || config.width <= 0 || !Number.isFinite(config.height) || config.height <= 0) {
+      throw new RangeError('Pad width and height must be positive finite numbers');
+    }
+    if (!Number.isInteger(config.count) || config.count < 1 || config.count > 1000) {
+      throw new RangeError('Pad count must be an integer from 1 to 1000');
+    }
+    if (!Number.isFinite(config.pitch) || config.pitch <= 0) {
+      throw new RangeError('Pad pitch must be a positive finite number');
+    }
+    if (!Number.isFinite(config.offset)) throw new RangeError('Pad row offset must be finite');
+    if (!(['top', 'bottom', 'left', 'right'] as const).includes(config.side)) {
+      throw new Error('Pad side must be top, bottom, left, or right');
+    }
+    if (libName === state.topLibName && cellName === state.topCellName) {
+      throw new Error('The top cell cannot also be used as the pad master');
+    }
+
+    const horizontal = config.side === 'top' || config.side === 'bottom';
+    const padAlongRow = horizontal ? config.width : config.height;
+    if (config.pitch + 1e-9 < padAlongRow) {
+      throw new RangeError(`Pad pitch must be at least the pad ${horizontal ? 'width' : 'height'} to avoid overlap`);
+    }
+
+    const rowSpan = (config.count - 1) * config.pitch + padAlongRow;
+    const availableSpan = horizontal ? state.topWidth : state.topHeight;
+    if (rowSpan > availableSpan + 1e-9) {
+      throw new RangeError(`Pad row span ${rowSpan} um exceeds the ${availableSpan} um top-cell edge`);
+    }
+
+    const existingMaster = Object.values(state.masterCells).find(cell => (
+      cell.libName === libName && cell.cellName === cellName
+    ));
+    if (existingMaster && (
+      Math.abs(existingMaster.width - config.width) > 1e-9
+      || Math.abs(existingMaster.height - config.height) > 1e-9
+    )) {
+      throw new Error(`Existing master ${libName}/${cellName} has different dimensions`);
+    }
+
+    const master: Cell = existingMaster ?? {
+      id: uuidv4(),
+      libName,
+      cellName,
+      width: config.width,
+      height: config.height,
+      color: config.color,
+    };
+    const masterCells = existingMaster
+      ? state.masterCells
+      : { ...state.masterCells, [master.id]: master };
+    const instances = [...state.instances];
+    const firstCenter = config.offset - ((config.count - 1) * config.pitch) / 2;
+
+    for (let index = 0; index < config.count; index += 1) {
+      const along = firstCenter + index * config.pitch;
+      const targetX = horizontal
+        ? along - config.width / 2
+        : config.side === 'left' ? -state.topWidth / 2 : state.topWidth / 2 - config.width;
+      const targetY = horizontal
+        ? config.side === 'bottom' ? -state.topHeight / 2 : state.topHeight / 2 - config.height
+        : along - config.height / 2;
+      const position = clampInstancePosition(
+        targetX,
+        targetY,
+        'R0',
+        config.width,
+        config.height,
+        state.topWidth,
+        state.topHeight,
+        state.gridSize,
+      );
+      if (Math.abs(position.x - targetX) > 1e-9 || Math.abs(position.y - targetY) > 1e-9) {
+        throw new RangeError('Pad row position must fit inside the top cell and land exactly on the placement grid');
+      }
+      const instance: Instance = {
+        id: uuidv4(),
+        cellId: master.id,
+        name: getNextInstanceName(instances),
+        x: position.x,
+        y: position.y,
+        orientation: 'R0',
+      };
+      instances.push(instance);
+    }
+
+    return {
+      ...commitProjectPatch(state, `Place ${config.count} ${cellName} pads on ${config.side}`, { masterCells, instances }),
+      selectedInstanceId: null,
+      selectedInstanceIds: [],
+      appMode: 'select',
+      edgeAlignmentSession: null,
     };
   }),
 

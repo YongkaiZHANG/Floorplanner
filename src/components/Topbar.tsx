@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { getProjectSnapshot, useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
 import { exportSVG } from '../utils/svgExport';
-import { parseProjectDocument, serializeProjectDocument } from '../store/projectDocument';
+import { parseProjectDocument } from '../store/projectDocument';
 import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import { EditingToolbar } from './EditingToolbar';
@@ -16,7 +16,7 @@ export const Topbar: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v8') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v9') !== 'yes';
     } catch {
       return true;
     }
@@ -62,21 +62,6 @@ export const Topbar: React.FC = () => {
     const skillCode = createSkillCode();
     if (!skillCode) return;
     downloadSkillFile(`${topCellName}.il`, skillCode);
-  };
-
-  const handleDownloadProject = () => {
-    const snapshot = getProjectSnapshot(useStore.getState());
-    const blob = new Blob([serializeProjectDocument(snapshot)], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${snapshot.topCellName}.flp`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-    setSavedSignature(JSON.stringify(snapshot));
-    showToast(`${snapshot.topCellName}.flp backup downloaded`);
   };
 
   const handleSaveSvg = () => {
@@ -168,7 +153,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v8', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v9', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -272,10 +257,6 @@ export const Topbar: React.FC = () => {
           <FiUpload /> Open Project
           <input type="file" accept=".svg,.flp,.json" onChange={handleLoadProject} />
         </label>
-        <button className="btn backup-btn" onClick={handleDownloadProject} title="Download a compact editable .flp backup">
-          <FiDownload /> <span>Backup .flp</span>
-        </button>
-        
         <div className="vertical-divider" />
 
         <button className="btn config-btn" onClick={() => setShowConfig(true)}>

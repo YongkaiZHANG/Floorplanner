@@ -28,6 +28,8 @@ test('emits exact canvas dimensions and all Cadence orientations', () => {
 
   assert.match(code, /dbCreatePRBoundary\(cv list\(0:0 0:6\.789 12\.345:6\.789 12\.345:0\)\)/);
   assert.match(code, /dbCreatePRBoundary\(cv list\(-50\.625:-40\.375 -50\.625:40\.375 50\.625:40\.375 50\.625:-40\.375\)\)/);
+  assert.match(code, /dbCreateLabel\(cv list\("text" "drawing"\)/);
+  assert.doesNotMatch(code, /list\("instance" "drawing"\)/);
   orientations.forEach((orientation, index) => {
     assert.match(code, new RegExp(`dbCreateInst\\(cv master "I${index}" [^\\n]+ "${orientation}" 1\\)`));
   });

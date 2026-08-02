@@ -14,8 +14,8 @@ IC Floorplanner is a browser-based ASIC floorplanning tool with a CAD-style canv
 - Shift-click multi-selection with quick transformed-edge alignment and equal-gap distribution.
 - Full project Undo and Redo, including placement, transforms, rulers, master edits, alignment, and top-cell changes.
 - Manual rulers, orthogonal measurement, edge snapping, selected-IP gaps, and reduced-clutter Auto-Dim.
+- Undoable top/bottom/left/right pad-row generation with pad size, count, pitch, and center offset controls.
 - Browser-viewable SVG save with an embedded project payload for lossless re-import.
-- Versioned `.flp` backup/open with validation and unsaved-change protection.
 - Cadence SKILL preview and export with real OpenAccess `prBoundary` objects.
 
 ## Quick start
@@ -51,6 +51,8 @@ Create Master IP definitions in the left sidebar. Each master has:
 
 Master geometry uses `(0, 0)` as its local origin, which is also the instance origin exported to Virtuoso.
 
+Use the grid button beside **Top Cell** to create a continuous pad row. Define the reusable pad library/cell, width, height, count, center-to-center pitch, top-cell side, and row-center offset. Top/bottom offsets move the row along X; left/right offsets move it along Y. Pads touch the chosen boundary from inside the top cell, and the complete master-plus-row creation is one Undo operation. The tool rejects overlapping pitch, off-grid origins, or rows that do not fit.
+
 ### 2. Place and edit instances
 
 Click the crosshair beside a master or press `i` to attach an instance to the cursor. Placement remains active for repeated placement until cancelled.
@@ -84,11 +86,10 @@ Selecting a block shows its directly visible neighboring gaps in blue. Auto-Dim 
 ### 5. Save or export
 
 - **Save SVG** (or `Ctrl/Cmd+S`) downloads a visual SVG that opens in a browser and embeds the editable project.
-- **Open Project** accepts `.flp`, legacy JSON, or an SVG exported by this application.
-- **Backup .flp** downloads a compact validated project file without the visual drawing.
+- **Open Project** opens an SVG exported by this application. Legacy `.flp` and JSON import remains available only for backward compatibility.
 - **Preview Code** displays the generated Cadence SKILL before download.
 
-The Saved/Unsaved indicator tracks the last SVG save, `.flp` backup, or project open. The application warns before replacing unsaved work or closing the page.
+The Saved/Unsaved indicator tracks the last SVG save or project open. The application warns before replacing unsaved work or closing the page.
 
 Changing the placement grid re-snaps every existing instance to an exact multiple of the new grid. Coordinate fields, lists, SVG tables, and generated SKILL use precision derived from that grid. For example, `3452u` is valid on a `0.005u` grid because it equals exactly 690,400 grid steps; Cadence may display it as `3452.0000000u` according to its own display precision.
 

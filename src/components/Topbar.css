@@ -214,10 +214,6 @@
   display: none;
 }
 
-.backup-btn {
-  color: var(--text-secondary);
-}
-
 .vertical-divider {
   width: 1px;
   height: 24px;
@@ -325,14 +321,6 @@
     padding-inline: 8px;
   }
 
-  .backup-btn {
-    width: 34px;
-    padding-inline: 8px;
-  }
-
-  .backup-btn span {
-    display: none;
-  }
 }
 
 @media (max-width: 1250px) {

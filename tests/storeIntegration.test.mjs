@@ -291,3 +291,57 @@ test('a valid alignment spacing is reused by the next alignment session', () => 
   useStore.getState().startEdgeAlignment(source.id);
   assert.equal(useStore.getState().edgeAlignmentSession?.offset, '12.5');
 });
+
+test('pad rows create one reusable master and exact pitched edge instances as one undo step', () => {
+  useStore.getState().loadProject(emptyProject);
+  const historyLength = useStore.getState().history.past.length;
+
+  useStore.getState().createPadRow({
+    libName: 'padLib',
+    cellName: 'PAD',
+    width: 10,
+    height: 5,
+    color: '#f59e0b',
+    count: 4,
+    pitch: 15,
+    side: 'top',
+    offset: 0,
+  });
+
+  const state = useStore.getState();
+  const master = Object.values(state.masterCells)[0];
+  assert.equal(master.cellName, 'PAD');
+  assert.equal(state.instances.length, 4);
+  assert.equal(state.history.past.length, historyLength + 1);
+  assert.equal(state.selectedInstanceIds.length, 0);
+
+  const bounds = state.instances.map(instance => getPhysicalBounds({
+    ...instance,
+    width: master.width,
+    height: master.height,
+  }));
+  assert.deepEqual(bounds.map(item => item.top), [50, 50, 50, 50]);
+  assert.deepEqual(bounds.map(item => item.centerX), [-22.5, -7.5, 7.5, 22.5]);
+  assert.deepEqual(bounds.slice(1).map((item, index) => item.left - bounds[index].right), [5, 5, 5]);
+
+  useStore.getState().undo();
+  assert.equal(Object.keys(useStore.getState().masterCells).length, 0);
+  assert.equal(useStore.getState().instances.length, 0);
+});
+
+test('pad rows reject overlapping pitch and rows that cannot fit', () => {
+  useStore.getState().loadProject(emptyProject);
+  const base = {
+    libName: 'padLib', cellName: 'PAD', width: 10, height: 5, color: '#fff',
+    count: 4, pitch: 15, side: 'top', offset: 0,
+  };
+  assert.throws(
+    () => useStore.getState().createPadRow({ ...base, pitch: 9 }),
+    /avoid overlap/,
+  );
+  assert.throws(
+    () => useStore.getState().createPadRow({ ...base, count: 8 }),
+    /exceeds the 100 um top-cell edge/,
+  );
+  assert.equal(useStore.getState().instances.length, 0);
+});

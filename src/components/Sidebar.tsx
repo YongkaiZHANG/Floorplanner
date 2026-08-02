@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
 
@@ -16,7 +16,7 @@ export const Sidebar: React.FC = () => {
     topWidth, topHeight, topLibName, topCellName, 
     setTopDimensions, setTopNames,
     masterCells, instances, selectedInstanceIds, setSelectedInstance,
-    addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, 
+    addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, createPadRow,
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
     setPlacement, leftSidebarPinned, setLeftSidebarPinned, gridSize,
@@ -39,6 +39,17 @@ export const Sidebar: React.FC = () => {
   const [editTopWidth, setEditTopWidth] = useState(topWidth.toString());
   const [editTopHeight, setEditTopHeight] = useState(topHeight.toString());
 
+  const [showPadModal, setShowPadModal] = useState(false);
+  const [padLibName, setPadLibName] = useState(topLibName);
+  const [padCellName, setPadCellName] = useState('PAD');
+  const [padWidth, setPadWidth] = useState('10');
+  const [padHeight, setPadHeight] = useState('10');
+  const [padCount, setPadCount] = useState('8');
+  const [padPitch, setPadPitch] = useState('12');
+  const [padSide, setPadSide] = useState<'top' | 'bottom' | 'left' | 'right'>('top');
+  const [padOffset, setPadOffset] = useState('0');
+  const [padColor, setPadColor] = useState('#f59e0b');
+
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (newLibName && newCellName && newWidth && newHeight) {
@@ -50,6 +61,26 @@ export const Sidebar: React.FC = () => {
       }
       setShowCreateModal(false);
       setNewCellName('');
+    }
+  };
+
+  const handlePadSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      createPadRow({
+        libName: padLibName,
+        cellName: padCellName,
+        width: Number(padWidth),
+        height: Number(padHeight),
+        color: padColor,
+        count: Number(padCount),
+        pitch: Number(padPitch),
+        side: padSide,
+        offset: Number(padOffset),
+      });
+      setShowPadModal(false);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to create the pad row.');
     }
   };
 
@@ -92,15 +123,23 @@ export const Sidebar: React.FC = () => {
         <div className="sidebar-section">
           <div className="section-header">
             <h3 className="section-title"><FiLayers /> Top Cell</h3>
-            <button className="icon-btn" onClick={() => {
-              setEditTopLibName(topLibName);
-              setEditTopCellName(topCellName);
-              setEditTopWidth(topWidth.toString());
-              setEditTopHeight(topHeight.toString());
-              setShowEditTopModal(true);
-            }} title="Edit Top Cell">
-              <FiSettings />
-            </button>
+            <div className="section-actions">
+              <button className="icon-btn" onClick={() => {
+                setPadLibName(topLibName);
+                setShowPadModal(true);
+              }} title="Create a continuous pad row">
+                <FiGrid />
+              </button>
+              <button className="icon-btn" onClick={() => {
+                setEditTopLibName(topLibName);
+                setEditTopCellName(topCellName);
+                setEditTopWidth(topWidth.toString());
+                setEditTopHeight(topHeight.toString());
+                setShowEditTopModal(true);
+              }} title="Edit Top Cell">
+                <FiSettings />
+              </button>
+            </div>
           </div>
           <div style={{padding: '0 8px'}}>
             <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px'}}>
@@ -349,6 +388,83 @@ export const Sidebar: React.FC = () => {
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setShowEditTopModal(false)}>Cancel</button>
               <button type="submit" className="btn btn-primary">Save Changes</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
+
+    {showPadModal && (
+      <div className="modal-overlay">
+        <div className="modal-content glass-panel pad-row-modal">
+          <div className="modal-header">
+            <div>
+              <span className="modal-eyebrow">Top-cell utility</span>
+              <h2 className="modal-title">Create Pad Row</h2>
+            </div>
+            <button type="button" className="modal-close-btn" onClick={() => setShowPadModal(false)} aria-label="Close pad row tool">
+              <FiX />
+            </button>
+          </div>
+          <form onSubmit={handlePadSubmit}>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="label">Library</label>
+                <input className="input-field" value={padLibName} onChange={event => setPadLibName(event.target.value)} required />
+              </div>
+              <div className="form-group">
+                <label className="label">Pad Cell</label>
+                <input className="input-field" value={padCellName} onChange={event => setPadCellName(event.target.value)} required />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="label">Pad Width (um)</label>
+                <input type="number" min="0" step="any" className="input-field" value={padWidth} onChange={event => setPadWidth(event.target.value)} required />
+              </div>
+              <div className="form-group">
+                <label className="label">Pad Height (um)</label>
+                <input type="number" min="0" step="any" className="input-field" value={padHeight} onChange={event => setPadHeight(event.target.value)} required />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="label">Count</label>
+                <input type="number" min="1" max="1000" step="1" className="input-field" value={padCount} onChange={event => setPadCount(event.target.value)} required />
+              </div>
+              <div className="form-group">
+                <label className="label">Pitch, center-to-center (um)</label>
+                <input type="number" min="0" step="any" className="input-field" value={padPitch} onChange={event => setPadPitch(event.target.value)} required />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="label">Top-cell Side</label>
+                <select className="input-field" value={padSide} onChange={event => setPadSide(event.target.value as typeof padSide)}>
+                  <option value="top">Top</option>
+                  <option value="bottom">Bottom</option>
+                  <option value="left">Left</option>
+                  <option value="right">Right</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="label">Row Center Offset (um)</label>
+                <input type="number" step="any" className="input-field" value={padOffset} onChange={event => setPadOffset(event.target.value)} required />
+              </div>
+            </div>
+            <div className="pad-row-options">
+              <label className="pad-color-field">
+                <input type="color" value={padColor} onChange={event => setPadColor(event.target.value)} />
+                <span><strong>Planning color</strong><small>Cadence display colors still come from the technology file.</small></span>
+              </label>
+              <div className="pad-row-summary">
+                <strong>{Number(padCount) || 0} pads on {padSide}</strong>
+                <span>Pitch is center-to-center · offset is from the edge center</span>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => setShowPadModal(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary"><FiGrid /> Create Pad Row</button>
             </div>
           </form>
         </div>

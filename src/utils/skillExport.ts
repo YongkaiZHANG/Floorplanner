@@ -116,11 +116,12 @@ export const generateSkillCode = (
     code += `    printf("Creating master: %s/%s\\n" ${lib} ${cellName})\n`;
     code += `    cv = dbOpenCellViewByType(${lib} ${cellName} "layout" "maskLayout" "w")\n`;
     code += `    unless(cv error("Floorplanner: cannot create master %s/%s/layout.\\n" ${lib} ${cellName}))\n`;
+    code += `    ; Native OA prBoundary object on ("prBoundary" "drawing").\n`;
     code += `    boundary = dbCreatePRBoundary(cv list(0:0 0:${exactH} ${exactW}:${exactH} ${exactW}:0))\n`;
     code += `    unless(boundary error("Floorplanner: cannot create prBoundary for %s/%s.\\n" ${lib} ${cellName}))\n`;
-    code += `    ; The label is visual metadata; do not fail geometry creation if this LPP is unavailable.\n`;
-    code += `    unless(errset(dbCreateLabel(cv list("instance" "drawing") ${exactCX}:${exactCY} ${cellName} "centerCenter" "R0" "roman" ${cleanNumber(cell.height * 0.1)}) t)\n`;
-    code += `      printf("WARNING: label layer instance/drawing is unavailable for %s/%s.\\n" ${lib} ${cellName})\n`;
+    code += `    ; Visual label uses only the requested ("text" "drawing") LPP.\n`;
+    code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${exactCY} ${cellName} "centerCenter" "R0" "roman" ${cleanNumber(cell.height * 0.1)}) t)\n`;
+    code += `      printf("WARNING: label layer text/drawing is unavailable for %s/%s.\\n" ${lib} ${cellName})\n`;
     code += `    )\n`;
     code += `    dbSave(cv)\n`;
     code += `    dbClose(cv)\n`;
@@ -134,8 +135,8 @@ export const generateSkillCode = (
   code += `    cv = dbOpenCellViewByType(${topLib} ${topCell} "layout" "maskLayout" "w")\n`;
   code += `    unless(cv error("Floorplanner: cannot create top cell %s/%s/layout.\\n" ${topLib} ${topCell}))\n\n`;
 
-  // Top Cell boundary (prBoundary on the correct layer for Cadence)
-  code += `    ; Chip boundary: the Floorplanner and Virtuoso origins are both at its center.\n`;
+  // Top Cell boundary (native prBoundary/drawing object)
+  code += `    ; Chip boundary: native OA prBoundary on ("prBoundary" "drawing"); both origins are at its center.\n`;
   code += `    boundary = dbCreatePRBoundary(cv list(${-exactHalfW}:${-exactHalfH} ${-exactHalfW}:${exactHalfH} ${exactHalfW}:${exactHalfH} ${exactHalfW}:${-exactHalfH}))\n`;
   code += `    unless(boundary error("Floorplanner: cannot create the top-cell prBoundary.\\n"))\n\n`;
 

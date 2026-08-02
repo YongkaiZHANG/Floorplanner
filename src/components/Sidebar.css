@@ -74,6 +74,12 @@
   margin-bottom: 12px;
 }
 
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .section-title {
   font-size: 14px;
   font-weight: 600;
@@ -204,4 +210,78 @@
 .custom-color-picker code {
   color: var(--text-primary);
   font-size: 11px;
+}
+
+.pad-row-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.modal-eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: #60a5fa;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pad-row-options {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.pad-color-field,
+.pad-row-summary {
+  min-height: 60px;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+}
+
+.pad-color-field {
+  cursor: pointer;
+}
+
+.pad-color-field input {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pad-color-field span,
+.pad-row-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.pad-color-field strong,
+.pad-row-summary strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.pad-color-field small,
+.pad-row-summary span {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+@media (max-width: 600px) {
+  .pad-row-options {
+    grid-template-columns: 1fr;
+  }
 }
