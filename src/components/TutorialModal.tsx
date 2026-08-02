@@ -65,7 +65,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiRotateCw />
-              <div><strong>Rotate safely</strong><p>Right-click an IP to rotate it 90° clockwise; Shift-right-click rotates counterclockwise. You can also use r / Shift+r or the Properties panel.</p></div>
+              <div><strong>Rotate safely</strong><p>Right-click an IP or pad to rotate it 90° clockwise; Shift-right-click rotates counterclockwise. Pad edge attachment uses the rotated physical footprint, including swapped width and height at R90/R270.</p></div>
             </article>
             <article className="tutorial-card">
               <FiAlignLeft />
@@ -77,7 +77,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiGrid />
-              <div><strong>Place edge pads</strong><p>Use Automatic Row for regular pitch. Use Manual / Separated to click arbitrary edge locations, skip keep-out gaps, and continue elsewhere. Every pad instance reuses one Cadence pad cell.</p></div>
+              <div><strong>Place edge pads</strong><p>Choose the pad orientation first. Automatic Row creates one regular section. Manual / Separated lets you define count and pitch per group, then click each group at any perimeter location with arbitrary gaps between groups. Every instance reuses one Cadence pad cell.</p></div>
             </article>
             <article className="tutorial-card">
               <FiGrid />

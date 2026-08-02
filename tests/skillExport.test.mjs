@@ -89,11 +89,12 @@ test('multiple pad instances reference one generated pad cellview', () => {
   };
   const padInstances = [
     { id: 'p0', cellId: 'pad', name: 'I0', x: -50, y: 42, orientation: 'R0' },
-    { id: 'p1', cellId: 'pad', name: 'I1', x: 20, y: 42, orientation: 'R0' },
+    { id: 'p1', cellId: 'pad', name: 'I1', x: 20, y: 40, orientation: 'R90' },
   ];
   const code = generateSkillCode('demoLib', 'top', 100, 100, padCells, padInstances, 0.005);
   assert.equal((code.match(/Creating master: %s\/%s/g) ?? []).length, 1);
   assert.equal((code.match(/dbCreateInst\(cv master/g) ?? []).length, 2);
+  assert.match(code, /dbCreateInst\(cv master "I1" 20:40 "R90" 1\)/);
 });
 
 test('rejects a master outside the Top Cell library', () => {

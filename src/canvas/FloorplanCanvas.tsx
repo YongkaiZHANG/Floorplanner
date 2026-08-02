@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, clampInstancePosition, getTransformProps, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToNearestEdge } from '../store/useStore';
+import { useStore, clampInstancePosition, computePadGroupPositions, getTransformProps, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToNearestEdge } from '../store/useStore';
 import { getAlignmentEdgeAxis } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
 import { formatGridValue } from '../utils/grid';
@@ -52,6 +52,8 @@ export const FloorplanCanvas: React.FC = () => {
     placementMasterId,
     placementOrientation,
     placeInstance,
+    pendingManualPadGroup,
+    placeManualPadGroup,
     rightSidebarPinned,
     setRightSidebarPinned,
     orthogonalRuler,
@@ -438,6 +440,7 @@ export const FloorplanCanvas: React.FC = () => {
         topWidth,
         topHeight,
         gridSize,
+        orientation,
       );
       return {
         x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
@@ -1072,7 +1075,8 @@ export const FloorplanCanvas: React.FC = () => {
             }
           } else if (appMode === 'place' && placementMasterId && snapped) {
             try {
-              placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation);
+              if (pendingManualPadGroup) placeManualPadGroup(snapped.umX, snapped.umY);
+              else placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation);
             } catch (error) {
               alert(error instanceof Error ? error.message : 'Unable to place the selected cell.');
             }
@@ -1586,7 +1590,38 @@ export const FloorplanCanvas: React.FC = () => {
             let ghostPosition = mousePos;
             if (m.kind === 'pad') {
               try {
-                ghostPosition = snapPadToNearestEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize);
+                const snapped = snapPadToNearestEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize, placementOrientation);
+                if (pendingManualPadGroup) {
+                  const horizontal = snapped.side === 'top' || snapped.side === 'bottom';
+                  const centerAlong = horizontal ? mousePos.x : mousePos.y;
+                  const positions = computePadGroupPositions({
+                    width: m.width, height: m.height, count: pendingManualPadGroup.count,
+                    pitch: pendingManualPadGroup.pitch, side: snapped.side, centerAlong,
+                    orientation: placementOrientation, topWidth, topHeight, gridSize,
+                  });
+                  return <>{positions.map((position, index) => (
+                    <Group
+                      key={`manual-pad-ghost-${index}`}
+                      x={position.x * SCALE_FACTOR}
+                      y={position.y * SCALE_FACTOR}
+                      rotation={t.rotation}
+                      scaleX={t.scaleX}
+                      scaleY={t.scaleY}
+                      opacity={0.5}
+                      listening={false}
+                    >
+                      <Rect
+                        width={m.width * SCALE_FACTOR}
+                        height={m.height * SCALE_FACTOR}
+                        fill={m.color}
+                        stroke="#f8fafc"
+                        strokeWidth={2 / stageScale}
+                        dash={[5 / stageScale, 5 / stageScale]}
+                      />
+                    </Group>
+                  ))}</>;
+                }
+                ghostPosition = snapped;
               } catch {
                 return null;
               }
@@ -1677,7 +1712,7 @@ export const FloorplanCanvas: React.FC = () => {
       )}
       {appMode === 'place' && placementMasterId && masterCells[placementMasterId]?.kind === 'pad' && (
         <div className="coordinate-overlay manual-pad-placement-hint">
-          Manual Pad Placement · Click arbitrary perimeter positions · Skip keep-out gaps · Esc finishes
+          Manual Pad Groups · {pendingManualPadGroup?.count ?? 1} pads at {pendingManualPadGroup?.pitch ?? 0} um pitch · Click each group location · Esc finishes
         </div>
       )}
       {showAutoDim && appMode !== 'measure' && !pixelArraySelected && (

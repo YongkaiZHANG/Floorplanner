@@ -458,7 +458,47 @@ test('pad movement stays attached and can switch to the nearest top-cell edge', 
   assert.deepEqual([moved.x, moved.y], [0, -50]);
 
   useStore.getState().updateInstanceOrientation(pad.id, 'R90');
-  assert.equal(useStore.getState().instances[0].orientation, 'R0');
+  moved = useStore.getState().instances[0];
+  assert.equal(moved.orientation, 'R90');
+  const rotatedBounds = getPhysicalBounds({ ...moved, width: 10, height: 5 });
+  assert.ok([rotatedBounds.left, rotatedBounds.right, rotatedBounds.bottom, rotatedBounds.top].some(edge => Math.abs(Math.abs(edge) - 50) < 1e-9));
+  assert.equal(rotatedBounds.right - rotatedBounds.left, 5);
+  assert.equal(rotatedBounds.top - rotatedBounds.bottom, 10);
+});
+
+test('rotated automatic rows use the transformed pad footprint', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().createPadRow({
+    libName: 'padLib', cellName: 'ROT_PAD', width: 10, height: 5, color: '#fff',
+    count: 3, pitch: 8, side: 'top', offset: 0, orientation: 'R90',
+  });
+  const state = useStore.getState();
+  const master = Object.values(state.masterCells)[0];
+  const bounds = state.instances.map(instance => getPhysicalBounds({ ...instance, width: master.width, height: master.height }));
+  assert.ok(state.instances.every(instance => instance.orientation === 'R90'));
+  assert.deepEqual(bounds.map(bound => bound.top), [50, 50, 50]);
+  assert.deepEqual(bounds.map(bound => bound.centerX), [-8, 0, 8]);
+  assert.deepEqual(bounds.slice(1).map((bound, index) => bound.left - bounds[index].right), [3, 3]);
+});
+
+test('manual placement clicks create pitched groups while preserving arbitrary gaps', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().prepareManualPadPlacement({
+    libName: 'padLib', cellName: 'GROUP_PAD', width: 10, height: 5, color: '#fff',
+    count: 3, pitch: 8, orientation: 'R90',
+  });
+  const before = useStore.getState().history.past.length;
+  useStore.getState().placeManualPadGroup(-25, 45);
+  useStore.getState().placeManualPadGroup(20, 45);
+  const state = useStore.getState();
+  const master = Object.values(state.masterCells)[0];
+  const bounds = state.instances.map(instance => getPhysicalBounds({ ...instance, width: master.width, height: master.height }));
+  assert.equal(state.instances.length, 6);
+  assert.ok(state.instances.every(instance => instance.cellId === master.id && instance.orientation === 'R90'));
+  assert.deepEqual(bounds.slice(0, 3).map(bound => bound.centerX), [-33, -25, -17]);
+  assert.deepEqual(bounds.slice(3).map(bound => bound.centerX), [12, 20, 28]);
+  assert.ok(bounds.every(bound => bound.top === 50));
+  assert.equal(state.history.past.length, before + 2);
 });
 
 test('pad rows reject overlapping pitch and rows that cannot fit', () => {

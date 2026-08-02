@@ -61,11 +61,23 @@ export type PadRowConfig = {
   count: number;
   pitch: number;
   side: PadSide;
+  orientation?: string;
   /** Row-center displacement from the top-cell center: X on top/bottom, Y on left/right. */
   offset: number;
 };
 
-export type PadMasterConfig = Pick<PadRowConfig, 'libName' | 'cellName' | 'width' | 'height' | 'color'>;
+export type PadMasterConfig = Pick<PadRowConfig, 'libName' | 'cellName' | 'width' | 'height' | 'color'> & {
+  count?: number;
+  pitch?: number;
+  orientation?: string;
+};
+
+export type PendingManualPadGroup = {
+  masterId: string;
+  count: number;
+  pitch: number;
+  orientation: string;
+};
 
 export const PIXEL_ARRAY_ALIGNMENT_ID = '__pixel_array__';
 
@@ -105,6 +117,7 @@ export type ProjectState = {
   
   placementMasterId: string | null;
   placementOrientation: string;
+  pendingManualPadGroup: PendingManualPadGroup | null;
   history: ProjectHistory;
   edgeAlignmentSession: EdgeAlignmentSession | null;
   lastAlignmentSpacing: string;
@@ -125,6 +138,7 @@ export type ProjectState = {
   placeInstance: (cellId: string, x?: number, y?: number, orientation?: string) => void;
   createPadRow: (config: PadRowConfig) => void;
   prepareManualPadPlacement: (config: PadMasterConfig) => void;
+  placeManualPadGroup: (x: number, y: number) => void;
   startPixelArrayPlacement: (width: number, height: number) => void;
   placePixelArray: (centerX: number, centerY: number) => void;
   updatePixelArrayPosition: (x: number, y: number) => void;
@@ -238,24 +252,71 @@ export const snapPadToNearestEdge = (
   topWidth: number,
   topHeight: number,
   gridSize: number,
+  orientation = 'R0',
 ) => {
-  const inside = clampInstancePosition(x, y, 'R0', width, height, topWidth, topHeight, gridSize);
+  const localBounds = getPhysicalBounds({ id: 'pad-preview', x: 0, y: 0, orientation, width, height });
+  const inside = clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, gridSize);
   const edgeCoordinates = {
-    left: -topWidth / 2,
-    right: topWidth / 2 - width,
-    bottom: -topHeight / 2,
-    top: topHeight / 2 - height,
+    left: -topWidth / 2 - localBounds.left,
+    right: topWidth / 2 - localBounds.right,
+    bottom: -topHeight / 2 - localBounds.bottom,
+    top: topHeight / 2 - localBounds.top,
   };
   const onGrid = (value: number) => Math.abs(snapToGrid(value, gridSize) - value) <= 1e-9;
   const candidates = [
-    onGrid(edgeCoordinates.left) ? { x: edgeCoordinates.left, y: inside.y, distance: Math.abs(x - edgeCoordinates.left) } : null,
-    onGrid(edgeCoordinates.right) ? { x: edgeCoordinates.right, y: inside.y, distance: Math.abs(x - edgeCoordinates.right) } : null,
-    onGrid(edgeCoordinates.bottom) ? { x: inside.x, y: edgeCoordinates.bottom, distance: Math.abs(y - edgeCoordinates.bottom) } : null,
-    onGrid(edgeCoordinates.top) ? { x: inside.x, y: edgeCoordinates.top, distance: Math.abs(y - edgeCoordinates.top) } : null,
-  ].filter((candidate): candidate is { x: number; y: number; distance: number } => candidate !== null);
+    onGrid(edgeCoordinates.left) ? { x: edgeCoordinates.left, y: inside.y, distance: Math.abs(x - edgeCoordinates.left), side: 'left' as PadSide } : null,
+    onGrid(edgeCoordinates.right) ? { x: edgeCoordinates.right, y: inside.y, distance: Math.abs(x - edgeCoordinates.right), side: 'right' as PadSide } : null,
+    onGrid(edgeCoordinates.bottom) ? { x: inside.x, y: edgeCoordinates.bottom, distance: Math.abs(y - edgeCoordinates.bottom), side: 'bottom' as PadSide } : null,
+    onGrid(edgeCoordinates.top) ? { x: inside.x, y: edgeCoordinates.top, distance: Math.abs(y - edgeCoordinates.top), side: 'top' as PadSide } : null,
+  ].filter((candidate): candidate is { x: number; y: number; distance: number; side: PadSide } => candidate !== null);
   const closest = candidates.sort((a, b) => a.distance - b.distance)[0];
   if (!closest) throw new RangeError('No top-cell edge is compatible with the active placement grid');
-  return { x: snapToGrid(closest.x, gridSize), y: snapToGrid(closest.y, gridSize) };
+  return { x: snapToGrid(closest.x, gridSize), y: snapToGrid(closest.y, gridSize), side: closest.side };
+};
+
+type PadGroupGeometry = {
+  width: number;
+  height: number;
+  count: number;
+  pitch: number;
+  side: PadSide;
+  centerAlong: number;
+  orientation: string;
+  topWidth: number;
+  topHeight: number;
+  gridSize: number;
+};
+
+export const computePadGroupPositions = (config: PadGroupGeometry) => {
+  const local = getPhysicalBounds({ id: 'pad-group-preview', x: 0, y: 0, orientation: config.orientation, width: config.width, height: config.height });
+  const horizontal = config.side === 'top' || config.side === 'bottom';
+  const padAlong = horizontal ? local.right - local.left : local.top - local.bottom;
+  if (config.pitch + 1e-9 < padAlong) {
+    throw new RangeError(`Pad pitch must be at least the rotated pad ${horizontal ? 'width' : 'height'} (${padAlong} um) to avoid overlap`);
+  }
+  const span = (config.count - 1) * config.pitch + padAlong;
+  const available = horizontal ? config.topWidth : config.topHeight;
+  if (span > available + 1e-9) throw new RangeError(`Pad group span ${span} um exceeds the ${available} um top-cell edge`);
+
+  const minCenter = -available / 2 + span / 2;
+  const maxCenter = available / 2 - span / 2;
+  const centerAlong = snapToGrid(Math.max(minCenter, Math.min(config.centerAlong, maxCenter)), config.gridSize);
+  const firstCenter = centerAlong - ((config.count - 1) * config.pitch) / 2;
+
+  return Array.from({ length: config.count }, (_, index) => {
+    const along = firstCenter + index * config.pitch;
+    const targetX = horizontal
+      ? along - local.centerX
+      : config.side === 'left' ? -config.topWidth / 2 - local.left : config.topWidth / 2 - local.right;
+    const targetY = horizontal
+      ? config.side === 'bottom' ? -config.topHeight / 2 - local.bottom : config.topHeight / 2 - local.top
+      : along - local.centerY;
+    const position = clampInstancePosition(targetX, targetY, config.orientation, config.width, config.height, config.topWidth, config.topHeight, config.gridSize);
+    if (Math.abs(position.x - targetX) > 1e-8 || Math.abs(position.y - targetY) > 1e-8) {
+      throw new RangeError('Pad group must fit inside the top cell and land exactly on the placement grid');
+    }
+    return position;
+  });
 };
 
 const normalizePixelArray = (
@@ -525,6 +586,7 @@ export const useStore = create<ProjectState>((set) => ({
   
   placementMasterId: null,
   placementOrientation: 'R0',
+  pendingManualPadGroup: null,
   history: { past: [], future: [] },
   edgeAlignmentSession: null,
   lastAlignmentSpacing: readStoredAlignmentSpacing(),
@@ -537,7 +599,7 @@ export const useStore = create<ProjectState>((set) => ({
       const master = state.masterCells[instance.cellId];
       if (!master) return instance;
       const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, state.topWidth, state.topHeight, size)
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, state.topWidth, state.topHeight, size, instance.orientation)
         : clampInstancePosition(
             instance.x,
             instance.y,
@@ -559,13 +621,14 @@ export const useStore = create<ProjectState>((set) => ({
     appMode: mode,
     edgeAlignmentSession: null,
     ...(mode === 'pixel-array' ? {} : { pendingPixelArraySize: null }),
+    ...(mode === 'place' ? {} : { pendingManualPadGroup: null }),
   }),
   setTopDimensions: (w, h) => set((state) => {
     const instances = state.instances.map(instance => {
       const master = state.masterCells[instance.cellId];
       if (!master) return instance;
       const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, w, h, state.gridSize)
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, w, h, state.gridSize, instance.orientation)
         : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, w, h, state.gridSize);
       return { ...instance, ...position };
     });
@@ -593,6 +656,7 @@ export const useStore = create<ProjectState>((set) => ({
     placementOrientation: orientation,
     appMode: masterId ? 'place' : 'select',
     pendingPixelArraySize: null,
+    pendingManualPadGroup: null,
     edgeAlignmentSession: null,
   }),
   
@@ -622,7 +686,7 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = state.instances.map(instance => {
       if (instance.cellId !== id) return instance;
       const position = masterCells[id].kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, w, h, state.topWidth, state.topHeight, state.gridSize)
+        ? snapPadToNearestEdge(instance.x, instance.y, w, h, state.topWidth, state.topHeight, state.gridSize, instance.orientation)
         : clampInstancePosition(instance.x, instance.y, instance.orientation, w, h, state.topWidth, state.topHeight, state.gridSize);
       return { ...instance, ...position };
     });
@@ -649,9 +713,9 @@ export const useStore = create<ProjectState>((set) => ({
     const master = state.masterCells[cellId];
     if (!master) return state;
 
-    const effectiveOrientation = master.kind === 'pad' ? 'R0' : orientation;
+    const effectiveOrientation = orientation;
     const clamped = master.kind === 'pad'
-      ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize)
+      ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, effectiveOrientation)
       : clampInstancePosition(targetX, targetY, effectiveOrientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
     
     const newInst: Instance = {
@@ -673,6 +737,7 @@ export const useStore = create<ProjectState>((set) => ({
   }),
 
   createPadRow: (config) => set((state) => {
+    const orientation = config.orientation ?? 'R0';
     const libName = state.topLibName;
     const cellName = config.cellName.trim();
     if (!libName || !cellName) throw new Error('Pad library and cell names are required');
@@ -700,19 +765,14 @@ export const useStore = create<ProjectState>((set) => ({
       state.topWidth,
       state.topHeight,
       state.gridSize,
+      orientation,
     );
 
-    const horizontal = config.side === 'top' || config.side === 'bottom';
-    const padAlongRow = horizontal ? config.width : config.height;
-    if (config.pitch + 1e-9 < padAlongRow) {
-      throw new RangeError(`Pad pitch must be at least the pad ${horizontal ? 'width' : 'height'} to avoid overlap`);
-    }
-
-    const rowSpan = (config.count - 1) * config.pitch + padAlongRow;
-    const availableSpan = horizontal ? state.topWidth : state.topHeight;
-    if (rowSpan > availableSpan + 1e-9) {
-      throw new RangeError(`Pad row span ${rowSpan} um exceeds the ${availableSpan} um top-cell edge`);
-    }
+    const positions = computePadGroupPositions({
+      width: config.width, height: config.height, count: config.count, pitch: config.pitch,
+      side: config.side, centerAlong: config.offset, orientation,
+      topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize,
+    });
 
     const existingMaster = Object.values(state.masterCells).find(cell => (
       cell.libName === libName && cell.cellName === cellName
@@ -742,36 +802,14 @@ export const useStore = create<ProjectState>((set) => ({
     };
     const masterCells = { ...state.masterCells, [master.id]: master };
     const instances = [...state.instances];
-    const firstCenter = config.offset - ((config.count - 1) * config.pitch) / 2;
-
-    for (let index = 0; index < config.count; index += 1) {
-      const along = firstCenter + index * config.pitch;
-      const targetX = horizontal
-        ? along - config.width / 2
-        : config.side === 'left' ? -state.topWidth / 2 : state.topWidth / 2 - config.width;
-      const targetY = horizontal
-        ? config.side === 'bottom' ? -state.topHeight / 2 : state.topHeight / 2 - config.height
-        : along - config.height / 2;
-      const position = clampInstancePosition(
-        targetX,
-        targetY,
-        'R0',
-        config.width,
-        config.height,
-        state.topWidth,
-        state.topHeight,
-        state.gridSize,
-      );
-      if (Math.abs(position.x - targetX) > 1e-9 || Math.abs(position.y - targetY) > 1e-9) {
-        throw new RangeError('Pad row position must fit inside the top cell and land exactly on the placement grid');
-      }
+    for (const position of positions) {
       const instance: Instance = {
         id: uuidv4(),
         cellId: master.id,
         name: getNextInstanceName(instances),
         x: position.x,
         y: position.y,
-        orientation: 'R0',
+        orientation,
       };
       instances.push(instance);
     }
@@ -782,17 +820,25 @@ export const useStore = create<ProjectState>((set) => ({
       selectedInstanceIds: [],
       pixelArraySelected: false,
       appMode: 'select',
+      pendingManualPadGroup: null,
       edgeAlignmentSession: null,
     };
   }),
 
   prepareManualPadPlacement: (config) => set((state) => {
+    const orientation = config.orientation ?? 'R0';
+    const count = config.count ?? 1;
+    const pitch = config.pitch ?? Math.max(config.width, config.height);
     const libName = state.topLibName;
     const cellName = config.cellName.trim();
     if (!libName || !cellName) throw new Error('Pad library and cell names are required');
     if (!Number.isFinite(config.width) || !Number.isFinite(config.height) || config.width <= 0 || config.height <= 0) {
       throw new RangeError('Pad width and height must be positive finite numbers');
     }
+    if (!Number.isInteger(count) || count < 1 || count > 1000) {
+      throw new RangeError('Pad count must be an integer from 1 to 1000');
+    }
+    if (!Number.isFinite(pitch) || pitch <= 0) throw new RangeError('Pad pitch must be a positive finite number');
     if (libName === state.topLibName && cellName === state.topCellName) {
       throw new Error('The top cell cannot also be used as the pad master');
     }
@@ -804,6 +850,7 @@ export const useStore = create<ProjectState>((set) => ({
       state.topWidth,
       state.topHeight,
       state.gridSize,
+      orientation,
     );
     const existingMaster = Object.values(state.masterCells).find(cell => (
       cell.libName === libName && cell.cellName === cellName
@@ -836,13 +883,40 @@ export const useStore = create<ProjectState>((set) => ({
       ...(masterChanged ? commitProjectPatch(state, `Prepare ${cellName} pad`, { masterCells }) : {}),
       masterCells,
       placementMasterId: master.id,
-      placementOrientation: 'R0',
+      placementOrientation: orientation,
+      pendingManualPadGroup: { masterId: master.id, count, pitch, orientation },
       appMode: 'place',
       pendingPixelArraySize: null,
       selectedInstanceId: null,
       selectedInstanceIds: [],
       pixelArraySelected: false,
       edgeAlignmentSession: null,
+    };
+  }),
+
+  placeManualPadGroup: (x, y) => set((state) => {
+    const pending = state.pendingManualPadGroup;
+    if (!pending) return state;
+    const master = state.masterCells[pending.masterId];
+    if (!master || master.kind !== 'pad') return state;
+    const snapped = snapPadToNearestEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, pending.orientation);
+    const horizontal = snapped.side === 'top' || snapped.side === 'bottom';
+    const centerAlong = horizontal ? x : y;
+    const positions = computePadGroupPositions({
+      width: master.width, height: master.height, count: pending.count, pitch: pending.pitch,
+      side: snapped.side, centerAlong, orientation: pending.orientation,
+      topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize,
+    });
+    const instances = [...state.instances];
+    for (const position of positions) {
+      instances.push({
+        id: uuidv4(), cellId: master.id, name: getNextInstanceName(instances),
+        ...position, orientation: pending.orientation,
+      });
+    }
+    return {
+      ...commitProjectPatch(state, `Place ${pending.count} ${master.cellName} pads manually`, { instances }),
+      selectedInstanceId: null, selectedInstanceIds: [], pixelArraySelected: false,
     };
   }),
 
@@ -936,8 +1010,9 @@ export const useStore = create<ProjectState>((set) => ({
             state.topWidth,
             state.topHeight,
             state.gridSize,
+            inst.orientation,
           );
-          return { ...inst, ...position, orientation: 'R0' };
+          return { ...inst, ...position };
         }
         const clamped = clampInstancePosition(x, y, inst.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
         return { ...inst, x: clamped.x, y: clamped.y };
@@ -951,12 +1026,13 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
         const master = state.masterCells[inst.cellId];
-        if (master.kind === 'pad') return inst;
         const currentBounds = getPhysicalBounds({ ...inst, width: master.width, height: master.height });
         const nextLocalBounds = getPhysicalBounds({ ...inst, x: 0, y: 0, orientation, width: master.width, height: master.height });
         const centeredX = currentBounds.centerX - nextLocalBounds.centerX;
         const centeredY = currentBounds.centerY - nextLocalBounds.centerY;
-        const clamped = clampInstancePosition(centeredX, centeredY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+        const clamped = master.kind === 'pad'
+          ? snapPadToNearestEdge(centeredX, centeredY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation)
+          : clampInstancePosition(centeredX, centeredY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
         return { ...inst, orientation, x: clamped.x, y: clamped.y };
       }
       return inst;
@@ -1288,7 +1364,7 @@ export const useStore = create<ProjectState>((set) => ({
       const master = masterCells[instance.cellId];
       if (!master) return instance;
       const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, topWidth, topHeight, gridSize)
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, topWidth, topHeight, gridSize, instance.orientation)
         : clampInstancePosition(
             instance.x,
             instance.y,
@@ -1316,6 +1392,7 @@ export const useStore = create<ProjectState>((set) => ({
       rulers: data.rulers ?? [],
       pixelArray,
       pendingPixelArraySize: null,
+      pendingManualPadGroup: null,
       history: { past: [], future: [] },
       edgeAlignmentSession: null,
       selectedInstanceId: null,

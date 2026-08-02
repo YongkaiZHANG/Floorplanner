@@ -56,7 +56,7 @@ Create Master IP definitions in the left sidebar. Each master has:
 
 Master geometry uses `(0, 0)` as its local origin, which is also the instance origin exported to Virtuoso.
 
-Click **Place edge pads** under Top Cell and choose one of two methods. **Automatic Row** creates a regular-pitch section: choose the edge, use **Fill edge** for the maximum non-overlapping count or enter a custom count, pitch, and shift. Live span and clear-gap feedback make the section predictable before placement. **Manual / Separated** defines the same reusable pad once, attaches it to the cursor, and lets you click arbitrary perimeter locations. Skip a keep-out gap of any size, continue placing another section on the same or another edge, and press Esc when finished. The ghost preview and every placed pad snap to the nearest top-cell edge. Both methods reuse one master cell in the Top Cell library; the SKILL output creates that pad cellview once and places any number of instances from it. Dragging or exact coordinate edits keep every pad attached to the perimeter.
+Click **Place edge pads** under Top Cell and choose one of two methods. First select the Cadence orientation; the dialog shows the resulting physical footprint, and R90/R270 correctly swap the effective width and height for edge fit and pitch validation. **Automatic Row** creates a regular-pitch section: choose the edge, use **Fill edge** for the maximum non-overlapping count or enter a custom count, pitch, and shift. **Manual / Separated** defines a flexible group count and pitch, then attaches the complete group preview to the cursor. Each click places one group on the nearest top-cell edge; leave a keep-out gap of any size, click the next group on the same or another edge, and press Esc when finished. Both methods reuse one master cell in the Top Cell library; the SKILL output creates that pad cellview once and emits every instance with its selected orientation. Dragging, exact coordinate edits, or later rotation keep each pad’s transformed footprint attached to the perimeter.
 
 Click **Enable Pixel Array** under Top Cell to define an optional active-array region. Enter a width and height smaller than the top cell, confirm, then click the desired canvas location. The dimensions and bottom-left origin are normalized to the placement grid, the complete region remains inside the top cell, and dragging keeps it bounded. The pixel array is intentionally allowed to overlap IP instances. For exact placement, select the pixel array and click **Align** (or press `a`), choose its amber edge, then choose a green IP edge, top-cell boundary, or orthogonal ruler. Conversely, an IP may use a pixel-array edge as its fixed reference. Unlike normal IP-to-IP spacing, the chosen pixel-array source edge is preserved so a zero offset can coincide with a reference while the array overlaps the IP. **Disable Pixel Array** hides it without forgetting its size or position; enable it again to restore the same region. The move control attaches the existing size to the cursor, while Settings supports resize, relocation, or removal.
 
@@ -66,7 +66,7 @@ Click the crosshair beside a master or press `i` to attach an instance to the cu
 
 Select a block to edit exact X/Y coordinates and orientation in the Properties panel. Rotation is available in three ways:
 
-- Right-click an IP to rotate clockwise; Shift-right-click rotates counterclockwise
+- Right-click an IP or pad to rotate clockwise; Shift-right-click rotates counterclockwise
 - Use the ±90° buttons in Properties
 - Press `r` or `Shift+r`
 

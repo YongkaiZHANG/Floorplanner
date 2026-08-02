@@ -58,6 +58,7 @@ export const Sidebar: React.FC = () => {
   const [padSide, setPadSide] = useState<PadSide>('top');
   const [padOffset, setPadOffset] = useState('0');
   const [padColor, setPadColor] = useState('#f59e0b');
+  const [padOrientation, setPadOrientation] = useState('R0');
   const [padPlacementMode, setPadPlacementMode] = useState<'row' | 'manual'>('row');
   const [showPixelArrayModal, setShowPixelArrayModal] = useState(false);
   const [pixelArrayWidth, setPixelArrayWidth] = useState('60');
@@ -87,6 +88,9 @@ export const Sidebar: React.FC = () => {
           width: Number(padWidth),
           height: Number(padHeight),
           color: padColor,
+          count: Number(padCount),
+          pitch: Number(padPitch),
+          orientation: padOrientation,
         });
         setShowPadModal(false);
         return;
@@ -101,6 +105,7 @@ export const Sidebar: React.FC = () => {
         pitch: Number(padPitch),
         side: padSide,
         offset: Number(padOffset),
+        orientation: padOrientation,
       });
       setShowPadModal(false);
     } catch (error) {
@@ -144,7 +149,10 @@ export const Sidebar: React.FC = () => {
   };
 
   const fitPadsToEdge = () => {
-    const along = padSide === 'top' || padSide === 'bottom' ? Number(padWidth) : Number(padHeight);
+    const rotated = padOrientation === 'R90' || padOrientation === 'R270';
+    const physicalWidth = rotated ? Number(padHeight) : Number(padWidth);
+    const physicalHeight = rotated ? Number(padWidth) : Number(padHeight);
+    const along = padSide === 'top' || padSide === 'bottom' ? physicalWidth : physicalHeight;
     const available = padSide === 'top' || padSide === 'bottom' ? topWidth : topHeight;
     const pitch = Number(padPitch);
     if (!Number.isFinite(along) || along <= 0 || !Number.isFinite(pitch) || pitch < along) return;
@@ -152,7 +160,10 @@ export const Sidebar: React.FC = () => {
     setPadOffset('0');
   };
 
-  const padAlong = padSide === 'top' || padSide === 'bottom' ? Number(padWidth) : Number(padHeight);
+  const padRotated = padOrientation === 'R90' || padOrientation === 'R270';
+  const padPhysicalWidth = padRotated ? Number(padHeight) : Number(padWidth);
+  const padPhysicalHeight = padRotated ? Number(padWidth) : Number(padHeight);
+  const padAlong = padSide === 'top' || padSide === 'bottom' ? padPhysicalWidth : padPhysicalHeight;
   const padGap = Number(padPitch) - padAlong;
   const padSpan = Math.max(0, (Number(padCount) - 1) * Number(padPitch) + padAlong);
 
@@ -204,7 +215,7 @@ export const Sidebar: React.FC = () => {
             setShowPadModal(true);
           }}>
             <FiGrid />
-            <span><strong>Place edge pads</strong><small>Choose an edge, count, and pitch</small></span>
+            <span><strong>Place edge pads</strong><small>Rows or flexible groups with rotation</small></span>
           </button>
           <div className={`pixel-array-card${pixelArray?.visible ? ' active' : ''}`}>
             <button
@@ -536,13 +547,13 @@ export const Sidebar: React.FC = () => {
                 <FiGrid /><span><strong>Automatic row</strong><small>Count and fixed pitch</small></span>
               </button>
               <button type="button" className={padPlacementMode === 'manual' ? 'active' : ''} onClick={() => setPadPlacementMode('manual')} aria-pressed={padPlacementMode === 'manual'}>
-                <FiCrosshair /><span><strong>Manual / separated</strong><small>Click every pad position</small></span>
+                <FiCrosshair /><span><strong>Manual / separated</strong><small>Click flexible pad groups</small></span>
               </button>
             </div>
             <div className="pad-row-guide">
               <span><b>1</b> Define one reusable pad cell</span>
-              <span><b>2</b>{padPlacementMode === 'row' ? ' Choose edge, count, and pitch' : ' Attach it to the cursor'}</span>
-              <span><b>3</b>{padPlacementMode === 'row' ? ' Drag pads around the perimeter later' : ' Click arbitrary perimeter positions; Esc ends'}</span>
+              <span><b>2</b>{padPlacementMode === 'row' ? ' Choose edge, count, pitch, and rotation' : ' Set group count, pitch, and rotation'}</span>
+              <span><b>3</b>{padPlacementMode === 'row' ? ' Drag pads around the perimeter later' : ' Click each group; leave any gap between groups'}</span>
             </div>
             <div className="form-row">
               <div className="form-group">
@@ -562,6 +573,19 @@ export const Sidebar: React.FC = () => {
               <div className="form-group">
                 <label className="label">Pad Height (um)</label>
                 <input type="number" min="0" step="any" className="input-field" value={padHeight} onChange={event => setPadHeight(event.target.value)} required />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label className="label">Orientation (Virtuoso)</label>
+                <select className="input-field" value={padOrientation} onChange={event => setPadOrientation(event.target.value)}>
+                  {['R0', 'R90', 'R180', 'R270'].map(orientation => <option key={orientation} value={orientation}>{orientation}</option>)}
+                </select>
+              </div>
+              <div className="form-group pad-fit-hint">
+                <span className="label">Placed footprint</span>
+                <strong>{Number.isFinite(padPhysicalWidth) ? padPhysicalWidth.toFixed(3) : '—'} × {Number.isFinite(padPhysicalHeight) ? padPhysicalHeight.toFixed(3) : '—'} um</strong>
+                <small>{padRotated ? 'R90/R270 swaps physical width and height' : 'Width and height as defined'}</small>
               </div>
             </div>
             {padPlacementMode === 'row' ? <>
@@ -609,10 +633,22 @@ export const Sidebar: React.FC = () => {
                 </div>
               </div>
             </> : (
-              <div className="manual-pad-guide">
-                <FiCrosshair />
-                <div><strong>No pitch is required.</strong><span>The cursor preview snaps to the nearest top-cell edge. Click each desired location, skip any keep-out gap, continue on another edge, then press Esc.</span></div>
-              </div>
+              <>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="label">Pads per group</label>
+                    <input type="number" min="1" max="1000" step="1" className="input-field" value={padCount} onChange={event => setPadCount(event.target.value)} required />
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Pitch, center-to-center (um)</label>
+                    <input type="number" min="0" step="any" className="input-field" value={padPitch} onChange={event => setPadPitch(event.target.value)} required />
+                  </div>
+                </div>
+                <div className="manual-pad-guide">
+                  <FiCrosshair />
+                  <div><strong>Each click places one group.</strong><span>The preview follows the nearest edge. Click again after any keep-out gap or on another edge; every pad reuses the same Cadence cell. Press Esc when finished.</span></div>
+                </div>
+              </>
             )}
             <div className="pad-row-options">
               <label className="pad-color-field">
@@ -620,13 +656,13 @@ export const Sidebar: React.FC = () => {
                 <span><strong>Planning color</strong><small>Cadence display colors still come from the technology file.</small></span>
               </label>
               <div className="pad-row-summary">
-                <strong>{padPlacementMode === 'row' ? `${Number(padCount) || 0} pads attached to the ${padSide} edge` : 'One Cadence pad cell · any number of instances'}</strong>
-                <span>{padPlacementMode === 'row' ? 'Use Fill edge for the maximum non-overlapping count · shift is measured from edge center' : 'Separated groups and irregular gaps are placed manually with the same reusable master.'}</span>
+                <strong>{padPlacementMode === 'row' ? `${Number(padCount) || 0} pads attached to the ${padSide} edge` : `${Number(padCount) || 0} pads per click · ${padPitch || '—'} um pitch`}</strong>
+                <span>{padPlacementMode === 'row' ? 'Use Fill edge for the maximum non-overlapping count · shift is measured from edge center' : 'Place multiple groups with arbitrary gaps; all instances use one reusable master.'}</span>
               </div>
             </div>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setShowPadModal(false)}>Cancel</button>
-              <button type="submit" className="btn btn-primary">{padPlacementMode === 'row' ? <><FiGrid /> Place {Number(padCount) || 0} Pads</> : <><FiCrosshair /> Attach Pad to Cursor</>}</button>
+              <button type="submit" className="btn btn-primary">{padPlacementMode === 'row' ? <><FiGrid /> Place {Number(padCount) || 0} Pads</> : <><FiCrosshair /> Place Groups on Canvas</>}</button>
             </div>
           </form>
         </div>

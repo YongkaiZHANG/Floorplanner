@@ -140,13 +140,13 @@ export const PropertiesPanel: React.FC = () => {
                   />
                 </div>
               </div>
-              {masterCell.kind === 'pad' ? (
+              {masterCell.kind === 'pad' && (
                 <div className="pad-edge-note">
                   <strong>Always attached to the perimeter</strong>
-                  <span>Drag this pad along the boundary or toward another side. Exact X/Y edits also snap it to the nearest top-cell edge.</span>
+                  <span>Drag this pad along the boundary or toward another side. Rotation uses its transformed footprint and keeps it attached.</span>
                 </div>
-              ) : (
-                <div className="form-group transform-orientation">
+              )}
+              <div className="form-group transform-orientation">
                   <label className="label">Orientation</label>
                   <select
                     className="input-field"
@@ -176,8 +176,7 @@ export const PropertiesPanel: React.FC = () => {
                     </button>
                   </div>
                   <p className="rotation-hint">Mouse shortcut: right-click the block to rotate clockwise; Shift-right-click rotates counterclockwise.</p>
-                </div>
-              )}
+              </div>
             </div>
 
             <div className="prop-section">
