@@ -127,6 +127,7 @@ export type ProjectState = {
   history: ProjectHistory;
   edgeAlignmentSession: EdgeAlignmentSession | null;
   lastAlignmentSpacing: string;
+  clipboard: Instance[];
   
   setGridSize: (size: number) => void;
   setAppMode: (mode: AppMode) => void;
@@ -155,9 +156,14 @@ export type ProjectState = {
   updateInstancePosition: (instanceId: string, x: number, y: number) => void;
   updateInstanceOrientation: (instanceId: string, orientation: string) => void;
   setSelectedInstance: (id: string | null, additive?: boolean) => void;
+  setSelection: (ids: string[]) => void;
   selectAllInstances: () => void;
   deleteInstance: (id: string) => void;
   deleteSelectedInstances: () => void;
+  nudgeSelection: (dx: number, dy: number) => void;
+  copySelection: () => void;
+  pasteClipboard: () => void;
+
   
   addRuler: (startX: number, startY: number, endX: number, endY: number, referenceX?: number, referenceY?: number) => void;
   deleteRuler: (id: string) => void;
@@ -698,6 +704,7 @@ export const useStore = create<ProjectState>((set) => ({
   lastAlignmentSpacing: readStoredAlignmentSpacing(),
   orthogonalRuler: false,
   showAutoDim: false,
+  clipboard: [],
 
   setGridSize: (size) => set((state) => {
     if (!Number.isFinite(size) || size <= 0) return state;
@@ -1182,6 +1189,13 @@ export const useStore = create<ProjectState>((set) => ({
     };
   }),
 
+  setSelection: (ids) => set({
+    selectedInstanceIds: ids,
+    selectedInstanceId: ids.at(-1) ?? null,
+    pixelArraySelected: false,
+  }),
+
+
   setPixelArraySelected: (selected) => set((state) => ({
     pixelArraySelected: Boolean(selected && state.pixelArray?.visible),
     ...(selected ? { selectedInstanceId: null, selectedInstanceIds: [] } : {}),
@@ -1213,6 +1227,90 @@ export const useStore = create<ProjectState>((set) => ({
       edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, instances),
     };
   }),
+
+  nudgeSelection: (dx, dy) => set((state) => {
+    if (state.selectedInstanceIds.length === 0) return state;
+    const selectedIds = new Set(state.selectedInstanceIds);
+    let error = false;
+    const instances = state.instances.map(inst => {
+      if (!selectedIds.has(inst.id)) return inst;
+      const master = state.masterCells[inst.cellId];
+      if (!master) return inst;
+      try {
+        const x = inst.x + dx;
+        const y = inst.y + dy;
+        const clamped = master.kind === 'pad'
+          ? snapPadToNearestEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, inst.orientation)
+          : clampInstancePosition(x, y, inst.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+        return { ...inst, x: clamped.x, y: clamped.y };
+      } catch {
+        error = true;
+        return inst;
+      }
+    });
+    if (error) return state; // Cancel nudge if any block hits bounds or errors out
+    return commitProjectPatch(state, `Nudge ${state.selectedInstanceIds.length} block${state.selectedInstanceIds.length === 1 ? '' : 's'}`, { instances });
+  }),
+
+  copySelection: () => set((state) => {
+    if (state.selectedInstanceIds.length === 0) return state;
+    const selectedIds = new Set(state.selectedInstanceIds);
+    const clipboard = state.instances.filter(inst => selectedIds.has(inst.id));
+    return { clipboard };
+  }),
+
+  pasteClipboard: () => set((state) => {
+    if (!state.clipboard || state.clipboard.length === 0) return state;
+    
+    const offset = 20 * state.gridSize;
+    let instances = [...state.instances];
+    const newSelectedIds: string[] = [];
+    
+    for (const item of state.clipboard) {
+      const master = state.masterCells[item.cellId];
+      if (!master) continue; // master deleted
+      
+      const newInst = {
+        ...item,
+        id: uuidv4(),
+        name: getNextInstanceName(instances),
+      };
+      
+      try {
+        const x = item.x + offset;
+        const y = item.y - offset; // y points up, so -offset moves it down visually
+        const clamped = master.kind === 'pad'
+          ? snapPadToNearestEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation)
+          : clampInstancePosition(x, y, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+        newInst.x = clamped.x;
+        newInst.y = clamped.y;
+      } catch {
+        // Fallback to original spot clamped
+        try {
+          const clamped = master.kind === 'pad'
+            ? snapPadToNearestEdge(item.x, item.y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation)
+            : clampInstancePosition(item.x, item.y, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+          newInst.x = clamped.x;
+          newInst.y = clamped.y;
+        } catch {
+          continue; // if it totally fails, skip
+        }
+      }
+      
+      instances.push(newInst);
+      newSelectedIds.push(newInst.id);
+    }
+    
+    if (newSelectedIds.length === 0) return state;
+    
+    return {
+      ...commitProjectPatch(state, `Paste ${newSelectedIds.length} block${newSelectedIds.length === 1 ? '' : 's'}`, { instances }),
+      selectedInstanceIds: newSelectedIds,
+      selectedInstanceId: newSelectedIds.at(-1) ?? null,
+      pixelArraySelected: false,
+    };
+  }),
+
 
   addRuler: (startX, startY, endX, endY, referenceX, referenceY) => set((state) => commitProjectPatch(state, 'Add ruler', {
     rulers: [...state.rulers, {

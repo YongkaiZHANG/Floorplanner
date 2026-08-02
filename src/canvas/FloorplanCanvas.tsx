@@ -36,8 +36,12 @@ export const FloorplanCanvas: React.FC = () => {
   const [snapIndicator, setSnapIndicator] = useState<{ x: number; y: number } | null>(null);
 
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+  const [panStart, setPanStart] = useState<{ x: number; y: number; stageX: number; stageY: number } | null>(null);
+  const [isSpaceDown, setIsSpaceDown] = useState(false);
 
   const { 
+
     appMode,
     setAppMode,
     topWidth,
@@ -120,16 +124,40 @@ export const FloorplanCanvas: React.FC = () => {
       }
       
       const key = e.key.toLowerCase();
+      
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setIsSpaceDown(true);
+        return;
+      }
+
       const state = useStore.getState();
 
       if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key)) {
         e.preventDefault();
+        if (e.altKey && state.selectedInstanceIds.length > 0) {
+          const dx = key === 'arrowright' ? 1 : key === 'arrowleft' ? -1 : 0;
+          const dy = key === 'arrowup' ? 1 : key === 'arrowdown' ? -1 : 0;
+          const multiplier = e.shiftKey ? 10 : 1;
+          state.nudgeSelection(dx * multiplier * state.gridSize, dy * multiplier * state.gridSize);
+          return;
+        }
         const panDistance = e.shiftKey ? 160 : 48;
         setStagePos(position => panViewportByArrow(position, key as ArrowPanKey, panDistance));
         return;
       }
 
       if (e.ctrlKey || e.metaKey) {
+        if (key === 'c') {
+          e.preventDefault();
+          state.copySelection();
+          return;
+        }
+        if (key === 'v') {
+          e.preventDefault();
+          state.pasteClipboard();
+          return;
+        }
         if (key === 'z') {
           e.preventDefault();
           if (e.shiftKey) state.redo();
@@ -243,8 +271,18 @@ export const FloorplanCanvas: React.FC = () => {
       }
     };
     
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setIsSpaceDown(false);
+      }
+    };
+    
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
   }, [appMode, selectedInstanceId, rightSidebarPinned, clearRulers, fitView, setAppMode, setSelectedInstance]);
 
   const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
@@ -367,13 +405,46 @@ export const FloorplanCanvas: React.FC = () => {
     return { umX, umY, isSnapped: false, snapEdgeAxis: undefined };
   };
 
-  const handleMouseDown = () => {
-    if (isPanning) return;
+  const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+    if (e.evt.button === 1 || (e.evt.button === 0 && isSpaceDown)) {
+      setPanStart({ x: e.evt.clientX, y: e.evt.clientY, stageX: stagePos.x, stageY: stagePos.y });
+      setIsPanning(true);
+      return;
+    }
+    
+    if (appMode === 'select' && e.evt.button === 0 && (e.target.name() === 'bg' || e.target === e.target.getStage())) {
+      const pointer = stageRef.current?.getPointerPosition();
+      if (pointer) {
+        const worldX = (pointer.x - stagePos.x) / stageScale;
+        const worldY = (pointer.y - stagePos.y) / -stageScale;
+        const umX = worldX / SCALE_FACTOR;
+        const umY = worldY / SCALE_FACTOR;
+        setSelectionBox({ startX: umX, startY: umY, currentX: umX, currentY: umY });
+      }
+    }
   };
 
-  const handleMouseMove = () => {
+  const handleMouseMove = (e: KonvaEventObject<MouseEvent>) => {
+    if (panStart) {
+      setStagePos({
+        x: panStart.stageX + (e.evt.clientX - panStart.x),
+        y: panStart.stageY + (e.evt.clientY - panStart.y),
+      });
+      return;
+    }
+
     const pointer = stageRef.current?.getPointerPosition();
     if (!pointer) return;
+    
+    if (selectionBox) {
+      const worldX = (pointer.x - stagePos.x) / stageScale;
+      const worldY = (pointer.y - stagePos.y) / -stageScale;
+      const umX = worldX / SCALE_FACTOR;
+      const umY = worldY / SCALE_FACTOR;
+      setSelectionBox(prev => prev ? { ...prev, currentX: umX, currentY: umY } : null);
+      return;
+    }
+
     const { umX, umY, isSnapped, snapEdgeAxis } = getSnappedWorldPos(pointer, appMode === 'measure');
 
     setMousePos({ x: umX, y: umY });
@@ -403,8 +474,77 @@ export const FloorplanCanvas: React.FC = () => {
     }
   };
 
-  const handleMouseLeave = () => {
+  const handleMouseUp = (e: KonvaEventObject<MouseEvent>) => {
+    if (panStart) {
+      setPanStart(null);
+      setIsPanning(false);
+      return;
+    }
+    if (selectionBox) {
+      const minX = Math.min(selectionBox.startX, selectionBox.currentX);
+      const maxX = Math.max(selectionBox.startX, selectionBox.currentX);
+      const minY = Math.min(selectionBox.startY, selectionBox.currentY);
+      const maxY = Math.max(selectionBox.startY, selectionBox.currentY);
+      
+      const newSelectedIds: string[] = [];
+      
+      for (const inst of instances) {
+        const bbox = computeInstanceBBox(inst);
+        if (bbox) {
+          if (bbox.minX >= minX && bbox.maxX <= maxX && bbox.minY >= minY && bbox.maxY <= maxY) {
+            newSelectedIds.push(inst.id);
+          }
+        }
+      }
+      
+      const state = useStore.getState();
+      if (newSelectedIds.length > 0) {
+        if (e.evt.shiftKey) {
+          state.setSelection([...new Set([...state.selectedInstanceIds, ...newSelectedIds])]);
+        } else {
+          state.setSelection(newSelectedIds);
+        }
+      } else if (!e.evt.shiftKey) {
+        state.setSelectedInstance(null);
+      }
+      setSelectionBox(null);
+    }
+  };
+
+  const handleMouseLeave = (e: KonvaEventObject<MouseEvent>) => {
     setMousePos(null);
+    if (panStart) {
+      setPanStart(null);
+      setIsPanning(false);
+    }
+    if (selectionBox) {
+      const minX = Math.min(selectionBox.startX, selectionBox.currentX);
+      const maxX = Math.max(selectionBox.startX, selectionBox.currentX);
+      const minY = Math.min(selectionBox.startY, selectionBox.currentY);
+      const maxY = Math.max(selectionBox.startY, selectionBox.currentY);
+      
+      const newSelectedIds: string[] = [];
+      for (const inst of instances) {
+        const bbox = computeInstanceBBox(inst);
+        if (bbox) {
+          if (bbox.minX >= minX && bbox.maxX <= maxX && bbox.minY >= minY && bbox.maxY <= maxY) {
+            newSelectedIds.push(inst.id);
+          }
+        }
+      }
+      
+      const state = useStore.getState();
+      if (newSelectedIds.length > 0) {
+        if (e.evt?.shiftKey) {
+          state.setSelection([...new Set([...state.selectedInstanceIds, ...newSelectedIds])]);
+        } else {
+          state.setSelection(newSelectedIds);
+        }
+      } else if (!e.evt?.shiftKey) {
+        state.setSelectedInstance(null);
+      }
+      setSelectionBox(null);
+    }
   };
 
   // Drag bound logic: compute physical bounds, clamp them in real-time, then snap to grid
@@ -1060,21 +1200,15 @@ export const FloorplanCanvas: React.FC = () => {
         width={dimensions.width}
         height={dimensions.height}
         onWheel={handleWheel}
-        draggable={appMode === 'select' && !edgeAlignmentSession}
-        onDragStart={() => setIsPanning(true)}
-        onDragEnd={() => setIsPanning(false)}
+        draggable={false}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
         x={stagePos.x}
         y={stagePos.y}
         scaleX={stageScale}
         scaleY={-stageScale} 
-        onDragMove={(e) => {
-          if (e.target.className === 'Stage') {
-            setStagePos({ x: e.target.x(), y: e.target.y() });
-          }
-        }}
         onDblClick={(e) => {
           if (appMode !== 'select') return;
           let node = e.target as Konva.Node | null;
@@ -1145,6 +1279,7 @@ export const FloorplanCanvas: React.FC = () => {
 
           {/* Top ASIC boundary and background */}
           <Rect 
+            name="bg"
             x={-tw / 2} 
             y={-th / 2} 
             width={tw} 
@@ -1248,8 +1383,8 @@ export const FloorplanCanvas: React.FC = () => {
           })()}
 
           {/* Grid Axes (Infinite lines) */}
-          <Line points={[-100000, 0, 100000, 0]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.8} />
-          <Line points={[0, -100000, 0, 100000]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.8} />
+          <Line points={[-100000, 0, 100000, 0]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.8} listening={false} />
+          <Line points={[0, -100000, 0, 100000]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.8} listening={false} />
           <Text
             text={`${topCellName} (${topWidth}um x ${topHeight}um)`}
             x={-tw / 2}
@@ -1258,6 +1393,7 @@ export const FloorplanCanvas: React.FC = () => {
             fontSize={16 / stageScale}
             fontFamily="Inter"
             scaleY={-1}
+            listening={false}
           />
           {/* Top Right Coordinate */}
           <Text
@@ -1270,6 +1406,7 @@ export const FloorplanCanvas: React.FC = () => {
             fontSize={12 / stageScale}
             fontFamily="Inter"
             scaleY={-1}
+            listening={false}
           />
           {/* Bottom Left Coordinate */}
           <Text
@@ -1280,6 +1417,7 @@ export const FloorplanCanvas: React.FC = () => {
             fontSize={12 / stageScale}
             fontFamily="Inter"
             scaleY={-1}
+            listening={false}
           />
         </Layer>
         
@@ -1572,6 +1710,20 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Rulers */}
           {rulers.map(r => renderRuler(r, r.id, edgeAlignmentSession ? undefined : () => deleteRuler(r.id)))}
           {isMeasuring && currentRuler && renderRuler(currentRuler, 'temp_ruler')}
+
+          {selectionBox && (
+            <Rect
+              x={Math.min(selectionBox.startX, selectionBox.currentX) * SCALE_FACTOR}
+              y={Math.min(selectionBox.startY, selectionBox.currentY) * SCALE_FACTOR}
+              width={Math.abs(selectionBox.currentX - selectionBox.startX) * SCALE_FACTOR}
+              height={Math.abs(selectionBox.currentY - selectionBox.startY) * SCALE_FACTOR}
+              fill="rgba(56, 189, 248, 0.2)"
+              stroke="#38bdf8"
+              strokeWidth={1 / stageScale}
+              dash={[4 / stageScale, 4 / stageScale]}
+              listening={false}
+            />
+          )}
 
           {/* Orthogonal rulers can serve as X/Y references during edge alignment. */}
           {edgeAlignmentSession?.sourceEdge && (() => {
