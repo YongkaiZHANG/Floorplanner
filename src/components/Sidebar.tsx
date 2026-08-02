@@ -56,9 +56,10 @@ export const Sidebar: React.FC = () => {
   const [padCount, setPadCount] = useState('8');
   const [padPitch, setPadPitch] = useState('12');
   const [padSide, setPadSide] = useState<PadSide>('top');
-  const [padOffset, setPadOffset] = useState('0');
+  const [padOffset, setPadOffset] = useState('-47');
   const [padColor, setPadColor] = useState('#f59e0b');
   const [padOrientation, setPadOrientation] = useState('R0');
+  const [padAutoOrient, setPadAutoOrient] = useState(true);
   const [padPlacementMode, setPadPlacementMode] = useState<'row' | 'manual'>('row');
   const [showPixelArrayModal, setShowPixelArrayModal] = useState(false);
   const [pixelArrayWidth, setPixelArrayWidth] = useState('60');
@@ -105,7 +106,8 @@ export const Sidebar: React.FC = () => {
         pitch: Number(padPitch),
         side: padSide,
         offset: Number(padOffset),
-        orientation: padOrientation,
+        orientation: resolvedPadOrientation,
+        offsetReference: 'start',
       });
       setShowPadModal(false);
     } catch (error) {
@@ -149,7 +151,7 @@ export const Sidebar: React.FC = () => {
   };
 
   const fitPadsToEdge = () => {
-    const rotated = padOrientation === 'R90' || padOrientation === 'R270';
+    const rotated = resolvedPadOrientation === 'R90' || resolvedPadOrientation === 'R270';
     const physicalWidth = rotated ? Number(padHeight) : Number(padWidth);
     const physicalHeight = rotated ? Number(padWidth) : Number(padHeight);
     const along = padSide === 'top' || padSide === 'bottom' ? physicalWidth : physicalHeight;
@@ -157,15 +159,21 @@ export const Sidebar: React.FC = () => {
     const pitch = Number(padPitch);
     if (!Number.isFinite(along) || along <= 0 || !Number.isFinite(pitch) || pitch < along) return;
     setPadCount(String(Math.max(1, Math.floor((available - along) / pitch) + 1)));
-    setPadOffset('0');
+    setPadOffset(String(-available / 2));
   };
 
-  const padRotated = padOrientation === 'R90' || padOrientation === 'R270';
+  const sideOrientation: Record<PadSide, string> = { top: 'R0', right: 'R270', bottom: 'R180', left: 'R90' };
+  const resolvedPadOrientation = padPlacementMode === 'row' && padAutoOrient
+    ? sideOrientation[padSide]
+    : padOrientation;
+  const padRotated = resolvedPadOrientation === 'R90' || resolvedPadOrientation === 'R270';
   const padPhysicalWidth = padRotated ? Number(padHeight) : Number(padWidth);
   const padPhysicalHeight = padRotated ? Number(padWidth) : Number(padHeight);
   const padAlong = padSide === 'top' || padSide === 'bottom' ? padPhysicalWidth : padPhysicalHeight;
   const padGap = Number(padPitch) - padAlong;
   const padSpan = Math.max(0, (Number(padCount) - 1) * Number(padPitch) + padAlong);
+  const padStartCoordinate = Number(padOffset);
+  const padEndCoordinate = padStartCoordinate + padSpan;
 
   const handleMouseEnter = () => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
@@ -578,14 +586,20 @@ export const Sidebar: React.FC = () => {
             <div className="form-row">
               <div className="form-group">
                 <label className="label">Orientation (Virtuoso)</label>
-                <select className="input-field" value={padOrientation} onChange={event => setPadOrientation(event.target.value)}>
+                <select className="input-field" value={padPlacementMode === 'row' && padAutoOrient ? resolvedPadOrientation : padOrientation} onChange={event => setPadOrientation(event.target.value)} disabled={padPlacementMode === 'row' && padAutoOrient}>
                   {['R0', 'R90', 'R180', 'R270'].map(orientation => <option key={orientation} value={orientation}>{orientation}</option>)}
                 </select>
+                {padPlacementMode === 'row' && (
+                  <label className="checkbox-label">
+                    <input type="checkbox" checked={padAutoOrient} onChange={event => setPadAutoOrient(event.target.checked)} />
+                    Auto by edge ({resolvedPadOrientation})
+                  </label>
+                )}
               </div>
               <div className="form-group pad-fit-hint">
                 <span className="label">Placed footprint</span>
                 <strong>{Number.isFinite(padPhysicalWidth) ? padPhysicalWidth.toFixed(3) : '—'} × {Number.isFinite(padPhysicalHeight) ? padPhysicalHeight.toFixed(3) : '—'} um</strong>
-                <small>{padRotated ? 'R90/R270 swaps physical width and height' : 'Width and height as defined'}</small>
+                <small>{padRotated ? `${resolvedPadOrientation} swaps physical width and height` : `${resolvedPadOrientation} uses defined width and height`}</small>
               </div>
             </div>
             {padPlacementMode === 'row' ? <>
@@ -621,14 +635,17 @@ export const Sidebar: React.FC = () => {
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label className="label">Shift Along Edge (um)</label>
+                  <div className="field-label-row">
+                    <label className="label">First Pad {padSide === 'top' || padSide === 'bottom' ? 'Left Edge X' : 'Bottom Edge Y'} (um)</label>
+                    <button type="button" className="text-action" onClick={() => setPadOffset(String(-padSpan / 2))}>Center row</button>
+                  </div>
                   <input type="number" step="any" className="input-field" value={padOffset} onChange={event => setPadOffset(event.target.value)} required />
                 </div>
                 <div className="form-group pad-fit-hint">
-                  <span className="label">Current row</span>
-                  <strong>{Number.isFinite(padSpan) ? padSpan.toFixed(3) : '—'} um span</strong>
+                  <span className="label">Physical row coordinates</span>
+                  <strong>{Number.isFinite(padStartCoordinate) && Number.isFinite(padEndCoordinate) ? `${padStartCoordinate.toFixed(3)} → ${padEndCoordinate.toFixed(3)} um` : '—'}</strong>
                   <small className={padGap < 0 ? 'error-text' : ''}>
-                    {Number.isFinite(padGap) ? (padGap < 0 ? `${Math.abs(padGap).toFixed(3)} um overlap` : `${padGap.toFixed(3)} um clear gap`) : 'Enter valid dimensions'}
+                    {Number.isFinite(padGap) ? (padGap < 0 ? `${Math.abs(padGap).toFixed(3)} um overlap` : `${padSpan.toFixed(3)} um span · ${padGap.toFixed(3)} um pad gap`) : 'Enter valid dimensions'}
                   </small>
                 </div>
               </div>
@@ -657,7 +674,7 @@ export const Sidebar: React.FC = () => {
               </label>
               <div className="pad-row-summary">
                 <strong>{padPlacementMode === 'row' ? `${Number(padCount) || 0} pads attached to the ${padSide} edge` : `${Number(padCount) || 0} pads per click · ${padPitch || '—'} um pitch`}</strong>
-                <span>{padPlacementMode === 'row' ? 'Use Fill edge for the maximum non-overlapping count · shift is measured from edge center' : 'Place multiple groups with arbitrary gaps; all instances use one reusable master.'}</span>
+                <span>{padPlacementMode === 'row' ? `Starts at the exact ${padSide === 'top' || padSide === 'bottom' ? 'X' : 'Y'} coordinate shown · continues toward positive ${padSide === 'top' || padSide === 'bottom' ? 'X' : 'Y'}` : 'Place multiple groups with arbitrary gaps; all instances use one reusable master.'}</span>
               </div>
             </div>
             <div className="modal-actions">

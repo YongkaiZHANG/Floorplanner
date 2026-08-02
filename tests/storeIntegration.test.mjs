@@ -539,6 +539,29 @@ test('rotated automatic rows use the transformed pad footprint', () => {
   assert.deepEqual(bounds.slice(1).map((bound, index) => bound.left - bounds[index].right), [3, 3]);
 });
 
+test('automatic pad start shift is an exact rotated physical edge coordinate', () => {
+  useStore.getState().loadProject({ ...emptyProject, topWidth: 1000, topHeight: 1000 });
+  useStore.getState().createPadRow({
+    libName: 'padLib', cellName: 'LEFT_ROT_PAD', width: 40, height: 10, color: '#fff',
+    count: 3, pitch: 50, side: 'left', offset: 300, offsetReference: 'start', orientation: 'R90',
+  });
+  const state = useStore.getState();
+  const master = Object.values(state.masterCells)[0];
+  const bounds = state.instances.map(instance => getPhysicalBounds({ ...instance, width: master.width, height: master.height }));
+  assert.deepEqual(bounds.map(bound => bound.bottom), [300, 350, 400]);
+  assert.ok(bounds.every(bound => bound.left === -500));
+  assert.ok(state.instances.every(instance => instance.orientation === 'R90'));
+
+  useStore.getState().undo();
+  assert.throws(
+    () => useStore.getState().createPadRow({
+      libName: 'padLib', cellName: 'LEFT_ROT_PAD', width: 40, height: 10, color: '#fff',
+      count: 3, pitch: 50, side: 'left', offset: 480, offsetReference: 'start', orientation: 'R90',
+    }),
+    /outside the 1000 um top-cell edge/,
+  );
+});
+
 test('manual placement clicks create pitched groups while preserving arbitrary gaps', () => {
   useStore.getState().loadProject(emptyProject);
   useStore.getState().prepareManualPadPlacement({

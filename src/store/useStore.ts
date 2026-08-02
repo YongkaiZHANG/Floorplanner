@@ -62,8 +62,10 @@ export type PadRowConfig = {
   pitch: number;
   side: PadSide;
   orientation?: string;
-  /** Row-center displacement from the top-cell center: X on top/bottom, Y on left/right. */
+  /** X on top/bottom, Y on left/right. */
   offset: number;
+  /** `start` makes offset the first pad's physical left/bottom edge coordinate. */
+  offsetReference?: 'center' | 'start';
 };
 
 export type PadMasterConfig = Pick<PadRowConfig, 'libName' | 'cellName' | 'width' | 'height' | 'color'> & {
@@ -287,6 +289,7 @@ type PadGroupGeometry = {
   topWidth: number;
   topHeight: number;
   gridSize: number;
+  clampAlong?: boolean;
 };
 
 export const computePadGroupPositions = (config: PadGroupGeometry) => {
@@ -302,7 +305,13 @@ export const computePadGroupPositions = (config: PadGroupGeometry) => {
 
   const minCenter = -available / 2 + span / 2;
   const maxCenter = available / 2 - span / 2;
-  const centerAlong = snapToGrid(Math.max(minCenter, Math.min(config.centerAlong, maxCenter)), config.gridSize);
+  if (config.clampAlong === false && (config.centerAlong < minCenter - 1e-9 || config.centerAlong > maxCenter + 1e-9)) {
+    throw new RangeError(`Pad row coordinate places the ${span} um row outside the ${available} um top-cell edge`);
+  }
+  const centerAlong = snapToGrid(
+    config.clampAlong === false ? config.centerAlong : Math.max(minCenter, Math.min(config.centerAlong, maxCenter)),
+    config.gridSize,
+  );
   const firstCenter = centerAlong - ((config.count - 1) * config.pitch) / 2;
 
   return Array.from({ length: config.count }, (_, index) => {
@@ -816,10 +825,22 @@ export const useStore = create<ProjectState>((set) => ({
       orientation,
     );
 
+    const horizontal = config.side === 'top' || config.side === 'bottom';
+    const localBounds = getPhysicalBounds({
+      id: 'automatic-pad-row', x: 0, y: 0, orientation,
+      width: config.width, height: config.height,
+    });
+    const padAlong = horizontal
+      ? localBounds.right - localBounds.left
+      : localBounds.top - localBounds.bottom;
+    const rowSpan = (config.count - 1) * config.pitch + padAlong;
+    const centerAlong = config.offsetReference === 'start'
+      ? config.offset + rowSpan / 2
+      : config.offset;
     const positions = computePadGroupPositions({
       width: config.width, height: config.height, count: config.count, pitch: config.pitch,
-      side: config.side, centerAlong: config.offset, orientation,
-      topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize,
+      side: config.side, centerAlong, orientation,
+      topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize, clampAlong: false,
     });
 
     const existingMaster = Object.values(state.masterCells).find(cell => (

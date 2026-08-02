@@ -77,7 +77,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiGrid />
-              <div><strong>Place edge pads</strong><p>Choose the pad orientation first. Automatic Row creates one regular section. Manual / Separated lets you define count and pitch per group, then click each group at any perimeter location with arbitrary gaps between groups. Every instance reuses one Cadence pad cell.</p></div>
+              <div><strong>Place edge pads</strong><p>Automatic Row rotates by edge by default and shows the resolved footprint. Its start value is the exact first-pad left-edge X for top/bottom or bottom-edge Y for left/right, with visible start/end coordinates. Manual / Separated places flexible pitched groups with arbitrary gaps. Every instance reuses one Cadence pad cell.</p></div>
             </article>
             <article className="tutorial-card">
               <FiGrid />
