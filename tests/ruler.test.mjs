@@ -8,7 +8,7 @@ test('measures X separation between vertical IP edges without projection overlap
     { x: 15, y: -40, snapEdgeAxis: 'vertical' },
     true,
   );
-  assert.deepEqual(end, { x: 15, y: 40 });
+  assert.deepEqual(end, { x: 15, y: 40, referenceX: 15, referenceY: -40 });
   assert.equal(Math.hypot(end.x - -30, end.y - 40), 45);
 });
 
@@ -18,7 +18,7 @@ test('measures Y separation between horizontal IP edges without projection overl
     { x: 40, y: -10, snapEdgeAxis: 'horizontal' },
     true,
   );
-  assert.deepEqual(end, { x: -40, y: -10 });
+  assert.deepEqual(end, { x: -40, y: -10, referenceX: 40, referenceY: -10 });
   assert.equal(Math.hypot(end.x - -40, end.y - 25), 35);
 });
 

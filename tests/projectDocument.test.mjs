@@ -23,6 +23,16 @@ test('legacy raw documents remain importable', () => {
   assert.deepEqual(parseProjectDocument(JSON.stringify(project)), project);
 });
 
+test('Cadence-style ruler reference extensions survive project serialization', () => {
+  const extended = structuredClone(project);
+  extended.rulers[0].referenceX = 1;
+  extended.rulers[0].referenceY = 8;
+  assert.deepEqual(parseProjectDocument(serializeProjectDocument(extended)), extended);
+
+  delete extended.rulers[0].referenceY;
+  assert.throws(() => parseProjectDocument(JSON.stringify(extended)), /Invalid ruler/);
+});
+
 test('invalid references and non-finite coordinates are rejected', () => {
   const missingMaster = { ...project, instances: [{ ...project.instances[0], cellId: 'missing' }] };
   assert.throws(() => parseProjectDocument(JSON.stringify(missingMaster)), /missing master/);

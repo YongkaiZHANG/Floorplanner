@@ -27,7 +27,7 @@ export const FloorplanCanvas: React.FC = () => {
   // Measure Mode State
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [measureStart, setMeasureStart] = useState<{ x: number; y: number; snapEdgeAxis?: SnapEdgeAxis } | null>(null);
-  const [currentRuler, setCurrentRuler] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
+  const [currentRuler, setCurrentRuler] = useState<{ startX: number; startY: number; endX: number; endY: number; referenceX?: number; referenceY?: number } | null>(null);
   const [hoveredRulerId, setHoveredRulerId] = useState<string | null>(null);
   const [hoveredAutoDimKey, setHoveredAutoDimKey] = useState<string | null>(null);
   const [hoveredAlignEdge, setHoveredAlignEdge] = useState<string | null>(null);
@@ -381,7 +381,15 @@ export const FloorplanCanvas: React.FC = () => {
         orthogonalRuler,
       );
       
-      setCurrentRuler({ startX: measureStart.x, startY: measureStart.y, endX: end.x, endY: end.y });
+      setCurrentRuler({
+        startX: measureStart.x,
+        startY: measureStart.y,
+        endX: end.x,
+        endY: end.y,
+        ...(end.referenceX !== undefined && end.referenceY !== undefined
+          ? { referenceX: end.referenceX, referenceY: end.referenceY }
+          : {}),
+      });
     }
   };
 
@@ -818,11 +826,15 @@ export const FloorplanCanvas: React.FC = () => {
   };
 
 
-  const renderRuler = (r: { id?: string; startX: number, startY: number, endX: number, endY: number }, key: string, onDelete?: () => void) => {
+  const renderRuler = (r: { id?: string; startX: number, startY: number, endX: number, endY: number, referenceX?: number, referenceY?: number }, key: string, onDelete?: () => void) => {
     const sx = r.startX * SCALE_FACTOR;
     const sy = r.startY * SCALE_FACTOR;
     const ex = r.endX * SCALE_FACTOR;
     const ey = r.endY * SCALE_FACTOR;
+    const referenceX = r.referenceX !== undefined ? r.referenceX * SCALE_FACTOR : null;
+    const referenceY = r.referenceY !== undefined ? r.referenceY * SCALE_FACTOR : null;
+    const hasReferenceExtension = referenceX !== null && referenceY !== null
+      && (Math.abs(referenceX - ex) > 1e-6 || Math.abs(referenceY - ey) > 1e-6);
     const isHovered = r.id != null && hoveredRulerId === r.id;
     const rulerColor = isHovered ? '#fbbf24' : '#eab308';
     
@@ -966,15 +978,45 @@ export const FloorplanCanvas: React.FC = () => {
       >
         {/* Wide transparent hit area for easy clicking */}
         {onDelete && (
-          <Line
-            points={[sx, sy, ex, ey]}
-            stroke="transparent"
-            strokeWidth={14 / stageScale}
-            hitStrokeWidth={14 / stageScale}
-          />
+          <>
+            <Line
+              points={[sx, sy, ex, ey]}
+              stroke="transparent"
+              strokeWidth={14 / stageScale}
+              hitStrokeWidth={14 / stageScale}
+            />
+            {hasReferenceExtension && (
+              <Line
+                points={[ex, ey, referenceX, referenceY]}
+                stroke="transparent"
+                strokeWidth={14 / stageScale}
+                hitStrokeWidth={14 / stageScale}
+              />
+            )}
+          </>
         )}
         {/* Main Line */}
         <Line points={[sx, sy, ex, ey]} stroke={rulerColor} strokeWidth={isHovered ? 2 / stageScale : 1 / stageScale} listening={false} />
+        {hasReferenceExtension && (
+          <>
+            <Line
+              points={[ex, ey, referenceX, referenceY]}
+              stroke={rulerColor}
+              strokeWidth={isHovered ? 2 / stageScale : 1 / stageScale}
+              opacity={0.8}
+              listening={false}
+            />
+            <Circle
+              x={referenceX}
+              y={referenceY}
+              radius={3 / stageScale}
+              fill={rulerColor}
+              stroke="#ffffff"
+              strokeWidth={1 / stageScale}
+              listening={false}
+            />
+          </>
+        )}
         {/* Ticks and Markers */}
         {ticks}
         {/* Texts */}
@@ -1051,7 +1093,14 @@ export const FloorplanCanvas: React.FC = () => {
             } else if (currentRuler) {
               setIsMeasuring(false);
               if (currentRuler.startX !== currentRuler.endX || currentRuler.startY !== currentRuler.endY) {
-                addRuler(currentRuler.startX, currentRuler.startY, currentRuler.endX, currentRuler.endY);
+                addRuler(
+                  currentRuler.startX,
+                  currentRuler.startY,
+                  currentRuler.endX,
+                  currentRuler.endY,
+                  currentRuler.referenceX,
+                  currentRuler.referenceY,
+                );
               }
               setCurrentRuler(null);
             }

@@ -78,7 +78,9 @@ const assertProject = (value: unknown): ProjectSnapshot => {
   const rulerIds = new Set<string>();
   const rulers = value.rulers.map((raw, index) => {
     if (!isRecord(raw) || !nonEmptyString(raw.id) || !finite(raw.startX) ||
-        !finite(raw.startY) || !finite(raw.endX) || !finite(raw.endY)) {
+        !finite(raw.startY) || !finite(raw.endX) || !finite(raw.endY) ||
+        ((raw.referenceX !== undefined || raw.referenceY !== undefined) &&
+          (!finite(raw.referenceX) || !finite(raw.referenceY)))) {
       throw new Error(`Invalid ruler at index ${index}.`);
     }
     if (rulerIds.has(raw.id)) throw new Error(`Duplicate ruler id: ${raw.id}.`);

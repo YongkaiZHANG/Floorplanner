@@ -5,6 +5,7 @@ import {
   FiDownload,
   FiLayers,
   FiGrid,
+  FiMinimize2,
   FiMousePointer,
   FiRotateCw,
   FiSave,
@@ -74,6 +75,10 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             <article className="tutorial-card">
               <FiLayers />
               <div><strong>Read Auto-Dim</strong><p>Selecting an IP shows focused blue gaps. With a visible pixel array, outside edges show gaps, fully contained edges show inside clearance, and partially embedded edges show the penetration depth as “overlap.” Hiding the array removes those distances.</p></div>
+            </article>
+            <article className="tutorial-card">
+              <FiMinimize2 />
+              <div><strong>Measure separated edges</strong><p>Enable Ortho and click two matching IP edges. Vertical edges report X spacing and horizontal edges report Y spacing, even without overlap. A perpendicular extension reaches the exact reference-edge endpoint.</p></div>
             </article>
             <article className="tutorial-card">
               <FiGrid />

@@ -28,6 +28,9 @@ export const exportSVG = () => {
   state.rulers.forEach((r) => {
     updateBounds(r.startX * sf, r.startY * sf);
     updateBounds(r.endX * sf, r.endY * sf);
+    if (r.referenceX !== undefined && r.referenceY !== undefined) {
+      updateBounds(r.referenceX * sf, r.referenceY * sf);
+    }
   });
   
   state.instances.forEach((inst) => {
@@ -152,8 +155,14 @@ export const exportSVG = () => {
     const sy = r.startY * sf;
     const ex = r.endX * sf;
     const ey = r.endY * sf;
+    const referenceX = r.referenceX !== undefined ? r.referenceX * sf : null;
+    const referenceY = r.referenceY !== undefined ? r.referenceY * sf : null;
     
     svg += `  <line x1="${sx}" y1="${sy}" x2="${ex}" y2="${ey}" stroke="#b45309" stroke-width="2" vector-effect="non-scaling-stroke" />\n`;
+    if (referenceX !== null && referenceY !== null && (referenceX !== ex || referenceY !== ey)) {
+      svg += `  <line x1="${ex}" y1="${ey}" x2="${referenceX}" y2="${referenceY}" stroke="#b45309" stroke-width="2" opacity="0.8" vector-effect="non-scaling-stroke" />\n`;
+      svg += `  <circle cx="${referenceX}" cy="${referenceY}" r="4" fill="#b45309" stroke="#ffffff" stroke-width="1.5" vector-effect="non-scaling-stroke" />\n`;
+    }
     
     const dx = ex - sx;
     const dy = ey - sy;

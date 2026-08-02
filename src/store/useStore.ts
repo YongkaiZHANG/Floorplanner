@@ -36,6 +36,9 @@ export type Ruler = {
   startY: number;
   endX: number;
   endY: number;
+  /** Optional snapped endpoint reached by a perpendicular display extension. */
+  referenceX?: number;
+  referenceY?: number;
 };
 
 export type PixelArray = {
@@ -157,7 +160,7 @@ export type ProjectState = {
   deleteInstance: (id: string) => void;
   deleteSelectedInstances: () => void;
   
-  addRuler: (startX: number, startY: number, endX: number, endY: number) => void;
+  addRuler: (startX: number, startY: number, endX: number, endY: number, referenceX?: number, referenceY?: number) => void;
   deleteRuler: (id: string) => void;
   clearRulers: () => void;
   
@@ -1164,8 +1167,11 @@ export const useStore = create<ProjectState>((set) => ({
     };
   }),
 
-  addRuler: (startX, startY, endX, endY) => set((state) => commitProjectPatch(state, 'Add ruler', {
-    rulers: [...state.rulers, { id: uuidv4(), startX, startY, endX, endY }],
+  addRuler: (startX, startY, endX, endY, referenceX, referenceY) => set((state) => commitProjectPatch(state, 'Add ruler', {
+    rulers: [...state.rulers, {
+      id: uuidv4(), startX, startY, endX, endY,
+      ...(referenceX !== undefined && referenceY !== undefined ? { referenceX, referenceY } : {}),
+    }],
   })),
   deleteRuler: (id) => set((state) => commitProjectPatch(state, 'Delete ruler', {
     rulers: state.rulers.filter(r => r.id !== id),
