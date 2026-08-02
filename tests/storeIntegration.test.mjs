@@ -117,7 +117,7 @@ test('interactive edge-alignment session is transient and applies as one history
   useStore.getState().startEdgeAlignment(source.id);
   useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
   useStore.getState().setEdgeAlignmentEdge(target.id, 'left');
-  useStore.getState().setEdgeAlignmentOffset('-5');
+  useStore.getState().setEdgeAlignmentOffset('5');
   assert.equal(useStore.getState().history.past.length, historyLength);
   assert.equal(Object.hasOwn(getProjectSnapshot(useStore.getState()), 'edgeAlignmentSession'), false);
 
@@ -218,7 +218,7 @@ test('top-cell edges and orthogonal rulers can complete edge alignment', () => {
   const ruler = useStore.getState().rulers[0];
   useStore.getState().startEdgeAlignment(source.id);
   useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
-  useStore.getState().setEdgeAlignmentOffset('-5');
+  useStore.getState().setEdgeAlignmentOffset('5');
   useStore.getState().completeEdgeAlignmentToRuler(ruler.id);
   moved = useStore.getState().instances[0];
   assert.equal(getPhysicalBounds({ ...moved, width: master.width, height: master.height }).right, 10);
@@ -230,5 +230,43 @@ test('top-cell edges and orthogonal rulers can complete edge alignment', () => {
   assert.throws(
     () => useStore.getState().completeEdgeAlignmentToRuler(diagonal.id),
     /orthogonal ruler/,
+  );
+});
+
+test('positive spacing on a target right edge creates an outside gap without overlap', () => {
+  useStore.getState().loadProject({ ...emptyProject, topWidth: 1000, topHeight: 500 });
+  useStore.getState().addMasterCell('testLib', 'spacingBlock', 150, 20, '#fff');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -300, 0);
+  useStore.getState().placeInstance(master.id, 0, 0);
+  const [source, target] = useStore.getState().instances;
+
+  useStore.getState().startEdgeAlignment(source.id);
+  // The first edge chooses the horizontal axis. A wide source must still be
+  // placed wholly outside the target side rather than overlapping it.
+  useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
+  useStore.getState().setEdgeAlignmentOffset('100');
+  useStore.getState().completeEdgeAlignment(target.id, 'right');
+
+  const [moved, fixed] = useStore.getState().instances;
+  const movedBounds = getPhysicalBounds({ ...moved, width: master.width, height: master.height });
+  const fixedBounds = getPhysicalBounds({ ...fixed, width: master.width, height: master.height });
+  assert.equal(movedBounds.left, fixedBounds.right + 100);
+  assert.ok(movedBounds.left > fixedBounds.right);
+});
+
+test('interactive spacing rejects negative values instead of reversing across the target', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'negativeSpacing', 10, 10, '#fff');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -20, 0);
+  useStore.getState().placeInstance(master.id, 20, 0);
+  const [source, target] = useStore.getState().instances;
+  useStore.getState().startEdgeAlignment(source.id);
+  useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
+  useStore.getState().setEdgeAlignmentOffset('-1');
+  assert.throws(
+    () => useStore.getState().completeEdgeAlignment(target.id, 'left'),
+    /greater than or equal to zero/,
   );
 });

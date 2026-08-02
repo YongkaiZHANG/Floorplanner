@@ -68,7 +68,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiAlignLeft />
-              <div><strong>Align by edges</strong><p>Select the moving source and click Align. Guidance and offset stay in the top toolbar while the canvas shows only amber and green reference edges.</p></div>
+              <div><strong>Align by edges</strong><p>Select the moving source and click Align. Pick its alignment axis, then click the green side where it should be placed. Spacing is the clear gap between the two nearest faces.</p></div>
             </article>
             <article className="tutorial-card">
               <FiLayers />

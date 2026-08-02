@@ -38,7 +38,7 @@ export type EdgeAlignmentSession = {
   sourceEdge: AlignmentEdge | null;
   targetId: string | null;
   targetEdge: AlignmentEdge | null;
-  /** Kept as text so intermediate numeric input such as "-" remains editable. */
+  /** Kept as text so intermediate decimal input remains editable. */
   offset: string;
 };
 
@@ -251,6 +251,7 @@ const edgeAlignmentPatch = (
   sourceEdge: AlignmentEdge,
   targetEdge: AlignmentEdge,
   offset: number,
+  displaySpacing?: number,
 ) => {
   if (sourceId === targetId) throw new Error('Source and target must be different instances');
   const source = state.instances.find(instance => instance.id === sourceId);
@@ -271,7 +272,9 @@ const edgeAlignmentPatch = (
   const instances = state.instances.map(instance => (
     instance.id === sourceId ? { ...instance, x: position.x, y: position.y } : instance
   ));
-  const offsetLabel = offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`;
+  const offsetLabel = displaySpacing === undefined
+    ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
+    : (displaySpacing === 0 ? '' : ` gap ${displaySpacing} um`);
   return commitProjectPatch(
     state,
     `Align ${source.name}.${sourceEdge} to ${target.name}.${targetEdge}${offsetLabel}`,
@@ -286,6 +289,7 @@ const edgeAlignmentCoordinatePatch = (
   targetCoordinate: number,
   offset: number,
   referenceLabel: string,
+  displaySpacing?: number,
 ) => {
   const source = state.instances.find(instance => instance.id === sourceId);
   if (!source) throw new Error('The source instance no longer exists');
@@ -301,7 +305,9 @@ const edgeAlignmentCoordinatePatch = (
   const instances = state.instances.map(instance => (
     instance.id === sourceId ? { ...instance, x: position.x, y: position.y } : instance
   ));
-  const offsetLabel = offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`;
+  const offsetLabel = displaySpacing === undefined
+    ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
+    : (displaySpacing === 0 ? '' : ` gap ${displaySpacing} um`);
   return commitProjectPatch(
     state,
     `Align ${source.name}.${sourceEdge} to ${referenceLabel}${offsetLabel}`,
@@ -309,11 +315,27 @@ const edgeAlignmentCoordinatePatch = (
   );
 };
 
-const parseEdgeAlignmentOffset = (session: EdgeAlignmentSession) => {
+const parseEdgeAlignmentSpacing = (session: EdgeAlignmentSession) => {
   const trimmedOffset = session.offset.trim();
-  const offset = trimmedOffset === '' ? Number.NaN : Number(trimmedOffset);
-  if (!Number.isFinite(offset)) throw new RangeError('Alignment offset must be a finite number');
-  return offset;
+  const spacing = trimmedOffset === '' ? Number.NaN : Number(trimmedOffset);
+  if (!Number.isFinite(spacing) || spacing < 0) {
+    throw new RangeError('Alignment spacing must be a finite number greater than or equal to zero');
+  }
+  return spacing;
+};
+
+const outwardDirectionForEdge = (edge: AlignmentEdge) => {
+  if (edge === 'right' || edge === 'top') return 1;
+  if (edge === 'left' || edge === 'bottom') return -1;
+  return 0;
+};
+
+const sourceEdgeOutsideTarget = (targetEdge: AlignmentEdge): AlignmentEdge | null => {
+  if (targetEdge === 'right') return 'left';
+  if (targetEdge === 'left') return 'right';
+  if (targetEdge === 'top') return 'bottom';
+  if (targetEdge === 'bottom') return 'top';
+  return null;
 };
 
 export const useStore = create<ProjectState>((set) => ({
@@ -613,15 +635,33 @@ export const useStore = create<ProjectState>((set) => ({
   completeEdgeAlignment: (targetId, targetEdge) => set((state) => {
     const session = state.edgeAlignmentSession;
     if (!session?.sourceEdge) throw new Error('Choose the source edge first');
-    const offset = parseEdgeAlignmentOffset(session);
+    if (getAlignmentEdgeAxis(session.sourceEdge) !== getAlignmentEdgeAxis(targetEdge)) {
+      throw new Error('Source and target edges must be on the same axis');
+    }
+    const spacing = parseEdgeAlignmentSpacing(session);
+    const sourceEdge = sourceEdgeOutsideTarget(targetEdge) ?? session.sourceEdge;
+    let direction = outwardDirectionForEdge(targetEdge);
+    if (direction === 0) {
+      const source = state.instances.find(instance => instance.id === session.sourceId);
+      const target = state.instances.find(instance => instance.id === targetId);
+      if (!source || !target) throw new Error('The source or target instance no longer exists');
+      const sourceMaster = state.masterCells[source.cellId];
+      const targetMaster = state.masterCells[target.cellId];
+      const sourceBounds = getPhysicalBounds({ ...source, width: sourceMaster.width, height: sourceMaster.height });
+      const targetBounds = getPhysicalBounds({ ...target, width: targetMaster.width, height: targetMaster.height });
+      direction = getAlignmentEdgeAxis(session.sourceEdge) === 'horizontal'
+        ? (sourceBounds.centerX < targetBounds.centerX ? -1 : 1)
+        : (sourceBounds.centerY < targetBounds.centerY ? -1 : 1);
+    }
     return {
       ...edgeAlignmentPatch(
         state,
         session.sourceId,
         targetId,
-        session.sourceEdge,
+        sourceEdge,
         targetEdge,
-        offset,
+        spacing * direction,
+        spacing,
       ),
       edgeAlignmentSession: null,
     };
@@ -637,14 +677,17 @@ export const useStore = create<ProjectState>((set) => ({
       : targetEdge === 'right' ? state.topWidth / 2
       : targetEdge === 'bottom' ? -state.topHeight / 2
       : state.topHeight / 2;
+    const spacing = parseEdgeAlignmentSpacing(session);
+    const inwardDirection = -outwardDirectionForEdge(targetEdge);
     return {
       ...edgeAlignmentCoordinatePatch(
         state,
         session.sourceId,
-        session.sourceEdge,
+        targetEdge,
         coordinate,
-        parseEdgeAlignmentOffset(session),
+        spacing * inwardDirection,
         `top.${targetEdge}`,
+        spacing,
       ),
       edgeAlignmentSession: null,
     };
@@ -662,14 +705,25 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error('Only an orthogonal ruler on the matching axis can be an alignment reference');
     }
     const coordinate = axis === 'horizontal' ? ruler.startX : ruler.startY;
+    const source = state.instances.find(instance => instance.id === session.sourceId);
+    if (!source) throw new Error('The source instance no longer exists');
+    const master = state.masterCells[source.cellId];
+    const bounds = getPhysicalBounds({ ...source, width: master.width, height: master.height });
+    const sourceCenter = axis === 'horizontal' ? bounds.centerX : bounds.centerY;
+    const spacing = parseEdgeAlignmentSpacing(session);
+    const direction = sourceCenter < coordinate ? -1 : 1;
+    const sourceEdge: AlignmentEdge = axis === 'horizontal'
+      ? (direction < 0 ? 'right' : 'left')
+      : (direction < 0 ? 'top' : 'bottom');
     return {
       ...edgeAlignmentCoordinatePatch(
         state,
         session.sourceId,
-        session.sourceEdge,
+        sourceEdge,
         coordinate,
-        parseEdgeAlignmentOffset(session),
+        spacing * direction,
         'ruler line',
+        spacing,
       ),
       edgeAlignmentSession: null,
     };
@@ -682,17 +736,21 @@ export const useStore = create<ProjectState>((set) => ({
     if (!session?.sourceEdge || !session.targetId || !session.targetEdge) {
       throw new Error('Choose a source edge and a target edge before applying alignment');
     }
-    const trimmedOffset = session.offset.trim();
-    const offset = trimmedOffset === '' ? Number.NaN : Number(trimmedOffset);
-    if (!Number.isFinite(offset)) throw new RangeError('Alignment offset must be a finite number');
+    if (getAlignmentEdgeAxis(session.sourceEdge) !== getAlignmentEdgeAxis(session.targetEdge)) {
+      throw new Error('Source and target edges must be on the same axis');
+    }
+    const spacing = parseEdgeAlignmentSpacing(session);
+    const sourceEdge = sourceEdgeOutsideTarget(session.targetEdge) ?? session.sourceEdge;
+    const direction = outwardDirectionForEdge(session.targetEdge);
     return {
       ...edgeAlignmentPatch(
         state,
         session.sourceId,
         session.targetId,
-        session.sourceEdge,
+        sourceEdge,
         session.targetEdge,
-        offset,
+        spacing * direction,
+        spacing,
       ),
       edgeAlignmentSession: null,
     };

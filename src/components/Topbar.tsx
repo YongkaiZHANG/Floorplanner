@@ -16,7 +16,7 @@ export const Topbar: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v6') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v7') !== 'yes';
     } catch {
       return true;
     }
@@ -34,8 +34,13 @@ export const Topbar: React.FC = () => {
   const alignmentSource = edgeAlignmentSession
     ? instances.find(instance => instance.id === edgeAlignmentSession.sourceId)
     : null;
+  const alignmentAxis = edgeAlignmentSession?.sourceEdge
+    ? (edgeAlignmentSession.sourceEdge === 'left' || edgeAlignmentSession.sourceEdge === 'right' || edgeAlignmentSession.sourceEdge === 'horizontal-center'
+        ? 'horizontally'
+        : 'vertically')
+    : null;
   const alignmentStep = edgeAlignmentSession?.sourceEdge
-    ? 'Click a green IP, top-cell, or ruler edge'
+    ? 'Click the green side where this IP should be placed'
     : `Click an amber edge of ${alignmentSource?.name ?? 'the source IP'}`;
 
   const showToast = (message: string, kind: ToastKind = 'success') => {
@@ -152,7 +157,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v6', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v7', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -213,23 +218,23 @@ export const Topbar: React.FC = () => {
             <div className="topbar-align__identity">
               <span className="topbar-align__dot" />
               <div>
-                <strong>Align {alignmentSource?.name ?? 'IP'}.{edgeAlignmentSession.sourceEdge ?? '?'}</strong>
+                <strong>{alignmentAxis ? `Move ${alignmentSource?.name ?? 'IP'} ${alignmentAxis}` : `Align ${alignmentSource?.name ?? 'IP'}`}</strong>
                 <span>{alignmentStep}</span>
               </div>
             </div>
             <label className="topbar-align__offset">
-              Offset
+              Spacing
               <input
                 type="text"
                 inputMode="decimal"
                 value={edgeAlignmentSession.offset}
                 onChange={event => setEdgeAlignmentOffset(event.target.value)}
                 onKeyDown={event => { if (event.key === 'Escape') cancelEdgeAlignment(); }}
-                aria-label="Alignment offset in micrometers"
+                aria-label="Alignment spacing in micrometers"
               />
               <span>µm</span>
             </label>
-            <span className="topbar-align__hint">Target click applies · + right/up · − left/down</span>
+            <span className="topbar-align__hint">Non-negative gap outside target · inside top boundary</span>
             <button className="topbar-align__cancel" type="button" onClick={cancelEdgeAlignment} aria-label="Cancel edge alignment" title="Cancel alignment (Esc)">
               <FiX />
             </button>
