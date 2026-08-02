@@ -105,6 +105,10 @@
   font-weight: 600;
 }
 
+.pad-badge {
+  color: #fbbf24;
+}
+
 .form-row {
   display: flex;
   gap: 12px;
@@ -119,6 +123,32 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.transform-orientation {
+  margin-top: 12px;
+}
+
+.pad-edge-note {
+  margin-top: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: var(--radius-md);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.pad-edge-note strong {
+  color: #fbbf24;
+  font-size: 12px;
+}
+
+.pad-edge-note span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .rotation-actions .btn {

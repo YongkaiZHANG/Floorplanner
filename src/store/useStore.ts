@@ -23,6 +23,8 @@ export type Cell = {
   width: number;
   height: number;
   color: string;
+  /** Pads remain attached to the nearest top-cell edge when moved. */
+  kind?: 'ip' | 'pad';
 };
 
 export type Ruler = {
@@ -197,6 +199,34 @@ export const clampInstancePosition = (
   const clampedY = snapWithin(y, minAllowedY, maxAllowedY);
 
   return { x: clampedX, y: clampedY };
+};
+
+export const snapPadToNearestEdge = (
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  topWidth: number,
+  topHeight: number,
+  gridSize: number,
+) => {
+  const inside = clampInstancePosition(x, y, 'R0', width, height, topWidth, topHeight, gridSize);
+  const edgeCoordinates = {
+    left: -topWidth / 2,
+    right: topWidth / 2 - width,
+    bottom: -topHeight / 2,
+    top: topHeight / 2 - height,
+  };
+  const onGrid = (value: number) => Math.abs(snapToGrid(value, gridSize) - value) <= 1e-9;
+  const candidates = [
+    onGrid(edgeCoordinates.left) ? { x: edgeCoordinates.left, y: inside.y, distance: Math.abs(x - edgeCoordinates.left) } : null,
+    onGrid(edgeCoordinates.right) ? { x: edgeCoordinates.right, y: inside.y, distance: Math.abs(x - edgeCoordinates.right) } : null,
+    onGrid(edgeCoordinates.bottom) ? { x: inside.x, y: edgeCoordinates.bottom, distance: Math.abs(y - edgeCoordinates.bottom) } : null,
+    onGrid(edgeCoordinates.top) ? { x: inside.x, y: edgeCoordinates.top, distance: Math.abs(y - edgeCoordinates.top) } : null,
+  ].filter((candidate): candidate is { x: number; y: number; distance: number } => candidate !== null);
+  const closest = candidates.sort((a, b) => a.distance - b.distance)[0];
+  if (!closest) throw new RangeError('No top-cell edge is compatible with the active placement grid');
+  return { x: snapToGrid(closest.x, gridSize), y: snapToGrid(closest.y, gridSize) };
 };
 
 const getNextInstanceName = (instances: Instance[]) => {
@@ -409,16 +439,18 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = state.instances.map(instance => {
       const master = state.masterCells[instance.cellId];
       if (!master) return instance;
-      const position = clampInstancePosition(
-        instance.x,
-        instance.y,
-        instance.orientation,
-        master.width,
-        master.height,
-        state.topWidth,
-        state.topHeight,
-        size,
-      );
+      const position = master.kind === 'pad'
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, state.topWidth, state.topHeight, size)
+        : clampInstancePosition(
+            instance.x,
+            instance.y,
+            instance.orientation,
+            master.width,
+            master.height,
+            state.topWidth,
+            state.topHeight,
+            size,
+          );
       return { ...instance, ...position };
     });
     return commitProjectPatch(state, 'Change grid', { gridSize: size, instances });
@@ -428,7 +460,9 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = state.instances.map(instance => {
       const master = state.masterCells[instance.cellId];
       if (!master) return instance;
-      const position = clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, w, h, state.gridSize);
+      const position = master.kind === 'pad'
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, w, h, state.gridSize)
+        : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, w, h, state.gridSize);
       return { ...instance, ...position };
     });
     return commitProjectPatch(state, 'Resize top cell', { topWidth: w, topHeight: h, instances });
@@ -461,7 +495,9 @@ export const useStore = create<ProjectState>((set) => ({
     };
     const instances = state.instances.map(instance => {
       if (instance.cellId !== id) return instance;
-      const position = clampInstancePosition(instance.x, instance.y, instance.orientation, w, h, state.topWidth, state.topHeight, state.gridSize);
+      const position = masterCells[id].kind === 'pad'
+        ? snapPadToNearestEdge(instance.x, instance.y, w, h, state.topWidth, state.topHeight, state.gridSize)
+        : clampInstancePosition(instance.x, instance.y, instance.orientation, w, h, state.topWidth, state.topHeight, state.gridSize);
       return { ...instance, ...position };
     });
     return commitProjectPatch(state, `Edit ${cellName}`, { masterCells, instances });
@@ -487,7 +523,10 @@ export const useStore = create<ProjectState>((set) => ({
     const master = state.masterCells[cellId];
     if (!master) return state;
 
-    const clamped = clampInstancePosition(targetX, targetY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+    const effectiveOrientation = master.kind === 'pad' ? 'R0' : orientation;
+    const clamped = master.kind === 'pad'
+      ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize)
+      : clampInstancePosition(targetX, targetY, effectiveOrientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
     
     const newInst: Instance = {
       id: uuidv4(),
@@ -495,7 +534,7 @@ export const useStore = create<ProjectState>((set) => ({
       name: getNextInstanceName(state.instances),
       x: clamped.x,
       y: clamped.y,
-      orientation: orientation,
+      orientation: effectiveOrientation,
     };
     const instances = [...state.instances, newInst];
     return {
@@ -549,17 +588,16 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error(`Existing master ${libName}/${cellName} has different dimensions`);
     }
 
-    const master: Cell = existingMaster ?? {
+    const master: Cell = existingMaster ? { ...existingMaster, kind: 'pad' } : {
       id: uuidv4(),
       libName,
       cellName,
       width: config.width,
       height: config.height,
       color: config.color,
+      kind: 'pad',
     };
-    const masterCells = existingMaster
-      ? state.masterCells
-      : { ...state.masterCells, [master.id]: master };
+    const masterCells = { ...state.masterCells, [master.id]: master };
     const instances = [...state.instances];
     const firstCenter = config.offset - ((config.count - 1) * config.pitch) / 2;
 
@@ -608,6 +646,18 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
         const master = state.masterCells[inst.cellId];
+        if (master.kind === 'pad') {
+          const position = snapPadToNearestEdge(
+            x,
+            y,
+            master.width,
+            master.height,
+            state.topWidth,
+            state.topHeight,
+            state.gridSize,
+          );
+          return { ...inst, ...position, orientation: 'R0' };
+        }
         const clamped = clampInstancePosition(x, y, inst.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
         return { ...inst, x: clamped.x, y: clamped.y };
       }
@@ -620,6 +670,7 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
         const master = state.masterCells[inst.cellId];
+        if (master.kind === 'pad') return inst;
         const currentBounds = getPhysicalBounds({ ...inst, width: master.width, height: master.height });
         const nextLocalBounds = getPhysicalBounds({ ...inst, x: 0, y: 0, orientation, width: master.width, height: master.height });
         const centeredX = currentBounds.centerX - nextLocalBounds.centerX;
@@ -933,16 +984,18 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = (data.instances ?? []).map(instance => {
       const master = masterCells[instance.cellId];
       if (!master) return instance;
-      const position = clampInstancePosition(
-        instance.x,
-        instance.y,
-        instance.orientation,
-        master.width,
-        master.height,
-        topWidth,
-        topHeight,
-        gridSize,
-      );
+      const position = master.kind === 'pad'
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, topWidth, topHeight, gridSize)
+        : clampInstancePosition(
+            instance.x,
+            instance.y,
+            instance.orientation,
+            master.width,
+            master.height,
+            topWidth,
+            topHeight,
+            gridSize,
+          );
       return { ...instance, ...position };
     });
     return {

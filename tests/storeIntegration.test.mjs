@@ -311,6 +311,7 @@ test('pad rows create one reusable master and exact pitched edge instances as on
   const state = useStore.getState();
   const master = Object.values(state.masterCells)[0];
   assert.equal(master.cellName, 'PAD');
+  assert.equal(master.kind, 'pad');
   assert.equal(state.instances.length, 4);
   assert.equal(state.history.past.length, historyLength + 1);
   assert.equal(state.selectedInstanceIds.length, 0);
@@ -327,6 +328,26 @@ test('pad rows create one reusable master and exact pitched edge instances as on
   useStore.getState().undo();
   assert.equal(Object.keys(useStore.getState().masterCells).length, 0);
   assert.equal(useStore.getState().instances.length, 0);
+});
+
+test('pad movement stays attached and can switch to the nearest top-cell edge', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().createPadRow({
+    libName: 'padLib', cellName: 'EDGE_PAD', width: 10, height: 5, color: '#fff',
+    count: 1, pitch: 10, side: 'top', offset: 0,
+  });
+  const pad = useStore.getState().instances[0];
+
+  useStore.getState().updateInstancePosition(pad.id, -49, 0);
+  let moved = useStore.getState().instances[0];
+  assert.deepEqual([moved.x, moved.y], [-50, 0]);
+
+  useStore.getState().updateInstancePosition(pad.id, 0, -49);
+  moved = useStore.getState().instances[0];
+  assert.deepEqual([moved.x, moved.y], [0, -50]);
+
+  useStore.getState().updateInstanceOrientation(pad.id, 'R90');
+  assert.equal(useStore.getState().instances[0].orientation, 'R0');
 });
 
 test('pad rows reject overlapping pitch and rows that cannot fit', () => {

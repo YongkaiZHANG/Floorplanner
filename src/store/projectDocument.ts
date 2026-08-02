@@ -49,7 +49,8 @@ const assertProject = (value: unknown): ProjectSnapshot => {
   for (const [key, raw] of Object.entries(value.masterCells)) {
     if (!isRecord(raw) || raw.id !== key || !nonEmptyString(raw.libName) ||
         !nonEmptyString(raw.cellName) || !finite(raw.width) || raw.width <= 0 ||
-        !finite(raw.height) || raw.height <= 0 || !nonEmptyString(raw.color)) {
+        !finite(raw.height) || raw.height <= 0 || !nonEmptyString(raw.color) ||
+        (raw.kind !== undefined && raw.kind !== 'ip' && raw.kind !== 'pad')) {
       throw new Error(`Invalid master cell: ${key}.`);
     }
     masterCells[key] = raw as Cell;

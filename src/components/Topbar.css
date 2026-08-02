@@ -201,7 +201,7 @@
   color: rgba(255, 255, 255, 0.62);
 }
 
-.save-svg-btn {
+.save-btn {
   min-width: 96px;
   justify-content: center;
 }
@@ -306,7 +306,17 @@
     display: none;
   }
 
-  .save-svg-btn {
+  .save-btn.has-unsaved::after {
+    width: 6px;
+    height: 6px;
+    margin-left: -2px;
+    border-radius: 50%;
+    background: #fbbf24;
+    box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.16);
+    content: '';
+  }
+
+  .save-btn {
     min-width: auto;
   }
 }

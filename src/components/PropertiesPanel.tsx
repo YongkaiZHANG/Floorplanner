@@ -104,6 +104,12 @@ export const PropertiesPanel: React.FC = () => {
                 <span className="prop-label">Size (um)</span>
                 <span className="prop-value">{masterCell.width.toFixed(3)} x {masterCell.height.toFixed(3)}</span>
               </div>
+              {masterCell.kind === 'pad' && (
+                <div className="prop-row">
+                  <span className="prop-label">Behavior</span>
+                  <span className="prop-value pad-badge">Edge-bound pad</span>
+                </div>
+              )}
             </div>
 
             <div className="prop-section">
@@ -134,37 +140,44 @@ export const PropertiesPanel: React.FC = () => {
                   />
                 </div>
               </div>
-              <div className="form-group" style={{marginTop: '12px'}}>
-                <label className="label">Orientation</label>
-                <select 
-                  className="input-field" 
-                  value={selectedInstance.orientation}
-                  onChange={e => updateInstanceOrientation(selectedInstance.id, e.target.value)}
-                >
-                  {ORIENTATIONS.map(ort => (
-                    <option key={ort} value={ort}>{ort}</option>
-                  ))}
-                </select>
-                <div className="rotation-actions">
-                  <button
-                    className="btn"
-                    type="button"
-                    onClick={() => updateInstanceOrientation(selectedInstance.id, rotateOrientationByQuarterTurns(selectedInstance.orientation, -1))}
-                    title="Rotate 90° clockwise"
-                  >
-                    <FiRotateCw /> −90°
-                  </button>
-                  <button
-                    className="btn"
-                    type="button"
-                    onClick={() => updateInstanceOrientation(selectedInstance.id, rotateOrientationByQuarterTurns(selectedInstance.orientation, 1))}
-                    title="Rotate 90° counter-clockwise"
-                  >
-                    <FiRotateCcw /> +90°
-                  </button>
+              {masterCell.kind === 'pad' ? (
+                <div className="pad-edge-note">
+                  <strong>Always attached to the perimeter</strong>
+                  <span>Drag this pad along the boundary or toward another side. Exact X/Y edits also snap it to the nearest top-cell edge.</span>
                 </div>
-                <p className="rotation-hint">Mouse shortcut: right-click the block to rotate clockwise; Shift-right-click rotates counterclockwise.</p>
-              </div>
+              ) : (
+                <div className="form-group transform-orientation">
+                  <label className="label">Orientation</label>
+                  <select
+                    className="input-field"
+                    value={selectedInstance.orientation}
+                    onChange={e => updateInstanceOrientation(selectedInstance.id, e.target.value)}
+                  >
+                    {ORIENTATIONS.map(ort => (
+                      <option key={ort} value={ort}>{ort}</option>
+                    ))}
+                  </select>
+                  <div className="rotation-actions">
+                    <button
+                      className="btn"
+                      type="button"
+                      onClick={() => updateInstanceOrientation(selectedInstance.id, rotateOrientationByQuarterTurns(selectedInstance.orientation, -1))}
+                      title="Rotate 90° clockwise"
+                    >
+                      <FiRotateCw /> −90°
+                    </button>
+                    <button
+                      className="btn"
+                      type="button"
+                      onClick={() => updateInstanceOrientation(selectedInstance.id, rotateOrientationByQuarterTurns(selectedInstance.orientation, 1))}
+                      title="Rotate 90° counter-clockwise"
+                    >
+                      <FiRotateCcw /> +90°
+                    </button>
+                  </div>
+                  <p className="rotation-hint">Mouse shortcut: right-click the block to rotate clockwise; Shift-right-click rotates counterclockwise.</p>
+                </div>
+              )}
             </div>
 
             <div className="prop-section">

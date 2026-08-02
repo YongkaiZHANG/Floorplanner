@@ -29,3 +29,12 @@ test('invalid references and non-finite coordinates are rejected', () => {
   const infinite = JSON.stringify(project).replace('"x":1', '"x":1e999');
   assert.throws(() => parseProjectDocument(infinite), /Invalid instance/);
 });
+
+test('pad master behavior survives project serialization and rejects unknown kinds', () => {
+  const padProject = structuredClone(project);
+  padProject.masterCells.m.kind = 'pad';
+  assert.deepEqual(parseProjectDocument(serializeProjectDocument(padProject)), padProject);
+
+  padProject.masterCells.m.kind = 'mystery';
+  assert.throws(() => parseProjectDocument(JSON.stringify(padProject)), /Invalid master cell/);
+});

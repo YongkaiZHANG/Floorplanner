@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, getTransformProps, rotateOrientationByQuarterTurns } from '../store/useStore';
+import { useStore, getTransformProps, rotateOrientationByQuarterTurns, snapPadToNearestEdge } from '../store/useStore';
 import { getAlignmentEdgeAxis } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
 import { formatGridValue } from '../utils/grid';
@@ -417,6 +417,22 @@ export const FloorplanCanvas: React.FC = () => {
     const worldY = (pos.y - stagePos.y) / -stageScale;
     let umX = worldX / SCALE_FACTOR;
     let umY = worldY / SCALE_FACTOR;
+
+    if (master.kind === 'pad') {
+      const snapped = snapPadToNearestEdge(
+        umX,
+        umY,
+        master.width,
+        master.height,
+        topWidth,
+        topHeight,
+        gridSize,
+      );
+      return {
+        x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
+        y: snapped.y * SCALE_FACTOR * -stageScale + stagePos.y,
+      };
+    }
 
     // Clamp
     umX = Math.max(minAllowedX, Math.min(umX, maxAllowedX));

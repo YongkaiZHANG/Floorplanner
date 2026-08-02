@@ -127,7 +127,7 @@ export const Sidebar: React.FC = () => {
               <button className="icon-btn" onClick={() => {
                 setPadLibName(topLibName);
                 setShowPadModal(true);
-              }} title="Create a continuous pad row">
+              }} title="Place edge-bound pads">
                 <FiGrid />
               </button>
               <button className="icon-btn" onClick={() => {
@@ -399,14 +399,19 @@ export const Sidebar: React.FC = () => {
         <div className="modal-content glass-panel pad-row-modal">
           <div className="modal-header">
             <div>
-              <span className="modal-eyebrow">Top-cell utility</span>
-              <h2 className="modal-title">Create Pad Row</h2>
+              <span className="modal-eyebrow">Perimeter placement</span>
+              <h2 className="modal-title">Place Edge Pads</h2>
             </div>
             <button type="button" className="modal-close-btn" onClick={() => setShowPadModal(false)} aria-label="Close pad row tool">
               <FiX />
             </button>
           </div>
           <form onSubmit={handlePadSubmit}>
+            <div className="pad-row-guide">
+              <span><b>1</b> Define one reusable pad</span>
+              <span><b>2</b> Choose edge, count, and pitch</span>
+              <span><b>3</b> Drag pads around the perimeter later</span>
+            </div>
             <div className="form-row">
               <div className="form-group">
                 <label className="label">Library</label>
@@ -448,7 +453,7 @@ export const Sidebar: React.FC = () => {
                 </select>
               </div>
               <div className="form-group">
-                <label className="label">Row Center Offset (um)</label>
+                <label className="label">Shift Along Edge (um)</label>
                 <input type="number" step="any" className="input-field" value={padOffset} onChange={event => setPadOffset(event.target.value)} required />
               </div>
             </div>
@@ -458,13 +463,13 @@ export const Sidebar: React.FC = () => {
                 <span><strong>Planning color</strong><small>Cadence display colors still come from the technology file.</small></span>
               </label>
               <div className="pad-row-summary">
-                <strong>{Number(padCount) || 0} pads on {padSide}</strong>
-                <span>Pitch is center-to-center · offset is from the edge center</span>
+                <strong>{Number(padCount) || 0} pads attached to the {padSide} edge</strong>
+                <span>Pitch is center-to-center · shift is measured from the edge center</span>
               </div>
             </div>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setShowPadModal(false)}>Cancel</button>
-              <button type="submit" className="btn btn-primary"><FiGrid /> Create Pad Row</button>
+              <button type="submit" className="btn btn-primary"><FiGrid /> Place {Number(padCount) || 0} Pads</button>
             </div>
           </form>
         </div>

@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { getProjectSnapshot, useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
 import { exportSVG } from '../utils/svgExport';
-import { parseProjectDocument } from '../store/projectDocument';
+import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
 import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import { EditingToolbar } from './EditingToolbar';
@@ -16,7 +16,7 @@ export const Topbar: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v9') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v10') !== 'yes';
     } catch {
       return true;
     }
@@ -28,6 +28,7 @@ export const Topbar: React.FC = () => {
   const [generatedCode, setGeneratedCode] = useState('');
   const [savedSignature, setSavedSignature] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const recoveryLoaded = useRef(false);
   const projectSignature = JSON.stringify(getProjectSnapshot(useStore.getState()));
   const isDirty = savedSignature === null ? history.past.length > 0 : projectSignature !== savedSignature;
   const saveStatus = isDirty ? 'Unsaved' : savedSignature === null ? 'Not saved' : 'Saved';
@@ -64,23 +65,40 @@ export const Topbar: React.FC = () => {
     downloadSkillFile(`${topCellName}.il`, skillCode);
   };
 
-  const handleSaveSvg = () => {
+  const handleSaveWorkspace = () => {
+    const snapshot = getProjectSnapshot(useStore.getState());
+    if (!saveRecovery(snapshot)) {
+      alert('Unable to save the workspace in this browser. Check that site storage is available.');
+      return;
+    }
+    setSavedSignature(JSON.stringify(snapshot));
+    showToast('Workspace saved in this browser');
+  };
+
+  const handleExportSvg = () => {
     try {
       const filename = exportSVG();
-      const snapshot = getProjectSnapshot(useStore.getState());
-      setSavedSignature(JSON.stringify(snapshot));
-      showToast(`${filename} saved — open it in any browser`);
+      showToast(`${filename} exported`);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to save the SVG floorplan.');
+      alert(error instanceof Error ? error.message : 'Unable to export the SVG floorplan.');
     }
   };
+
+  useEffect(() => {
+    if (recoveryLoaded.current) return;
+    recoveryLoaded.current = true;
+    const recovered = loadRecovery();
+    if (!recovered) return;
+    useStore.getState().loadProject(recovered);
+    setSavedSignature(JSON.stringify(getProjectSnapshot(useStore.getState())));
+  }, []);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
         if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-        handleSaveSvg();
+        handleSaveWorkspace();
       }
     };
     window.addEventListener('keydown', handleShortcut);
@@ -132,7 +150,7 @@ export const Topbar: React.FC = () => {
           throw new Error("No valid data found");
         }
       } catch {
-        alert('Invalid project or SVG file format. Please ensure it was exported from this tool.');
+        alert('Invalid SVG project. Please choose an SVG exported from this tool.');
       }
     };
     reader.readAsText(file);
@@ -153,7 +171,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v9', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v10', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -249,14 +267,17 @@ export const Topbar: React.FC = () => {
           }}
         />
 
-        <button className="btn btn-primary save-svg-btn" onClick={handleSaveSvg} title="Save an editable SVG you can inspect in any browser (Ctrl/Cmd+S)">
-          <FiSave /> Save SVG
+        <button className={`btn btn-primary save-btn${isDirty ? ' has-unsaved' : ''}`} onClick={handleSaveWorkspace} title={`Save the editable workspace in this browser (Ctrl/Cmd+S) · ${saveStatus}`}>
+          <FiSave /> Save
           <span className={`save-status ${isDirty ? 'dirty' : savedSignature === null ? 'new' : ''}`}>{saveStatus}</span>
         </button>
-        <label className="btn file-open-btn" title="Open an SVG, .flp, or legacy JSON project">
-          <FiUpload /> Open Project
-          <input type="file" accept=".svg,.flp,.json" onChange={handleLoadProject} />
+        <label className="btn file-open-btn" title="Import an editable SVG project">
+          <FiUpload /> Import SVG
+          <input type="file" accept=".svg,image/svg+xml" onChange={handleLoadProject} />
         </label>
+        <button className="btn export-svg-btn" onClick={handleExportSvg} title="Export a visual SVG with editable project data embedded">
+          <FiDownload /> Export SVG
+        </button>
         <div className="vertical-divider" />
 
         <button className="btn config-btn" onClick={() => setShowConfig(true)}>
