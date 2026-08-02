@@ -95,7 +95,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiDownload />
-              <div><strong>Export to Virtuoso</strong><p>SKILL creates the complete hierarchy in the Top Cell library. A visible pixel array is emitted on the drawing layers; a hidden one is omitted.</p></div>
+              <div><strong>Export to Virtuoso</strong><p>SKILL creates origin-placed IP wrappers, one <code>Top_PAD_BANK</code> containing every pad, and—when visible—one <code>Top_PIXEL_ARRAY</code>. All are in the Top Cell library and instantiated at (0,0).</p></div>
             </article>
           </div>
         </section>

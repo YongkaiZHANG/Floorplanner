@@ -679,6 +679,7 @@ export const Sidebar: React.FC = () => {
               <div className="pad-row-summary">
                 <strong>{padPlacementMode === 'row' ? `${Number(padCount) || 0} pads attached to the ${padSide} edge` : `${Number(padCount) || 0} pads per click · ${padPitch || '—'} um pitch`}</strong>
                 <span>{padPlacementMode === 'row' ? `Shift starts at the Top Cell’s ${padSide === 'top' || padSide === 'bottom' ? 'left' : 'bottom'} edge · continues toward positive ${padSide === 'top' || padSide === 'bottom' ? 'X' : 'Y'}` : 'Place multiple groups with arbitrary gaps; all instances use one reusable master.'}</span>
+                <span>SKILL collects every pad in <strong>{topCellName}_PAD_BANK</strong> and places that cell at (0,0).</span>
               </div>
             </div>
             <div className="modal-actions">

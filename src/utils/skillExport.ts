@@ -16,6 +16,53 @@ const skillString = (value: string): string => `"${value
 /** Keep generated comments on one line even when names came from an imported project. */
 const skillComment = (value: string): string => value.replace(/[\r\n]+/g, ' ');
 
+const allocateUniqueName = (base: string, used: Set<string>): string => {
+  let candidate = base;
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  used.add(candidate);
+  return candidate;
+};
+
+type ExportHierarchy = {
+  ipWrapperNames: Map<string, string>;
+  padBankCellName: string | null;
+  padBankInstanceName: string | null;
+  pixelArrayCellName: string | null;
+  pixelArrayInstanceName: string | null;
+};
+
+const buildExportHierarchy = (
+  topCellName: string,
+  masterCells: Record<string, Cell>,
+  instances: Instance[],
+  pixelArray?: PixelArray | null,
+): ExportHierarchy => {
+  const usedCellNames = new Set([topCellName, ...Object.values(masterCells).map(cell => cell.cellName)]);
+  const usedTopInstanceNames = new Set(instances.filter(instance => masterCells[instance.cellId]?.kind !== 'pad').map(instance => instance.name));
+  const ipWrapperNames = new Map<string, string>();
+
+  instances.forEach(instance => {
+    if (masterCells[instance.cellId]?.kind === 'pad') return;
+    ipWrapperNames.set(instance.id, allocateUniqueName(`${topCellName}_${instance.name}_PLACED`, usedCellNames));
+  });
+
+  const hasPads = instances.some(instance => masterCells[instance.cellId]?.kind === 'pad');
+  const padBankCellName = hasPads ? allocateUniqueName(`${topCellName}_PAD_BANK`, usedCellNames) : null;
+  const padBankInstanceName = hasPads ? allocateUniqueName('PAD_BANK', usedTopInstanceNames) : null;
+  const pixelArrayCellName = pixelArray?.visible
+    ? allocateUniqueName(`${topCellName}_PIXEL_ARRAY`, usedCellNames)
+    : null;
+  const pixelArrayInstanceName = pixelArray?.visible
+    ? allocateUniqueName('PIXEL_ARRAY', usedTopInstanceNames)
+    : null;
+
+  return { ipWrapperNames, padBankCellName, padBankInstanceName, pixelArrayCellName, pixelArrayInstanceName };
+};
+
 const validateFloorplan = (
   topLibName: string,
   topCellName: string,
@@ -93,6 +140,9 @@ export const generateSkillCode = (
   pixelArray?: PixelArray | null,
 ): string => {
   validateFloorplan(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray);
+  const hierarchy = buildExportHierarchy(topCellName, masterCells, instances, pixelArray);
+  const ipInstances = instances.filter(instance => masterCells[instance.cellId]?.kind !== 'pad');
+  const padInstances = instances.filter(instance => masterCells[instance.cellId]?.kind === 'pad');
 
   // Dimensions are emitted exactly as drawn. Only placement coordinates are grid-snapped.
   const exactTopW = cleanNumber(topWidth);
@@ -150,20 +200,62 @@ export const generateSkillCode = (
     code += `    dbClose(cv)\n`;
   });
 
-  // Step 2: Assemble Top Cell
+  // Step 2: Create origin-anchored placed cells.
   code += `\n    ; ==========================================\n`;
-  code += `    ; STEP 2: Assemble ${safeTopName}\n`;
+  code += `    ; STEP 2: Create Placed Wrapper Cells\n`;
+  code += `    ; Each wrapper owns its canvas coordinates; the Top Cell places it at 0:0.\n`;
   code += `    ; ==========================================\n`;
-  code += `    printf("Assembling top cell: %s/%s\\n" ${topLib} ${topCell})\n`;
-  code += `    cv = dbOpenCellViewByType(${topLib} ${topCell} "layout" "maskLayout" "w")\n`;
-  code += `    unless(cv error("Floorplanner: cannot create top cell %s/%s/layout.\\n" ${topLib} ${topCell}))\n\n`;
 
-  // Top Cell boundary (native prBoundary/drawing object)
-  code += `    ; Chip boundary: native OA prBoundary on ("prBoundary" "drawing"); both origins are at its center.\n`;
-  code += `    boundary = dbCreatePRBoundary(cv list(${-exactHalfW}:${-exactHalfH} ${-exactHalfW}:${exactHalfH} ${exactHalfW}:${exactHalfH} ${exactHalfW}:${-exactHalfH}))\n`;
-  code += `    unless(boundary error("Floorplanner: cannot create the top-cell prBoundary.\\n"))\n\n`;
+  ipInstances.forEach(inst => {
+    const masterCell = masterCells[inst.cellId];
+    const wrapperName = hierarchy.ipWrapperNames.get(inst.id);
+    if (!masterCell || !wrapperName) return;
+    const wrapperCell = skillString(wrapperName);
+    const masterLib = skillString(masterCell.libName);
+    const masterName = skillString(masterCell.cellName);
+    const internalName = skillString(`${inst.name}_MASTER`);
+    const snapX = formatGridValue(inst.x, gridSize);
+    const snapY = formatGridValue(inst.y, gridSize);
+    const orientation = skillString(inst.orientation);
+    code += `\n    ; --- Placed IP wrapper ${skillComment(wrapperName)} ---\n`;
+    code += `    cv = dbOpenCellViewByType(${topLib} ${wrapperCell} "layout" "maskLayout" "w")\n`;
+    code += `    unless(cv error("Floorplanner: cannot create placed IP cell %s/%s/layout.\\n" ${topLib} ${wrapperCell}))\n`;
+    code += `    master = dbOpenCellViewByType(${masterLib} ${masterName} "layout" "maskLayout" "r")\n`;
+    code += `    unless(master error("Floorplanner: cannot open IP master %s/%s/layout.\\n" ${masterLib} ${masterName}))\n`;
+    code += `    ; Original canvas transform is stored inside the wrapper.\n`;
+    code += `    inst = dbCreateInst(cv master ${internalName} ${snapX}:${snapY} ${orientation} 1)\n`;
+    code += `    unless(inst error("Floorplanner: cannot place IP master inside %s.\\n" ${wrapperCell}))\n`;
+    code += `    dbClose(master)\n`;
+    code += `    dbSave(cv)\n`;
+    code += `    dbClose(cv)\n`;
+  });
 
-  if (pixelArray?.visible) {
+  if (hierarchy.padBankCellName && padInstances.length > 0) {
+    const padBankCell = skillString(hierarchy.padBankCellName);
+    code += `\n    ; --- One aggregate cell containing every placed pad ---\n`;
+    code += `    cv = dbOpenCellViewByType(${topLib} ${padBankCell} "layout" "maskLayout" "w")\n`;
+    code += `    unless(cv error("Floorplanner: cannot create pad-bank cell %s/%s/layout.\\n" ${topLib} ${padBankCell}))\n`;
+    padInstances.forEach(inst => {
+      const masterCell = masterCells[inst.cellId];
+      if (!masterCell) return;
+      const masterLib = skillString(masterCell.libName);
+      const masterName = skillString(masterCell.cellName);
+      const instanceName = skillString(inst.name);
+      const snapX = formatGridValue(inst.x, gridSize);
+      const snapY = formatGridValue(inst.y, gridSize);
+      const orientation = skillString(inst.orientation);
+      code += `    master = dbOpenCellViewByType(${masterLib} ${masterName} "layout" "maskLayout" "r")\n`;
+      code += `    unless(master error("Floorplanner: cannot open pad master %s/%s/layout.\\n" ${masterLib} ${masterName}))\n`;
+      code += `    inst = dbCreateInst(cv master ${instanceName} ${snapX}:${snapY} ${orientation} 1)\n`;
+      code += `    unless(inst error("Floorplanner: cannot place pad %s in the pad bank.\\n" ${instanceName}))\n`;
+      code += `    dbClose(master)\n`;
+    });
+    code += `    dbSave(cv)\n`;
+    code += `    dbClose(cv)\n`;
+  }
+
+  if (pixelArray?.visible && hierarchy.pixelArrayCellName) {
+    const pixelCell = skillString(hierarchy.pixelArrayCellName);
     const arrayX = formatGridValue(pixelArray.x, gridSize);
     const arrayY = formatGridValue(pixelArray.y, gridSize);
     const arrayX2 = formatGridValue(pixelArray.x + pixelArray.width, gridSize);
@@ -171,40 +263,68 @@ export const generateSkillCode = (
     const arrayCX = formatGridValue(pixelArray.x + pixelArray.width / 2, gridSize);
     const arrayCY = formatGridValue(pixelArray.y + pixelArray.height / 2, gridSize);
     const arrayLabel = skillString(`PIXEL ARRAY ${formatGridValue(pixelArray.width, gridSize)}x${formatGridValue(pixelArray.height, gridSize)}um`);
-    code += `    ; Pixel-array planning region on the requested drawing LPPs.\n`;
+    code += `\n    ; --- Visible pixel array in the same Top Cell library ---\n`;
+    code += `    cv = dbOpenCellViewByType(${topLib} ${pixelCell} "layout" "maskLayout" "w")\n`;
+    code += `    unless(cv error("Floorplanner: cannot create pixel-array cell %s/%s/layout.\\n" ${topLib} ${pixelCell}))\n`;
     code += `    unless(errset(dbCreateRect(cv list("prBoundary" "drawing") list(${arrayX}:${arrayY} ${arrayX2}:${arrayY2})) t)\n`;
     code += `      error("Floorplanner: cannot create the pixel-array region on prBoundary/drawing.\\n")\n`;
     code += `    )\n`;
     code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${arrayCX}:${arrayCY} ${arrayLabel} "centerCenter" "R0" "roman" ${cleanNumber(Math.min(pixelArray.width, pixelArray.height) * 0.04)}) t)\n`;
     code += `      printf("WARNING: cannot create the pixel-array label on text/drawing.\\n")\n`;
-    code += `    )\n\n`;
+    code += `    )\n`;
+    code += `    dbSave(cv)\n`;
+    code += `    dbClose(cv)\n`;
   }
 
-  if (instances.length === 0) {
-    code += `    ; No instances to place\n`;
-  }
+  // Step 3: Assemble Top Cell using only origin placements.
+  code += `\n    ; ==========================================\n`;
+  code += `    ; STEP 3: Assemble ${safeTopName} at Origin\n`;
+  code += `    ; ==========================================\n`;
+  code += `    printf("Assembling top cell: %s/%s\\n" ${topLib} ${topCell})\n`;
+  code += `    cv = dbOpenCellViewByType(${topLib} ${topCell} "layout" "maskLayout" "w")\n`;
+  code += `    unless(cv error("Floorplanner: cannot create top cell %s/%s/layout.\\n" ${topLib} ${topCell}))\n\n`;
+  code += `    ; Chip boundary: native OA prBoundary on ("prBoundary" "drawing").\n`;
+  code += `    boundary = dbCreatePRBoundary(cv list(${-exactHalfW}:${-exactHalfH} ${-exactHalfW}:${exactHalfH} ${exactHalfW}:${exactHalfH} ${exactHalfW}:${-exactHalfH}))\n`;
+  code += `    unless(boundary error("Floorplanner: cannot create the top-cell prBoundary.\\n"))\n\n`;
 
-  // Instantiate Sub-IPs
-  instances.forEach((inst) => {
-    const masterCell = masterCells[inst.cellId];
-    if (!masterCell) return;
-
-    // Coordinates are already grid-normalized in the project store. Formatting
-    // them here preserves the exact canvas placement without floating noise.
-    const snapX = formatGridValue(inst.x, gridSize);
-    const snapY = formatGridValue(inst.y, gridSize);
-
-    const masterLib = skillString(masterCell.libName);
-    const masterName = skillString(masterCell.cellName);
+  ipInstances.forEach(inst => {
+    const wrapperName = hierarchy.ipWrapperNames.get(inst.id);
+    if (!wrapperName) return;
+    const wrapperCell = skillString(wrapperName);
     const instanceName = skillString(inst.name);
-    const orientation = skillString(inst.orientation);
-    code += `    ; ${skillComment(inst.name)} <- ${skillComment(masterCell.libName)}/${skillComment(masterCell.cellName)}  @ (${snapX}, ${snapY})  [${inst.orientation}]\n`;
-    code += `    master = dbOpenCellViewByType(${masterLib} ${masterName} "layout" "maskLayout" "r")\n`;
-    code += `    unless(master error("Floorplanner: cannot open master %s/%s/layout.\\n" ${masterLib} ${masterName}))\n`;
-    code += `    inst = dbCreateInst(cv master ${instanceName} ${snapX}:${snapY} ${orientation} 1)\n`;
-    code += `    unless(inst error("Floorplanner: cannot create instance %s.\\n" ${instanceName}))\n`;
+    code += `    ; TOP-ORIGIN IP ${skillComment(inst.name)} -> ${skillComment(wrapperName)}\n`;
+    code += `    master = dbOpenCellViewByType(${topLib} ${wrapperCell} "layout" "maskLayout" "r")\n`;
+    code += `    unless(master error("Floorplanner: cannot open placed IP cell %s/%s/layout.\\n" ${topLib} ${wrapperCell}))\n`;
+    code += `    inst = dbCreateInst(cv master ${instanceName} 0:0 "R0" 1)\n`;
+    code += `    unless(inst error("Floorplanner: cannot place origin IP instance %s.\\n" ${instanceName}))\n`;
     code += `    dbClose(master)\n\n`;
   });
+
+  if (hierarchy.padBankCellName && hierarchy.padBankInstanceName) {
+    const padBankCell = skillString(hierarchy.padBankCellName);
+    const padBankInstance = skillString(hierarchy.padBankInstanceName);
+    code += `    ; TOP-ORIGIN PAD BANK: all pads are contained in one cell.\n`;
+    code += `    master = dbOpenCellViewByType(${topLib} ${padBankCell} "layout" "maskLayout" "r")\n`;
+    code += `    unless(master error("Floorplanner: cannot open pad-bank cell %s/%s/layout.\\n" ${topLib} ${padBankCell}))\n`;
+    code += `    inst = dbCreateInst(cv master ${padBankInstance} 0:0 "R0" 1)\n`;
+    code += `    unless(inst error("Floorplanner: cannot place the origin pad bank.\\n"))\n`;
+    code += `    dbClose(master)\n\n`;
+  }
+
+  if (hierarchy.pixelArrayCellName && hierarchy.pixelArrayInstanceName) {
+    const pixelCell = skillString(hierarchy.pixelArrayCellName);
+    const pixelInstance = skillString(hierarchy.pixelArrayInstanceName);
+    code += `    ; TOP-ORIGIN PIXEL ARRAY: visible drawing is contained in its own cell.\n`;
+    code += `    master = dbOpenCellViewByType(${topLib} ${pixelCell} "layout" "maskLayout" "r")\n`;
+    code += `    unless(master error("Floorplanner: cannot open pixel-array cell %s/%s/layout.\\n" ${topLib} ${pixelCell}))\n`;
+    code += `    inst = dbCreateInst(cv master ${pixelInstance} 0:0 "R0" 1)\n`;
+    code += `    unless(inst error("Floorplanner: cannot place the origin pixel-array cell.\\n"))\n`;
+    code += `    dbClose(master)\n\n`;
+  }
+
+  if (ipInstances.length === 0 && padInstances.length === 0 && !pixelArray?.visible) {
+    code += `    ; No generated child cells to place\n`;
+  }
 
   code += `    dbSave(cv)\n`;
   code += `    dbClose(cv)\n`;
