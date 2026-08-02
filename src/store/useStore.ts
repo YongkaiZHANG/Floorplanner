@@ -62,9 +62,9 @@ export type PadRowConfig = {
   pitch: number;
   side: PadSide;
   orientation?: string;
-  /** X on top/bottom, Y on left/right. */
+  /** Distance along the selected top-cell edge. */
   offset: number;
-  /** `start` makes offset the first pad's physical left/bottom edge coordinate. */
+  /** `start` measures offset from the top-cell left/bottom edge to the first pad edge. */
   offsetReference?: 'center' | 'start';
 };
 
@@ -834,8 +834,9 @@ export const useStore = create<ProjectState>((set) => ({
       ? localBounds.right - localBounds.left
       : localBounds.top - localBounds.bottom;
     const rowSpan = (config.count - 1) * config.pitch + padAlong;
+    const availableAlong = horizontal ? state.topWidth : state.topHeight;
     const centerAlong = config.offsetReference === 'start'
-      ? config.offset + rowSpan / 2
+      ? -availableAlong / 2 + config.offset + rowSpan / 2
       : config.offset;
     const positions = computePadGroupPositions({
       width: config.width, height: config.height, count: config.count, pitch: config.pitch,

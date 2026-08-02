@@ -539,7 +539,7 @@ test('rotated automatic rows use the transformed pad footprint', () => {
   assert.deepEqual(bounds.slice(1).map((bound, index) => bound.left - bounds[index].right), [3, 3]);
 });
 
-test('automatic pad start shift is an exact rotated physical edge coordinate', () => {
+test('automatic pad shift is measured from the selected top-cell edge start', () => {
   useStore.getState().loadProject({ ...emptyProject, topWidth: 1000, topHeight: 1000 });
   useStore.getState().createPadRow({
     libName: 'padLib', cellName: 'LEFT_ROT_PAD', width: 40, height: 10, color: '#fff',
@@ -548,7 +548,8 @@ test('automatic pad start shift is an exact rotated physical edge coordinate', (
   const state = useStore.getState();
   const master = Object.values(state.masterCells)[0];
   const bounds = state.instances.map(instance => getPhysicalBounds({ ...instance, width: master.width, height: master.height }));
-  assert.deepEqual(bounds.map(bound => bound.bottom), [300, 350, 400]);
+  assert.deepEqual(bounds.map(bound => bound.bottom), [-200, -150, -100]);
+  assert.deepEqual(bounds.map(bound => bound.bottom + 500), [300, 350, 400]);
   assert.ok(bounds.every(bound => bound.left === -500));
   assert.ok(state.instances.every(instance => instance.orientation === 'R90'));
 
@@ -556,7 +557,7 @@ test('automatic pad start shift is an exact rotated physical edge coordinate', (
   assert.throws(
     () => useStore.getState().createPadRow({
       libName: 'padLib', cellName: 'LEFT_ROT_PAD', width: 40, height: 10, color: '#fff',
-      count: 3, pitch: 50, side: 'left', offset: 480, offsetReference: 'start', orientation: 'R90',
+      count: 3, pitch: 50, side: 'left', offset: 900, offsetReference: 'start', orientation: 'R90',
     }),
     /outside the 1000 um top-cell edge/,
   );

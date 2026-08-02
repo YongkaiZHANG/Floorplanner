@@ -12,7 +12,7 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, pixelArray, pixelArraySelected, gridSize, setGridSize, clearRulers, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, pixelArray, pixelArraySelected, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
@@ -213,13 +213,23 @@ export const Topbar: React.FC = () => {
             <FiMinimize2 /> Ruler
           </button>
           {appMode === 'measure' && (
-            <button 
-              className="mode-btn mode-btn--danger"
-              onClick={() => clearRulers()}
-              title="Clear Rulers"
-            >
-              <FiTrash2 /> Clear Rulers
-            </button>
+            <>
+              <button
+                className={`mode-btn${orthogonalRuler ? ' active' : ''}`}
+                onClick={toggleOrthogonalRuler}
+                title="Lock rulers perpendicular to matching IP edges (O)"
+                aria-pressed={orthogonalRuler}
+              >
+                <FiGrid /> Ortho {orthogonalRuler ? 'ON' : 'OFF'}
+              </button>
+              <button
+                className="mode-btn mode-btn--danger"
+                onClick={() => clearRulers()}
+                title="Clear Rulers"
+              >
+                <FiTrash2 /> Clear Rulers
+              </button>
+            </>
           )}
           <button
             className={`mode-btn mode-btn--autodim${showAutoDim ? ' active' : ''}`}

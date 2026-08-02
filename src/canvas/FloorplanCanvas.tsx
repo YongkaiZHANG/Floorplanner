@@ -5,6 +5,8 @@ import { getAlignmentEdgeAxis } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
 import { formatGridValue } from '../utils/grid';
 import { getIpPixelArrayEdgeMeasurements } from '../utils/pixelArrayDimensions';
+import { resolveOrthogonalRulerEnd } from '../utils/ruler';
+import type { SnapEdgeAxis } from '../utils/ruler';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import './FloorplanCanvas.css';
@@ -24,7 +26,7 @@ export const FloorplanCanvas: React.FC = () => {
 
   // Measure Mode State
   const [isMeasuring, setIsMeasuring] = useState(false);
-  const [measureStart, setMeasureStart] = useState<{ x: number; y: number } | null>(null);
+  const [measureStart, setMeasureStart] = useState<{ x: number; y: number; snapEdgeAxis?: SnapEdgeAxis } | null>(null);
   const [currentRuler, setCurrentRuler] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
   const [hoveredRulerId, setHoveredRulerId] = useState<string | null>(null);
   const [hoveredAutoDimKey, setHoveredAutoDimKey] = useState<string | null>(null);
@@ -305,10 +307,10 @@ export const FloorplanCanvas: React.FC = () => {
     let umY = worldY / SCALE_FACTOR;
 
     if (applyObjectSnapping) {
-      let bestSnap: { x: number, y: number, dist: number } | null = null;
+      let bestSnap: { x: number, y: number, dist: number, snapEdgeAxis: SnapEdgeAxis } | null = null;
       const snapRadiusUm = 15 / (SCALE_FACTOR * stageScale); // 15 screen pixels radius
       
-      const segments: {a: {x:number, y:number}, b: {x:number, y:number}}[] = [];
+      const segments: {a: {x:number, y:number}, b: {x:number, y:number}, axis: SnapEdgeAxis}[] = [];
       
       // top_asic boundary
       const w2 = topWidth / 2;
@@ -320,7 +322,9 @@ export const FloorplanCanvas: React.FC = () => {
         {x: -w2, y: h2}
       ];
       for (let i=0; i<4; i++) {
-        segments.push({a: topAsicCorners[i], b: topAsicCorners[(i+1)%4]});
+        const a = topAsicCorners[i];
+        const b = topAsicCorners[(i+1)%4];
+        segments.push({ a, b, axis: Math.abs(a.x - b.x) <= 1e-9 ? 'vertical' : 'horizontal' });
       }
 
       // instances
@@ -328,7 +332,9 @@ export const FloorplanCanvas: React.FC = () => {
         const corners = getInstanceCorners(inst);
         if (!corners) continue;
         for (let i=0; i<4; i++) {
-          segments.push({a: corners[i], b: corners[(i+1)%4]});
+          const a = corners[i];
+          const b = corners[(i+1)%4];
+          segments.push({ a, b, axis: Math.abs(a.x - b.x) <= 1e-9 ? 'vertical' : 'horizontal' });
         }
       }
 
@@ -336,19 +342,19 @@ export const FloorplanCanvas: React.FC = () => {
         const closest = getClosestPointOnSegment({x: umX, y: umY}, seg.a, seg.b);
         if (closest.dist < snapRadiusUm) {
           if (!bestSnap || closest.dist < bestSnap.dist) {
-            bestSnap = closest;
+            bestSnap = { ...closest, snapEdgeAxis: seg.axis };
           }
         }
       }
 
       if (bestSnap) {
-        return { umX: bestSnap.x, umY: bestSnap.y, isSnapped: true };
+        return { umX: bestSnap.x, umY: bestSnap.y, isSnapped: true, snapEdgeAxis: bestSnap.snapEdgeAxis };
       }
     }
 
     umX = Math.round(umX / gridSize) * gridSize;
     umY = Math.round(umY / gridSize) * gridSize;
-    return { umX, umY, isSnapped: false };
+    return { umX, umY, isSnapped: false, snapEdgeAxis: undefined };
   };
 
   const handleMouseDown = () => {
@@ -358,7 +364,7 @@ export const FloorplanCanvas: React.FC = () => {
   const handleMouseMove = () => {
     const pointer = stageRef.current?.getPointerPosition();
     if (!pointer) return;
-    const { umX, umY, isSnapped } = getSnappedWorldPos(pointer, appMode === 'measure');
+    const { umX, umY, isSnapped, snapEdgeAxis } = getSnappedWorldPos(pointer, appMode === 'measure');
 
     setMousePos({ x: umX, y: umY });
     
@@ -369,20 +375,13 @@ export const FloorplanCanvas: React.FC = () => {
     }
 
     if (appMode === 'measure' && isMeasuring && measureStart) {
-      let ex = umX;
-      let ey = umY;
+      const end = resolveOrthogonalRulerEnd(
+        measureStart,
+        { x: umX, y: umY, snapEdgeAxis: isSnapped ? snapEdgeAxis : undefined },
+        orthogonalRuler,
+      );
       
-      if (orthogonalRuler) {
-        const dx = Math.abs(ex - measureStart.x);
-        const dy = Math.abs(ey - measureStart.y);
-        if (dx > dy) {
-          ey = measureStart.y;
-        } else {
-          ex = measureStart.x;
-        }
-      }
-      
-      setCurrentRuler({ startX: measureStart.x, startY: measureStart.y, endX: ex, endY: ey });
+      setCurrentRuler({ startX: measureStart.x, startY: measureStart.y, endX: end.x, endY: end.y });
     }
   };
 
@@ -1047,7 +1046,7 @@ export const FloorplanCanvas: React.FC = () => {
           if (appMode === 'measure' && snapped) {
             if (!isMeasuring) {
               setIsMeasuring(true);
-              setMeasureStart({ x: snapped.umX, y: snapped.umY });
+              setMeasureStart({ x: snapped.umX, y: snapped.umY, snapEdgeAxis: snapped.snapEdgeAxis });
               setCurrentRuler({ startX: snapped.umX, startY: snapped.umY, endX: snapped.umX, endY: snapped.umY });
             } else if (currentRuler) {
               setIsMeasuring(false);

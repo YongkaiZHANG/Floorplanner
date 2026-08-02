@@ -56,7 +56,7 @@ export const Sidebar: React.FC = () => {
   const [padCount, setPadCount] = useState('8');
   const [padPitch, setPadPitch] = useState('12');
   const [padSide, setPadSide] = useState<PadSide>('top');
-  const [padOffset, setPadOffset] = useState('-47');
+  const [padOffset, setPadOffset] = useState('0');
   const [padColor, setPadColor] = useState('#f59e0b');
   const [padOrientation, setPadOrientation] = useState('R0');
   const [padAutoOrient, setPadAutoOrient] = useState(true);
@@ -159,7 +159,7 @@ export const Sidebar: React.FC = () => {
     const pitch = Number(padPitch);
     if (!Number.isFinite(along) || along <= 0 || !Number.isFinite(pitch) || pitch < along) return;
     setPadCount(String(Math.max(1, Math.floor((available - along) / pitch) + 1)));
-    setPadOffset(String(-available / 2));
+    setPadOffset('0');
   };
 
   const sideOrientation: Record<PadSide, string> = { top: 'R0', right: 'R270', bottom: 'R180', left: 'R90' };
@@ -172,7 +172,8 @@ export const Sidebar: React.FC = () => {
   const padAlong = padSide === 'top' || padSide === 'bottom' ? padPhysicalWidth : padPhysicalHeight;
   const padGap = Number(padPitch) - padAlong;
   const padSpan = Math.max(0, (Number(padCount) - 1) * Number(padPitch) + padAlong);
-  const padStartCoordinate = Number(padOffset);
+  const padAvailable = padSide === 'top' || padSide === 'bottom' ? topWidth : topHeight;
+  const padStartCoordinate = -padAvailable / 2 + Number(padOffset);
   const padEndCoordinate = padStartCoordinate + padSpan;
 
   const handleMouseEnter = () => {
@@ -636,13 +637,13 @@ export const Sidebar: React.FC = () => {
               <div className="form-row">
                 <div className="form-group">
                   <div className="field-label-row">
-                    <label className="label">First Pad {padSide === 'top' || padSide === 'bottom' ? 'Left Edge X' : 'Bottom Edge Y'} (um)</label>
-                    <button type="button" className="text-action" onClick={() => setPadOffset(String(-padSpan / 2))}>Center row</button>
+                    <label className="label">Shift from Top-cell {padSide === 'top' || padSide === 'bottom' ? 'Left Edge' : 'Bottom Edge'} (um)</label>
+                    <button type="button" className="text-action" onClick={() => setPadOffset(String((padAvailable - padSpan) / 2))}>Center row</button>
                   </div>
                   <input type="number" step="any" className="input-field" value={padOffset} onChange={event => setPadOffset(event.target.value)} required />
                 </div>
                 <div className="form-group pad-fit-hint">
-                  <span className="label">Physical row coordinates</span>
+                  <span className="label">Resolved canvas coordinates</span>
                   <strong>{Number.isFinite(padStartCoordinate) && Number.isFinite(padEndCoordinate) ? `${padStartCoordinate.toFixed(3)} → ${padEndCoordinate.toFixed(3)} um` : '—'}</strong>
                   <small className={padGap < 0 ? 'error-text' : ''}>
                     {Number.isFinite(padGap) ? (padGap < 0 ? `${Math.abs(padGap).toFixed(3)} um overlap` : `${padSpan.toFixed(3)} um span · ${padGap.toFixed(3)} um pad gap`) : 'Enter valid dimensions'}
@@ -674,7 +675,7 @@ export const Sidebar: React.FC = () => {
               </label>
               <div className="pad-row-summary">
                 <strong>{padPlacementMode === 'row' ? `${Number(padCount) || 0} pads attached to the ${padSide} edge` : `${Number(padCount) || 0} pads per click · ${padPitch || '—'} um pitch`}</strong>
-                <span>{padPlacementMode === 'row' ? `Starts at the exact ${padSide === 'top' || padSide === 'bottom' ? 'X' : 'Y'} coordinate shown · continues toward positive ${padSide === 'top' || padSide === 'bottom' ? 'X' : 'Y'}` : 'Place multiple groups with arbitrary gaps; all instances use one reusable master.'}</span>
+                <span>{padPlacementMode === 'row' ? `Shift starts at the Top Cell’s ${padSide === 'top' || padSide === 'bottom' ? 'left' : 'bottom'} edge · continues toward positive ${padSide === 'top' || padSide === 'bottom' ? 'X' : 'Y'}` : 'Place multiple groups with arbitrary gaps; all instances use one reusable master.'}</span>
               </div>
             </div>
             <div className="modal-actions">
