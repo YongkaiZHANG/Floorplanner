@@ -65,7 +65,7 @@ Mouse rotation snaps to legal Cadence quarter turns and keeps the block's physic
 
 ### 3. Select and arrange blocks
 
-For Cadence-style two-object alignment, first select the IP that should move. Open **Align → Align by two edges**, click an amber source edge, then click a compatible green edge on the fixed target IP. Enter a signed offset in micrometers if needed: positive moves the source right/up and negative moves it left/down. Applying the operation moves only the source and creates one Undo entry.
+For Cadence-style two-object alignment, first select the IP that should move. Click **Align** (or press `a`), click an amber source edge, then click a compatible green edge on the fixed target IP. The target-edge click applies immediately. Set the optional signed offset before that click: positive moves the source right/up and negative moves it left/down. Only the source moves, and the operation creates one Undo entry.
 
 For quick group alignment, Shift-click blocks on the canvas or in the instance list to build a multi-selection. The amber block is the fixed reference; plain-click another already-selected block to make it the primary reference without clearing the group. The Align menu also supports:
 
@@ -89,6 +89,8 @@ Selecting a block shows its directly visible neighboring gaps in blue. Auto-Dim 
 - **Preview Code** displays the generated Cadence SKILL before download.
 
 The Saved/Unsaved indicator tracks the last explicit project save or open. The application warns before replacing unsaved work or closing the page.
+
+Changing the placement grid re-snaps every existing instance to an exact multiple of the new grid. Coordinate fields, lists, SVG tables, and generated SKILL use precision derived from that grid. For example, `3452u` is valid on a `0.005u` grid because it equals exactly 690,400 grid steps; Cadence may display it as `3452.0000000u` according to its own display precision.
 
 ## Cadence Virtuoso export
 

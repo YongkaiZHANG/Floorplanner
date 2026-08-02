@@ -57,3 +57,16 @@ test('escapes names before inserting them into SKILL strings', () => {
 
   assert.match(code, /"block\\"quoted"/);
 });
+
+test('emits canonical grid coordinates and rejects off-grid geometry', () => {
+  const instance = {
+    id: 'large', cellId: 'master', name: 'I0', x: 3452, y: -0.005, orientation: 'R0',
+  };
+  const code = generateSkillCode('demoLib', 'top', 10000, 10000, masterCells, [instance], 0.005);
+  assert.match(code, /dbCreateInst\(cv master "I0" 3452:-0\.005 "R0" 1\)/);
+
+  assert.throws(
+    () => generateSkillCode('demoLib', 'top', 10000, 10000, masterCells, [{ ...instance, y: 0.003 }], 0.005),
+    /off the 0\.005 um placement grid/,
+  );
+});

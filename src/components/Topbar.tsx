@@ -16,7 +16,7 @@ export const Topbar: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v3') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v4') !== 'yes';
     } catch {
       return true;
     }
@@ -146,7 +146,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v3', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v4', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -238,10 +238,15 @@ export const Topbar: React.FC = () => {
           <label>Grid (um):</label>
           <input 
             type="number" 
-            step="0.001" 
+            min="0.000000000001"
+            step="any"
             value={gridSize} 
-            onChange={e => setGridSize(parseFloat(e.target.value) || 0.001)}
+            onChange={event => {
+              const size = Number(event.target.value);
+              if (Number.isFinite(size) && size > 0) setGridSize(size);
+            }}
             className="input-field grid-input"
+            title="Changing the grid re-snaps every instance to an exact grid multiple"
           />
         </div>
         <div className="vertical-divider" style={{ width: '1px', height: '24px', backgroundColor: 'var(--border-color)', margin: '0 4px' }}></div>

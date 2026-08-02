@@ -109,10 +109,21 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
         className="editing-toolbar__button editing-toolbar__align-trigger"
         type="button"
         disabled={!canAlign}
-        onClick={() => setIsAlignOpen((open) => !open)}
+        onClick={() => {
+          if (selectionCount === 1) {
+            onStartEdgeAlign();
+            setIsAlignOpen(false);
+          } else {
+            setIsAlignOpen((open) => !open);
+          }
+        }}
         aria-expanded={isAlignOpen}
         aria-haspopup="menu"
-        title={canAlign ? `Align ${anchorName ?? 'the selected block'} by edges` : 'Select a source block to align'}
+        title={canAlign
+          ? selectionCount === 1
+            ? `Align ${anchorName ?? 'the selected block'} by clicking two edges (A)`
+            : `Open alignment choices for ${selectionCount} selected blocks`
+          : 'Select a source block to align'}
       >
         <FiAlignLeft />
         <span>Align</span>

@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
 import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip } from 'react-icons/fi';
 import './Sidebar.css';
+import { formatGridValue } from '../utils/grid';
 
 const PRESET_COLORS = [
   '#2563eb', '#3b82f6', '#60a5fa', '#0ea5e9', '#06b6d4', '#14b8a6',
@@ -18,7 +19,7 @@ export const Sidebar: React.FC = () => {
     addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, 
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
-    setPlacement, leftSidebarPinned, setLeftSidebarPinned 
+    setPlacement, leftSidebarPinned, setLeftSidebarPinned, gridSize,
   } = useStore();
   const [isHovered, setIsHovered] = useState(false);
   const hoverTimeout = useRef<number | null>(null);
@@ -168,7 +169,7 @@ export const Sidebar: React.FC = () => {
                     <span className="inst-master">({master.cellName})</span>
                   </div>
                   <div className="inst-pos">
-                    {inst.x.toFixed(3)} : {inst.y.toFixed(3)} [{inst.orientation}]
+                    {formatGridValue(inst.x, gridSize)} : {formatGridValue(inst.y, gridSize)} [{inst.orientation}]
                   </div>
                 </li>
               );

@@ -1,14 +1,7 @@
 import type { Cell, Instance } from '../store/useStore';
+import { formatGridValue, isOnGrid } from './grid.ts';
 
 const VALID_ORIENTATIONS = new Set(['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90']);
-
-/** Snap a value to the nearest grid multiple, eliminating floating-point noise */
-const snapToGrid = (val: number, gridSize: number): number => {
-  const snapped = Math.round(val / gridSize) * gridSize;
-  // Round to reasonable decimal places to eliminate floating point noise
-  const decimals = Math.max(0, -Math.floor(Math.log10(gridSize))) + 1;
-  return parseFloat(snapped.toFixed(decimals));
-};
 
 /** Emit stable decimal coordinates without changing geometry that is visible on the canvas. */
 const cleanNumber = (value: number): number => parseFloat(value.toFixed(12));
@@ -60,6 +53,9 @@ const validateFloorplan = (
     if (instanceNames.has(instance.name)) throw new Error(`Duplicate instance name: ${instance.name}.`);
     instanceNames.add(instance.name);
     if (!Number.isFinite(instance.x) || !Number.isFinite(instance.y)) throw new Error(`Instance ${instance.name} has invalid coordinates.`);
+    if (!isOnGrid(instance.x, gridSize) || !isOnGrid(instance.y, gridSize)) {
+      throw new Error(`Instance ${instance.name} is off the ${formatGridValue(gridSize, gridSize)} um placement grid.`);
+    }
     if (!VALID_ORIENTATIONS.has(instance.orientation)) throw new Error(`Instance ${instance.name} has invalid orientation ${instance.orientation}.`);
   });
 };
@@ -74,8 +70,6 @@ export const generateSkillCode = (
   gridSize: number
 ): string => {
   validateFloorplan(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize);
-
-  const snap = (v: number) => snapToGrid(v, gridSize);
 
   // Dimensions are emitted exactly as drawn. Only placement coordinates are grid-snapped.
   const exactTopW = cleanNumber(topWidth);
@@ -93,7 +87,7 @@ export const generateSkillCode = (
   code += `; Loading this file creates/overwrites the generated layout views.\n`;
   code += `; Top Cell : ${skillComment(topLibName)}/${safeTopName}\n`;
   code += `; Size     : ${exactTopW} x ${exactTopH} um\n`;
-  code += `; Grid     : ${gridSize} um\n`;
+  code += `; Grid     : ${formatGridValue(gridSize, gridSize)} um\n`;
   code += `; =============================================================\n\n`;
   code += `procedure(FPCreateFloorplan()\n`;
   code += `  let((cv master inst boundary)\n`;
@@ -154,9 +148,10 @@ export const generateSkillCode = (
     const masterCell = masterCells[inst.cellId];
     if (!masterCell) return;
 
-    // Snap placement coordinates to grid
-    const snapX = snap(inst.x);
-    const snapY = snap(inst.y);
+    // Coordinates are already grid-normalized in the project store. Formatting
+    // them here preserves the exact canvas placement without floating noise.
+    const snapX = formatGridValue(inst.x, gridSize);
+    const snapY = formatGridValue(inst.y, gridSize);
 
     const masterLib = skillString(masterCell.libName);
     const masterName = skillString(masterCell.cellName);

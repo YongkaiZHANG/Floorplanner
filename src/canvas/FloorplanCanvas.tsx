@@ -3,6 +3,7 @@ import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
 import { useStore, getTransformProps, rotateOrientationByQuarterTurns } from '../store/useStore';
 import { getAlignmentEdgeAxis } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
+import { formatGridValue } from '../utils/grid';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import './FloorplanCanvas.css';
@@ -58,8 +59,8 @@ export const FloorplanCanvas: React.FC = () => {
     edgeAlignmentSession,
     setEdgeAlignmentEdge,
     setEdgeAlignmentOffset,
+    completeEdgeAlignment,
     cancelEdgeAlignment,
-    applyEdgeAlignment,
   } = useStore();
 
   const fitView = useCallback(() => {
@@ -195,6 +196,10 @@ export const FloorplanCanvas: React.FC = () => {
               );
             }
           }
+          break;
+        case 'a':
+          e.preventDefault();
+          if (state.selectedInstanceId) state.startEdgeAlignment(state.selectedInstanceId);
           break;
         case 'escape':
           if (state.edgeAlignmentSession) {
@@ -544,7 +549,7 @@ export const FloorplanCanvas: React.FC = () => {
 
     const snapLabel = (v: number) => {
       const snapped = Math.round(v / gridSize) * gridSize;
-      return parseFloat(snapped.toFixed(4)).toString() + ' um';
+      return formatGridValue(snapped, gridSize) + ' um';
     };
 
     type Interval = { start: number; end: number };
@@ -1223,7 +1228,15 @@ export const FloorplanCanvas: React.FC = () => {
                     onMouseLeave={() => setHoveredAlignEdge(null)}
                     onClick={(event) => {
                       event.cancelBubble = true;
-                      setEdgeAlignmentEdge(instance.id, edge);
+                      if (isSource) {
+                        setEdgeAlignmentEdge(instance.id, edge);
+                      } else {
+                        try {
+                          completeEdgeAlignment(instance.id, edge);
+                        } catch (error) {
+                          alert(error instanceof Error ? error.message : 'Unable to align edges.');
+                        }
+                      }
                     }}
                   />
                 );
@@ -1325,7 +1338,7 @@ export const FloorplanCanvas: React.FC = () => {
       </Stage>
       {mousePos && (
         <div className="coordinate-overlay">
-          X: {mousePos.x.toFixed(3)} Y: {mousePos.y.toFixed(3)}
+          X: {formatGridValue(mousePos.x, gridSize)} Y: {formatGridValue(mousePos.y, gridSize)}
         </div>
       )}
       {appMode === 'measure' && (
@@ -1341,16 +1354,12 @@ export const FloorplanCanvas: React.FC = () => {
       )}
       {edgeAlignmentSession && (() => {
         const source = instances.find(instance => instance.id === edgeAlignmentSession.sourceId);
-        const target = instances.find(instance => instance.id === edgeAlignmentSession.targetId);
-        const ready = Boolean(edgeAlignmentSession.sourceEdge && target && edgeAlignmentSession.targetEdge);
         const step = !edgeAlignmentSession.sourceEdge
           ? `Click one highlighted edge of ${source?.name ?? 'the source block'}`
-          : !target
-            ? 'Click a green edge on the fixed target block'
-            : 'Enter an optional signed offset, then apply';
+          : 'Click a green target edge to apply immediately';
 
         return (
-          <div className={`edge-align-panel${ready ? '' : ' edge-align-panel--picking'}`} role="dialog" aria-label="Align by edges">
+          <div className="edge-align-panel edge-align-panel--picking" role="dialog" aria-label="Align by edges">
             <div className="edge-align-panel__header">
               <div><strong>Align by edges</strong><span>{step}</span></div>
               <button type="button" onClick={cancelEdgeAlignment} aria-label="Cancel edge alignment">×</button>
@@ -1360,36 +1369,19 @@ export const FloorplanCanvas: React.FC = () => {
               <code>{source?.name ?? '—'}.{edgeAlignmentSession.sourceEdge ?? '?'}</code>
               <span>→</span>
               <span className="edge-align-panel__target">Fixed target</span>
-              <code>{target?.name ?? '—'}.{edgeAlignmentSession.targetEdge ?? '?'}</code>
+              <code>click green edge</code>
             </div>
-            {ready && <>
-              <label>
-                Signed offset (µm)
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={edgeAlignmentSession.offset}
-                  onChange={event => setEdgeAlignmentOffset(event.target.value)}
-                  onKeyDown={event => {
-                    if (event.key === 'Escape') cancelEdgeAlignment();
-                    if (event.key === 'Enter') {
-                      try { applyEdgeAlignment(); } catch (error) { alert(error instanceof Error ? error.message : 'Unable to align edges.'); }
-                    }
-                  }}
-                />
-              </label>
-              <p>0 aligns the chosen edges. Positive moves the source right or up; negative moves it left or down.</p>
-              <div className="edge-align-panel__actions">
-                <button type="button" onClick={cancelEdgeAlignment}>Cancel</button>
-                <button
-                  type="button"
-                  className="edge-align-panel__apply"
-                  onClick={() => {
-                    try { applyEdgeAlignment(); } catch (error) { alert(error instanceof Error ? error.message : 'Unable to align edges.'); }
-                  }}
-                >Apply alignment</button>
-              </div>
-            </>}
+            <label>
+              Offset (µm)
+              <input
+                type="text"
+                inputMode="decimal"
+                value={edgeAlignmentSession.offset}
+                onChange={event => setEdgeAlignmentOffset(event.target.value)}
+                onKeyDown={event => { if (event.key === 'Escape') cancelEdgeAlignment(); }}
+              />
+            </label>
+            <p>Target click applies the move. 0 aligns edges; + is right/up and − is left/down.</p>
           </div>
         );
       })()}

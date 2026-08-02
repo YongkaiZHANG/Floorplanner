@@ -156,3 +156,47 @@ test('invalid interactive edge alignment keeps its session and does not add hist
   useStore.getState().deleteInstance(target.id);
   assert.equal(useStore.getState().edgeAlignmentSession, null);
 });
+
+test('changing or loading a grid normalizes every instance to an exact multiple', () => {
+  useStore.getState().loadProject({
+    ...emptyProject,
+    masterCells: {
+      master: { id: 'master', libName: 'testLib', cellName: 'gridBlock', width: 2, height: 2, color: '#fff' },
+    },
+    instances: [
+      { id: 'instance', cellId: 'master', name: 'I0', x: 1.234, y: -2.347, orientation: 'R0' },
+    ],
+  });
+  assert.deepEqual(
+    [useStore.getState().instances[0].x, useStore.getState().instances[0].y],
+    [1.235, -2.345],
+  );
+
+  useStore.getState().setGridSize(0.01);
+  assert.deepEqual(
+    [useStore.getState().instances[0].x, useStore.getState().instances[0].y],
+    [1.24, -2.35],
+  );
+});
+
+test('target edge click can complete interactive alignment in one atomic action', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'quickAlign', 10, 5, '#fff');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -20, 0);
+  useStore.getState().placeInstance(master.id, 20, 0);
+  const [source, target] = useStore.getState().instances;
+  const historyLength = useStore.getState().history.past.length;
+
+  useStore.getState().startEdgeAlignment(source.id);
+  useStore.getState().setEdgeAlignmentEdge(source.id, 'right');
+  useStore.getState().completeEdgeAlignment(target.id, 'left');
+
+  assert.equal(useStore.getState().edgeAlignmentSession, null);
+  assert.equal(useStore.getState().history.past.length, historyLength + 1);
+  const [moved, fixed] = useStore.getState().instances;
+  assert.equal(
+    getPhysicalBounds({ ...moved, width: master.width, height: master.height }).right,
+    getPhysicalBounds({ ...fixed, width: master.width, height: master.height }).left,
+  );
+});

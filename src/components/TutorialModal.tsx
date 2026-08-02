@@ -19,6 +19,7 @@ const shortcuts = [
   ['n', 'Create a Master IP'],
   ['i', 'Place an instance'],
   ['Shift + click', 'Build a multi-selection'],
+  ['a', 'Align selected IP by two edges'],
   ['r / Shift + r', 'Rotate ±90°'],
   ['k', 'Measure with a ruler'],
   ['o', 'Toggle orthogonal ruler'],
@@ -49,7 +50,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             <li><span>1</span><div><strong>Configure the Top Cell</strong><p>Set its Cadence library, cell name, width, height, and placement grid.</p></div></li>
             <li><span>2</span><div><strong>Create Master IPs</strong><p>Use the left sidebar’s + button to define reusable blocks, dimensions, and planning colors.</p></div></li>
             <li><span>3</span><div><strong>Place instances</strong><p>Click a master’s crosshair or press <kbd>i</kbd>, then click the canvas. Press <kbd>Esc</kbd> when finished.</p></div></li>
-            <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select the IP to move, open Align, and choose Align by two edges. Then click its edge and the fixed target edge. Use Auto-Dim or rulers to inspect spacing.</p></div></li>
+            <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select the IP to move, click Align (or press a), then click its edge and the fixed target edge. The second edge click applies immediately.</p></div></li>
             <li><span>5</span><div><strong>Save and export</strong><p>Save an editable `.flp`, preview SKILL, then export only after checking destination libraries.</p></div></li>
           </ol>
         </section>
@@ -67,7 +68,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
             </article>
             <article className="tutorial-card">
               <FiAlignLeft />
-              <div><strong>Align by edges</strong><p>Select the moving source IP, choose Align by two edges, click its amber edge, then click a green edge on the fixed target. Enter a signed offset if needed and Apply.</p></div>
+              <div><strong>Align by edges</strong><p>Select the moving source, click Align, choose its amber edge, then click a green target edge. Set the optional offset before the target click; the move applies immediately and remains undoable.</p></div>
             </article>
             <article className="tutorial-card">
               <FiLayers />

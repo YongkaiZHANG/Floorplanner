@@ -1,5 +1,6 @@
 import { useStore } from '../store/useStore';
 import { SCALE_FACTOR } from '../canvas/FloorplanCanvas';
+import { formatGridValue } from './grid';
 
 export const exportSVG = () => {
   const state = useStore.getState();
@@ -196,8 +197,8 @@ export const exportSVG = () => {
     const rowData = [
       inst.name,
       m.cellName,
-      inst.x.toFixed(3),
-      inst.y.toFixed(3),
+      formatGridValue(inst.x, state.gridSize),
+      formatGridValue(inst.y, state.gridSize),
       inst.orientation,
       `${m.width} x ${m.height}`
     ];

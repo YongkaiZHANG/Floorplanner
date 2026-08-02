@@ -5,6 +5,7 @@ import type { AlignmentEdge, AlignmentOperation, DistributionAxis } from '../uti
 import type { ProjectSnapshot } from './projectDocument.ts';
 import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
 import type { ProjectHistory } from './projectHistory.ts';
+import { snapToGrid } from '../utils/grid.ts';
 
 export type Instance = {
   id: string;
@@ -101,6 +102,7 @@ export type ProjectState = {
   startEdgeAlignment: (sourceId: string) => void;
   setEdgeAlignmentEdge: (instanceId: string, edge: AlignmentEdge) => void;
   setEdgeAlignmentOffset: (value: string) => void;
+  completeEdgeAlignment: (targetId: string, targetEdge: AlignmentEdge) => void;
   cancelEdgeAlignment: () => void;
   applyEdgeAlignment: () => void;
   distributeSelectedInstances: (axis: DistributionAxis) => void;
@@ -164,11 +166,16 @@ export const clampInstancePosition = (
   const minAllowedY = -topH / 2 - minY;
   const maxAllowedY = topH / 2 - maxY;
 
-  let clampedX = Math.max(minAllowedX, Math.min(x, maxAllowedX));
-  let clampedY = Math.max(minAllowedY, Math.min(y, maxAllowedY));
+  const snapWithin = (value: number, min: number, max: number) => {
+    const minStep = Math.ceil((min - 1e-9) / gridSize);
+    const maxStep = Math.floor((max + 1e-9) / gridSize);
+    if (minStep > maxStep) throw new RangeError('No grid-snapped position fits inside the top cell');
+    const step = Math.max(minStep, Math.min(Math.round(value / gridSize), maxStep));
+    return snapToGrid(step * gridSize, gridSize);
+  };
 
-  clampedX = Math.round(clampedX / gridSize) * gridSize;
-  clampedY = Math.round(clampedY / gridSize) * gridSize;
+  const clampedX = snapWithin(x, minAllowedX, maxAllowedX);
+  const clampedY = snapWithin(y, minAllowedY, maxAllowedY);
 
   return { x: clampedX, y: clampedY };
 };
@@ -296,7 +303,25 @@ export const useStore = create<ProjectState>((set) => ({
   orthogonalRuler: false,
   showAutoDim: false,
 
-  setGridSize: (size) => set((state) => commitProjectPatch(state, 'Change grid', { gridSize: size })),
+  setGridSize: (size) => set((state) => {
+    if (!Number.isFinite(size) || size <= 0) return state;
+    const instances = state.instances.map(instance => {
+      const master = state.masterCells[instance.cellId];
+      if (!master) return instance;
+      const position = clampInstancePosition(
+        instance.x,
+        instance.y,
+        instance.orientation,
+        master.width,
+        master.height,
+        state.topWidth,
+        state.topHeight,
+        size,
+      );
+      return { ...instance, ...position };
+    });
+    return commitProjectPatch(state, 'Change grid', { gridSize: size, instances });
+  }),
   setAppMode: (mode) => set({ appMode: mode, edgeAlignmentSession: null }),
   setTopDimensions: (w, h) => set((state) => {
     const instances = state.instances.map(instance => {
@@ -546,6 +571,25 @@ export const useStore = create<ProjectState>((set) => ({
       : state
   )),
 
+  completeEdgeAlignment: (targetId, targetEdge) => set((state) => {
+    const session = state.edgeAlignmentSession;
+    if (!session?.sourceEdge) throw new Error('Choose the source edge first');
+    const trimmedOffset = session.offset.trim();
+    const offset = trimmedOffset === '' ? Number.NaN : Number(trimmedOffset);
+    if (!Number.isFinite(offset)) throw new RangeError('Alignment offset must be a finite number');
+    return {
+      ...edgeAlignmentPatch(
+        state,
+        session.sourceId,
+        targetId,
+        session.sourceEdge,
+        targetEdge,
+        offset,
+      ),
+      edgeAlignmentSession: null,
+    };
+  }),
+
   cancelEdgeAlignment: () => set({ edgeAlignmentSession: null }),
 
   applyEdgeAlignment: () => set((state) => {
@@ -594,20 +638,41 @@ export const useStore = create<ProjectState>((set) => ({
   toggleOrthogonalRuler: () => set((state) => ({ orthogonalRuler: !state.orthogonalRuler })),
   toggleAutoDim: () => set((state) => ({ showAutoDim: !state.showAutoDim })),
 
-  loadProject: (data) => set((state) => ({
-    ...state,
-    gridSize: data.gridSize ?? state.gridSize,
-    topWidth: data.topWidth ?? state.topWidth,
-    topHeight: data.topHeight ?? state.topHeight,
-    topLibName: data.topLibName ?? state.topLibName,
-    topCellName: data.topCellName ?? state.topCellName,
-    masterCells: data.masterCells ?? {},
-    instances: data.instances ?? [],
-    rulers: data.rulers ?? [],
-    history: { past: [], future: [] },
-    edgeAlignmentSession: null,
-    selectedInstanceId: null,
-    selectedInstanceIds: [],
-    appMode: 'select'
-  })),
+  loadProject: (data) => set((state) => {
+    const gridSize = data.gridSize ?? state.gridSize;
+    const topWidth = data.topWidth ?? state.topWidth;
+    const topHeight = data.topHeight ?? state.topHeight;
+    const masterCells = data.masterCells ?? {};
+    const instances = (data.instances ?? []).map(instance => {
+      const master = masterCells[instance.cellId];
+      if (!master) return instance;
+      const position = clampInstancePosition(
+        instance.x,
+        instance.y,
+        instance.orientation,
+        master.width,
+        master.height,
+        topWidth,
+        topHeight,
+        gridSize,
+      );
+      return { ...instance, ...position };
+    });
+    return {
+      ...state,
+      gridSize,
+      topWidth,
+      topHeight,
+      topLibName: data.topLibName ?? state.topLibName,
+      topCellName: data.topCellName ?? state.topCellName,
+      masterCells,
+      instances,
+      rulers: data.rulers ?? [],
+      history: { past: [], future: [] },
+      edgeAlignmentSession: null,
+      selectedInstanceId: null,
+      selectedInstanceIds: [],
+      appMode: 'select',
+    };
+  }),
 }));

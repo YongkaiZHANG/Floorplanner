@@ -2,11 +2,12 @@ import React from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
 import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw } from 'react-icons/fi';
 import './PropertiesPanel.css';
+import { formatGridValue } from '../utils/grid';
 
 const ORIENTATIONS = ['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'];
 
 export const PropertiesPanel: React.FC = () => {
-  const { masterCells, instances, selectedInstanceId, selectedInstanceIds, updateInstancePosition, updateInstanceOrientation, deleteSelectedInstances, rightSidebarPinned, setRightSidebarPinned } = useStore();
+  const { masterCells, instances, gridSize, selectedInstanceId, selectedInstanceIds, updateInstancePosition, updateInstanceOrientation, deleteSelectedInstances, rightSidebarPinned, setRightSidebarPinned } = useStore();
   const [isHovered, setIsHovered] = React.useState(false);
   const hoverTimeout = React.useRef<number | null>(null);
   
@@ -17,16 +18,16 @@ export const PropertiesPanel: React.FC = () => {
 
   React.useEffect(() => {
     if (!selectedInstance) return;
-    setDraftX(selectedInstance.x.toString());
-    setDraftY(selectedInstance.y.toString());
-  }, [selectedInstance]);
+    setDraftX(formatGridValue(selectedInstance.x, gridSize));
+    setDraftY(formatGridValue(selectedInstance.y, gridSize));
+  }, [selectedInstance, gridSize]);
 
   const commitPosition = (axis: 'x' | 'y') => {
     if (!selectedInstance) return;
     const value = Number.parseFloat(axis === 'x' ? draftX : draftY);
     if (!Number.isFinite(value)) {
-      setDraftX(selectedInstance.x.toString());
-      setDraftY(selectedInstance.y.toString());
+      setDraftX(formatGridValue(selectedInstance.x, gridSize));
+      setDraftY(formatGridValue(selectedInstance.y, gridSize));
       return;
     }
     updateInstancePosition(
@@ -39,8 +40,8 @@ export const PropertiesPanel: React.FC = () => {
   const handlePositionKeyDown = (event: React.KeyboardEvent<HTMLInputElement>, axis: 'x' | 'y') => {
     if (event.key === 'Enter') event.currentTarget.blur();
     if (event.key === 'Escape' && selectedInstance) {
-      if (axis === 'x') setDraftX(selectedInstance.x.toString());
-      else setDraftY(selectedInstance.y.toString());
+      if (axis === 'x') setDraftX(formatGridValue(selectedInstance.x, gridSize));
+      else setDraftY(formatGridValue(selectedInstance.y, gridSize));
       event.currentTarget.blur();
     }
   };
@@ -112,7 +113,7 @@ export const PropertiesPanel: React.FC = () => {
                   <label className="label">X (um)</label>
                   <input 
                     type="number" 
-                    step="any"
+                    step={gridSize}
                     className="input-field" 
                     value={draftX}
                     onChange={e => setDraftX(e.target.value)}
@@ -124,7 +125,7 @@ export const PropertiesPanel: React.FC = () => {
                   <label className="label">Y (um)</label>
                   <input 
                     type="number" 
-                    step="any"
+                    step={gridSize}
                     className="input-field" 
                     value={draftY}
                     onChange={e => setDraftY(e.target.value)}
