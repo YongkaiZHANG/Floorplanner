@@ -719,3 +719,35 @@ test('instance renaming, pixel array geometry edits, multi-block drag deltas, an
   useStore.getState().undo(); // undo setPadInset
   assert.equal(useStore.getState().padInset, 0);
 });
+
+test('locked instances resist move, rotate, nudge, align, and delete until unlocked', () => {
+  useStore.getState().loadProject({ ...emptyProject, gridSize: 1 });
+  useStore.getState().addMasterCell('testLib', 'PLL', 10, 10, '#14b8a6');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -10, 0, 'R0');
+  useStore.getState().placeInstance(master.id, 10, 10, 'R0');
+  const [first, second] = useStore.getState().instances;
+
+  useStore.getState().toggleInstanceLock([first.id]);
+  assert.equal(useStore.getState().instances[0].locked, true);
+
+  assert.throws(() => useStore.getState().updateInstancePosition(first.id, 0, 0), /locked/);
+  assert.throws(() => useStore.getState().updateInstanceOrientation(first.id, 'R90'), /locked/);
+  assert.throws(() => useStore.getState().moveInstancesByDelta([first.id, second.id], 5, 0), /locked/);
+
+  useStore.getState().setSelection([first.id, second.id]);
+  useStore.getState().nudgeSelection(2, 0);
+  assert.deepEqual(useStore.getState().instances.map(i => i.x), [-10, 10]);
+
+  assert.throws(() => useStore.getState().alignSelectedInstances('left'), /locked/);
+
+  // Delete selection skips locked block and deletes only the unlocked one
+  useStore.getState().deleteSelectedInstances();
+  assert.deepEqual(useStore.getState().instances.map(i => i.id), [first.id]);
+
+  // Unlocking restores full editability
+  useStore.getState().toggleInstanceLock([first.id]);
+  assert.equal(useStore.getState().instances[0].locked, undefined);
+  useStore.getState().updateInstancePosition(first.id, 0, 0);
+  assert.equal(useStore.getState().instances[0].x, 0);
+});

@@ -4,6 +4,7 @@ import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
 import type { SkillExportOptions } from '../utils/skillExport';
 import { exportSVG, extractProjectFromSvg } from '../utils/svgExport';
 import { computeFloorplanMetrics, downloadCsvFile, generateFloorplanCsv } from '../utils/floorplanMetrics';
+import { createCisDemoProject } from '../utils/demoProjects';
 import { formatGridValue } from '../utils/grid';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
 import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle } from 'react-icons/fi';
@@ -20,7 +21,7 @@ export const Topbar: React.FC = () => {
   const [showSummary, setShowSummary] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
-      return localStorage.getItem('ic-floorplanner:tutorial-seen:v18') !== 'yes';
+      return localStorage.getItem('ic-floorplanner:tutorial-seen:v19') !== 'yes';
     } catch {
       return true;
     }
@@ -130,6 +131,16 @@ export const Topbar: React.FC = () => {
     }
   };
 
+  const handleLoadDemo = () => {
+    if (isDirty && !confirm('Load the live CIS demo floorplan and discard current unsaved changes?')) {
+      return;
+    }
+    const demo = createCisDemoProject();
+    useStore.getState().loadProject(demo);
+    setSavedSignature(JSON.stringify(getProjectSnapshot(useStore.getState())));
+    showToast('Loaded 2MP CIS Sensor demo floorplan', 'info');
+  };
+
   const handleSaveWorkspace = useCallback(() => {
     const snapshot = getProjectSnapshot(useStore.getState());
     if (!saveRecovery(snapshot)) {
@@ -169,6 +180,17 @@ export const Topbar: React.FC = () => {
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
   }, [handleSaveWorkspace]);
+
+  useEffect(() => {
+    const closeModalsOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (showCodePreview) setShowCodePreview(false);
+      else if (showSummary) setShowSummary(false);
+      else if (showConfig) setShowConfig(false);
+    };
+    window.addEventListener('keydown', closeModalsOnEscape);
+    return () => window.removeEventListener('keydown', closeModalsOnEscape);
+  }, [showCodePreview, showSummary, showConfig]);
 
   useEffect(() => {
     const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
@@ -229,7 +251,7 @@ export const Topbar: React.FC = () => {
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
-      localStorage.setItem('ic-floorplanner:tutorial-seen:v18', 'yes');
+      localStorage.setItem('ic-floorplanner:tutorial-seen:v19', 'yes');
     } catch {
       // The tutorial still closes when browser storage is unavailable.
     }
@@ -438,7 +460,7 @@ export const Topbar: React.FC = () => {
       )}
 
       {showTutorial && (
-        <TutorialModal onClose={closeTutorial} />
+        <TutorialModal onClose={closeTutorial} onLoadDemo={handleLoadDemo} />
       )}
       
       {showSummary && (

@@ -14,6 +14,8 @@ export type Instance = {
   x: number;
   y: number;
   orientation: string;
+  /** Locked instances cannot be moved, rotated, aligned, or deleted until unlocked. */
+  locked?: boolean;
 };
 
 export type Cell = {
@@ -123,6 +125,7 @@ export type ProjectState = {
   orthogonalRuler: boolean;
   showAutoDim: boolean;
   showOverlapDrc: boolean;
+  showGrid: boolean;
   
   placementMasterId: string | null;
   placementOrientation: string;
@@ -162,6 +165,7 @@ export type ProjectState = {
   updateInstancePosition: (instanceId: string, x: number, y: number) => void;
   moveInstancesByDelta: (instanceIds: string[], deltaX: number, deltaY: number) => void;
   renameInstance: (instanceId: string, name: string) => void;
+  toggleInstanceLock: (instanceIds: string[]) => void;
   updateInstanceOrientation: (instanceId: string, orientation: string) => void;
   setSelectedInstance: (id: string | null, additive?: boolean) => void;
   setSelection: (ids: string[]) => void;
@@ -193,6 +197,7 @@ export type ProjectState = {
   toggleOrthogonalRuler: () => void;
   toggleAutoDim: () => void;
   toggleOverlapDrc: () => void;
+  toggleGrid: () => void;
   loadProject: (data: ProjectSnapshot) => void;
 };
 
@@ -604,6 +609,9 @@ const alignmentGroupPositionPatch = (
   const sourceSet = new Set(sourceIds);
   const instances = state.instances.map(instance => {
     if (!sourceSet.has(instance.id)) return instance;
+    if (instance.locked) {
+      throw new Error(`Cannot align because ${instance.name} is locked`);
+    }
     const master = state.masterCells[instance.cellId];
     if (!master) throw new Error(`The master for ${instance.name} no longer exists`);
     const requestedX = instance.x + deltaX;
@@ -767,6 +775,7 @@ export const useStore = create<ProjectState>((set) => ({
   orthogonalRuler: false,
   showAutoDim: false,
   showOverlapDrc: true,
+  showGrid: true,
   clipboard: [],
 
   setGridSize: (size) => set((state) => {
@@ -1302,6 +1311,9 @@ export const useStore = create<ProjectState>((set) => ({
   updateInstancePosition: (instanceId, x, y) => set((state) => {
     const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
+        if (inst.locked) {
+          throw new Error(`${inst.name} is locked. Unlock it before moving.`);
+        }
         const master = state.masterCells[inst.cellId];
         if (!master) return inst;
         if (master.kind === 'pad') {
@@ -1337,6 +1349,9 @@ export const useStore = create<ProjectState>((set) => ({
     const idSet = new Set(instanceIds);
     const instances = state.instances.map(inst => {
       if (!idSet.has(inst.id)) return inst;
+      if (inst.locked) {
+        throw new Error(`Cannot move because ${inst.name} is locked.`);
+      }
       const master = state.masterCells[inst.cellId];
       if (!master) return inst;
       const requestedX = snapToGrid(inst.x + snappedDx, state.gridSize);
@@ -1379,10 +1394,33 @@ export const useStore = create<ProjectState>((set) => ({
     ));
     return commitProjectPatch(state, `Rename ${existing.name} to ${name}`, { instances });
   }),
+
+  toggleInstanceLock: (instanceIds) => set((state) => {
+    if (instanceIds.length === 0) return state;
+    const idSet = new Set(instanceIds);
+    const targets = state.instances.filter(inst => idSet.has(inst.id));
+    if (targets.length === 0) return state;
+    const shouldLock = targets.some(inst => !inst.locked);
+    const instances = state.instances.map(inst => {
+      if (!idSet.has(inst.id)) return inst;
+      if (shouldLock) return { ...inst, locked: true };
+      const unlocked = { ...inst };
+      delete unlocked.locked;
+      return unlocked;
+    });
+    return commitProjectPatch(
+      state,
+      `${shouldLock ? 'Lock' : 'Unlock'} ${targets.length} block${targets.length === 1 ? '' : 's'}`,
+      { instances },
+    );
+  }),
   
   updateInstanceOrientation: (instanceId, orientation) => set((state) => {
     const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
+        if (inst.locked) {
+          throw new Error(`${inst.name} is locked. Unlock it before rotating.`);
+        }
         const master = state.masterCells[inst.cellId];
         if (!master) return inst;
         const currentBounds = getPhysicalBounds({ ...inst, width: master.width, height: master.height });
@@ -1451,11 +1489,12 @@ export const useStore = create<ProjectState>((set) => ({
   deleteSelectedInstances: () => set((state) => {
     if (state.selectedInstanceIds.length === 0) return state;
     const selectedIds = new Set(state.selectedInstanceIds);
-    const instances = state.instances.filter(instance => !selectedIds.has(instance.id));
+    const removableCount = state.instances.filter(instance => selectedIds.has(instance.id) && !instance.locked).length;
+    if (removableCount === 0) return state;
+    const instances = state.instances.filter(instance => !(selectedIds.has(instance.id) && !instance.locked));
     return {
-      ...commitProjectPatch(state, `Delete ${state.selectedInstanceIds.length} block${state.selectedInstanceIds.length === 1 ? '' : 's'}`, { instances }),
-      selectedInstanceId: null,
-      selectedInstanceIds: [],
+      ...commitProjectPatch(state, `Delete ${removableCount} block${removableCount === 1 ? '' : 's'}`, { instances }),
+      ...selectionAfterInstancesChange(state, instances),
       edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, instances),
     };
   }),
@@ -1466,6 +1505,10 @@ export const useStore = create<ProjectState>((set) => ({
     let error = false;
     const instances = state.instances.map(inst => {
       if (!selectedIds.has(inst.id)) return inst;
+      if (inst.locked) {
+        error = true;
+        return inst;
+      }
       const master = state.masterCells[inst.cellId];
       if (!master) return inst;
       try {
@@ -1627,6 +1670,9 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = state.instances.map(instance => {
       const position = positionById.get(instance.id);
       if (!position) return instance;
+      if (instance.locked && (Math.abs(position.x - instance.x) > 1e-9 || Math.abs(position.y - instance.y) > 1e-9)) {
+        throw new Error(`Cannot align because ${instance.name} is locked`);
+      }
       const master = state.masterCells[instance.cellId];
       if (master?.kind === 'pad') {
         const bounds = getPhysicalBounds({ ...instance, x: position.x, y: position.y, width: master.width, height: master.height });
@@ -1821,6 +1867,9 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = state.instances.map(instance => {
       const position = positionById.get(instance.id);
       if (!position) return instance;
+      if (instance.locked && (Math.abs(position.x - instance.x) > 1e-9 || Math.abs(position.y - instance.y) > 1e-9)) {
+        throw new Error(`Cannot distribute because ${instance.name} is locked`);
+      }
       const master = state.masterCells[instance.cellId];
       if (master?.kind === 'pad') {
         const bounds = getPhysicalBounds({ ...instance, x: position.x, y: position.y, width: master.width, height: master.height });
@@ -1836,6 +1885,7 @@ export const useStore = create<ProjectState>((set) => ({
   toggleOrthogonalRuler: () => set((state) => ({ orthogonalRuler: !state.orthogonalRuler })),
   toggleAutoDim: () => set((state) => ({ showAutoDim: !state.showAutoDim })),
   toggleOverlapDrc: () => set((state) => ({ showOverlapDrc: !state.showOverlapDrc })),
+  toggleGrid: () => set((state) => ({ showGrid: !state.showGrid })),
 
   loadProject: (data) => set((state) => {
     const gridSize = data.gridSize ?? state.gridSize;

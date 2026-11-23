@@ -87,3 +87,12 @@ test('pad inset survives serialization and rejects negative or oversized values'
     /Invalid pad inset/,
   );
 });
+
+test('instance lock flag survives serialization and rejects non-boolean values', () => {
+  const lockedProject = structuredClone(project);
+  lockedProject.instances[0].locked = true;
+  assert.deepEqual(parseProjectDocument(serializeProjectDocument(lockedProject)), lockedProject);
+
+  lockedProject.instances[0].locked = 'yes';
+  assert.throws(() => parseProjectDocument(JSON.stringify(lockedProject)), /Invalid instance/);
+});

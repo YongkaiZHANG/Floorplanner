@@ -66,7 +66,8 @@ const assertProject = (value: unknown): ProjectSnapshot => {
   const instances = value.instances.map((raw, index) => {
     if (!isRecord(raw) || !nonEmptyString(raw.id) || !nonEmptyString(raw.cellId) ||
         !nonEmptyString(raw.name) || !finite(raw.x) || !finite(raw.y) ||
-        !nonEmptyString(raw.orientation) || !orientations.has(raw.orientation)) {
+        !nonEmptyString(raw.orientation) || !orientations.has(raw.orientation) ||
+        (raw.locked !== undefined && typeof raw.locked !== 'boolean')) {
       throw new Error(`Invalid instance at index ${index}.`);
     }
     if (!masterCells[raw.cellId]) throw new Error(`Instance ${raw.name} references a missing master.`);

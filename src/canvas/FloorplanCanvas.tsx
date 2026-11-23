@@ -14,6 +14,7 @@ import { panViewportByArrow } from '../utils/viewport';
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
+import { FiGrid, FiMaximize2, FiMinus, FiPlus } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
@@ -87,6 +88,8 @@ export const FloorplanCanvas: React.FC = () => {
     orthogonalRuler,
     showAutoDim,
     showOverlapDrc,
+    showGrid,
+    toggleGrid,
     edgeAlignmentSession,
     setEdgeAlignmentEdge,
     completeEdgeAlignment,
@@ -263,6 +266,16 @@ export const FloorplanCanvas: React.FC = () => {
           e.preventDefault();
           state.toggleOrthogonalRuler();
           break;
+        case 'g':
+          e.preventDefault();
+          state.toggleGrid();
+          break;
+        case 'l':
+          e.preventDefault();
+          if (state.selectedInstanceIds.length > 0) {
+            state.toggleInstanceLock(state.selectedInstanceIds);
+          }
+          break;
         case 'r':
           e.preventDefault();
           if (state.selectedInstanceId) {
@@ -346,6 +359,20 @@ export const FloorplanCanvas: React.FC = () => {
     setStagePos({
       x: pointer.x - mousePointTo.x * newScale,
       y: pointer.y - mousePointTo.y * -newScale,
+    });
+  };
+
+  const zoomAroundCenter = (factor: number) => {
+    const cx = dimensions.width / 2;
+    const cy = dimensions.height / 2;
+    const oldScale = stageScale;
+    const newScale = Math.max(MIN_STAGE_SCALE, Math.min(MAX_STAGE_SCALE, oldScale * factor));
+    const centerWorldX = (cx - stagePos.x) / oldScale;
+    const centerWorldY = (cy - stagePos.y) / -oldScale;
+    setStageScale(newScale);
+    setStagePos({
+      x: cx - centerWorldX * newScale,
+      y: cy - centerWorldY * -newScale,
     });
   };
 
@@ -1342,6 +1369,44 @@ export const FloorplanCanvas: React.FC = () => {
   const tw = topWidth * SCALE_FACTOR;
   const th = topHeight * SCALE_FACTOR;
 
+  const gridLines = useMemo(() => {
+    if (!showGrid || stageScale <= 0) return [];
+    const targetScreenSpacing = 44;
+    const rawStep = targetScreenSpacing / (SCALE_FACTOR * stageScale);
+    const mag = Math.pow(10, Math.floor(Math.log10(Math.max(rawStep, 1e-12))));
+    const norm = rawStep / mag;
+    let factor = 1;
+    if (norm > 7.5) factor = 10;
+    else if (norm > 3.5) factor = 5;
+    else if (norm > 1.5) factor = 2;
+    let stepUm = Math.max(gridSize, factor * mag);
+    const maxLinesPerAxis = 120;
+    if (topWidth / stepUm > maxLinesPerAxis) stepUm = topWidth / maxLinesPerAxis;
+    if (topHeight / stepUm > maxLinesPerAxis) stepUm = Math.max(stepUm, topHeight / maxLinesPerAxis);
+
+    const lines: Array<{ key: string; points: number[] }> = [];
+    const halfW = topWidth / 2;
+    const halfH = topHeight / 2;
+    const startX = Math.ceil(-halfW / stepUm) * stepUm;
+    for (let x = startX; x < halfW - 1e-9; x += stepUm) {
+      if (Math.abs(x) <= 1e-9) continue;
+      const px = x * SCALE_FACTOR;
+      lines.push({ key: `gx-${x.toFixed(6)}`, points: [px, -th / 2, px, th / 2] });
+    }
+    const startY = Math.ceil(-halfH / stepUm) * stepUm;
+    for (let y = startY; y < halfH - 1e-9; y += stepUm) {
+      if (Math.abs(y) <= 1e-9) continue;
+      const py = y * SCALE_FACTOR;
+      lines.push({ key: `gy-${y.toFixed(6)}`, points: [-tw / 2, py, tw / 2, py] });
+    }
+    return lines;
+  }, [showGrid, stageScale, gridSize, topWidth, topHeight, tw, th]);
+
+  const selectionHasLocked = useMemo(
+    () => selectedInstanceIds.some(id => instances.find(item => item.id === id)?.locked),
+    [selectedInstanceIds, instances],
+  );
+
   return (
     <div className="canvas-container" ref={containerRef}>
       <Stage
@@ -1448,6 +1513,17 @@ export const FloorplanCanvas: React.FC = () => {
             shadowColor="rgba(0,0,0,0.1)"
             shadowBlur={10 / stageScale}
           />
+
+          {/* Adaptive drafting grid */}
+          {gridLines.map(line => (
+            <Line
+              key={line.key}
+              points={line.points}
+              stroke="#e2e8f0"
+              strokeWidth={0.8 / stageScale}
+              listening={false}
+            />
+          ))}
 
           {/* Optional seal-ring / pad-inset inner perimeter guide */}
           {padInset > 0 && (
@@ -1622,6 +1698,11 @@ export const FloorplanCanvas: React.FC = () => {
             const renderX = (inst.x + (groupDragOffset?.dx ?? 0)) * SCALE_FACTOR;
             const renderY = (inst.y + (groupDragOffset?.dy ?? 0)) * SCALE_FACTOR;
 
+            const canDragInstance = appMode === 'select'
+              && !edgeAlignmentSession
+              && !inst.locked
+              && !(selectedInstanceIds.length > 1 && selectedInstanceIds.includes(inst.id) && selectionHasLocked);
+
             return (
               <Group
                 key={inst.id}
@@ -1631,7 +1712,7 @@ export const FloorplanCanvas: React.FC = () => {
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
-                draggable={appMode === 'select' && !edgeAlignmentSession}
+                draggable={canDragInstance}
                 dragBoundFunc={(pos) => dragBoundFunc(pos, inst.cellId, inst.orientation, inst.id)}
                 onDragStart={() => handleDragStart(inst)}
                 onDragMove={(e) => handleDragMove(e, inst.id)}
@@ -1681,6 +1762,17 @@ export const FloorplanCanvas: React.FC = () => {
                     fillEnabled={false}
                     stroke={isPrimarySelection ? '#f59e0b' : '#38bdf8'}
                     strokeWidth={3 / stageScale}
+                    listening={false}
+                  />
+                )}
+                {inst.locked && (
+                  <Rect
+                    width={w}
+                    height={h}
+                    fillEnabled={false}
+                    stroke="#eab308"
+                    strokeWidth={2 / stageScale}
+                    dash={[5 / stageScale, 4 / stageScale]}
                     listening={false}
                   />
                 )}
@@ -2125,8 +2217,8 @@ export const FloorplanCanvas: React.FC = () => {
         </div>
       )}
       {appMode === 'measure' && (
-        <div className="coordinate-overlay" style={{ top: 'auto', bottom: '16px', left: '50%', transform: 'translateX(-50%)', backgroundColor: 'rgba(234, 179, 8, 0.9)', color: '#0f172a', fontWeight: 'bold' }}>
-          Measure Mode | Click two snapped points | Press 'o' to toggle Ortho [ {orthogonalRuler ? 'ON' : 'OFF'} ] | Press 'Esc' to cancel
+        <div className="coordinate-overlay measure-mode-hint">
+          Measure Mode · Click two snapped points · Press O for Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc cancels
         </div>
       )}
       {appMode === 'pixel-array' && pendingPixelArraySize && (
@@ -2141,6 +2233,44 @@ export const FloorplanCanvas: React.FC = () => {
             : `Pad Placement · Orientation ${placementOrientation} · Snaps to nearest edge · Click to place · Esc finishes`}
         </div>
       )}
+      <div className="viewport-hud" aria-label="Viewport controls">
+        <button
+          type="button"
+          className="viewport-hud__btn"
+          onClick={() => zoomAroundCenter(1 / 1.25)}
+          title="Zoom out"
+          aria-label="Zoom out"
+        >
+          <FiMinus />
+        </button>
+        <button
+          type="button"
+          className="viewport-hud__btn"
+          onClick={fitView}
+          title="Fit top cell to viewport (F)"
+        >
+          <FiMaximize2 /> {Math.round(stageScale * 100)}%
+        </button>
+        <button
+          type="button"
+          className="viewport-hud__btn"
+          onClick={() => zoomAroundCenter(1.25)}
+          title="Zoom in"
+          aria-label="Zoom in"
+        >
+          <FiPlus />
+        </button>
+        <span className="viewport-hud__divider" aria-hidden="true" />
+        <button
+          type="button"
+          className={`viewport-hud__btn${showGrid ? ' active' : ''}`}
+          onClick={toggleGrid}
+          title="Toggle drafting grid (G)"
+          aria-pressed={showGrid}
+        >
+          <FiGrid /> Grid
+        </button>
+      </div>
       {showAutoDim && appMode !== 'measure' && !pixelArraySelected && (
         <div className="autodim-legend">
           <span className="autodim-legend__swatch" />

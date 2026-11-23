@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
 import type { Cell, PadSide } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
 
@@ -66,6 +66,8 @@ export const Sidebar: React.FC = () => {
   const [showPixelArrayModal, setShowPixelArrayModal] = useState(false);
   const [pixelArrayWidth, setPixelArrayWidth] = useState('60');
   const [pixelArrayHeight, setPixelArrayHeight] = useState('60');
+  const [instanceQuery, setInstanceQuery] = useState('');
+  const [instanceFilter, setInstanceFilter] = useState<'all' | 'ip' | 'pad'>('all');
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -323,9 +325,48 @@ export const Sidebar: React.FC = () => {
         <div className="sidebar-section">
           <div className="section-header">
             <h3 className="section-title"><FiBox /> {topCellName} Instances</h3>
+            <span className="lib-badge">{instances.length}</span>
           </div>
+          {instances.length > 0 && (
+            <div className="instance-filter-bar">
+              <div className="instance-search-wrap">
+                <FiSearch className="instance-search-icon" />
+                <input
+                  type="text"
+                  className="input-field instance-search-input"
+                  placeholder="Filter by name or master…"
+                  value={instanceQuery}
+                  onChange={event => setInstanceQuery(event.target.value)}
+                  aria-label="Filter instances"
+                />
+              </div>
+              <div className="instance-kind-tabs" role="tablist" aria-label="Filter instance type">
+                {(['all', 'ip', 'pad'] as const).map(kind => (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="tab"
+                    aria-selected={instanceFilter === kind}
+                    className={instanceFilter === kind ? 'active' : ''}
+                    onClick={() => setInstanceFilter(kind)}
+                  >
+                    {kind === 'all' ? 'All' : kind === 'ip' ? 'IPs' : 'Pads'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <ul className="instance-list">
-            {instances.map(inst => {
+            {instances.filter(inst => {
+              const master = masterCells[inst.cellId];
+              if (!master) return false;
+              const isPad = master.kind === 'pad';
+              if (instanceFilter === 'ip' && isPad) return false;
+              if (instanceFilter === 'pad' && !isPad) return false;
+              const q = instanceQuery.trim().toLowerCase();
+              if (!q) return true;
+              return inst.name.toLowerCase().includes(q) || master.cellName.toLowerCase().includes(q);
+            }).map(inst => {
               const master = masterCells[inst.cellId];
               if (!master) return null;
               return (
@@ -338,6 +379,11 @@ export const Sidebar: React.FC = () => {
                     <FiTarget className="inst-icon" />
                     <span className="inst-name">{inst.name}</span>
                     <span className="inst-master">({master.cellName})</span>
+                    {inst.locked && (
+                      <span className="inst-lock-badge" title="Locked">
+                        <FiLock />
+                      </span>
+                    )}
                   </div>
                   <div className="inst-pos">
                     {formatGridValue(inst.x, gridSize)} : {formatGridValue(inst.y, gridSize)} [{inst.orientation}]

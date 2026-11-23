@@ -1,132 +1,436 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   FiAlignLeft,
+  FiAlertTriangle,
+  FiBarChart2,
   FiBox,
+  FiChevronLeft,
+  FiChevronRight,
+  FiCpu,
   FiDownload,
-  FiLayers,
   FiGrid,
+  FiLayers,
+  FiLock,
   FiMinimize2,
   FiMousePointer,
+  FiMove,
   FiRotateCw,
   FiSave,
+  FiSliders,
   FiX,
 } from 'react-icons/fi';
 import './TutorialModal.css';
 
 interface TutorialModalProps {
   onClose: () => void;
+  onLoadDemo?: () => void;
 }
 
-const shortcuts = [
-  ['n', 'Create a Master IP'],
-  ['i', 'Place an instance'],
-  ['Shift + click', 'Build a multi-selection'],
-  ['a', 'Align selected IP by two edges'],
-  ['r / Shift + r', 'Rotate ±90°'],
-  ['k', 'Measure with a ruler'],
-  ['o', 'Toggle orthogonal ruler'],
-  ['Arrow keys', 'Pan the zoomed view (Shift for a larger step)'],
-  ['Ctrl/Cmd + Z', 'Undo'],
-  ['Ctrl/Cmd + Shift + Z', 'Redo'],
-  ['Ctrl/Cmd + S', 'Save the browser workspace'],
-  ['f', 'Fit the top cell'],
-  ['Delete', 'Delete the selection'],
-  ['Esc', 'Cancel or clear selection'],
+type TutorialTab = 'overview' | 'walkthrough' | 'features' | 'shortcuts';
+
+const shortcutGroups: Array<{ title: string; items: Array<[string, string]> }> = [
+  {
+    title: 'Navigation & View',
+    items: [
+      ['Scroll wheel', 'Zoom smoothly around pointer'],
+      ['Middle-drag / Space+drag', 'Pan the canvas'],
+      ['Arrow keys / Shift+Arrow', 'Pan viewport (small / large step)'],
+      ['F / Double-click canvas', 'Fit top cell to viewport'],
+      ['G', 'Toggle adaptive drafting grid'],
+    ],
+  },
+  {
+    title: 'Placement & Editing',
+    items: [
+      ['N', 'Create a Master IP'],
+      ['I', 'Attach an IP master to cursor'],
+      ['C', 'Copy selected block into placement mode'],
+      ['R / Shift+R', 'Rotate primary selection ±90°'],
+      ['Right-click / Shift+Right', 'Rotate block CW / CCW on canvas'],
+      ['L', 'Lock or unlock selected blocks'],
+      ['Alt + Arrow / +Shift', 'Nudge selection by 1× or 10× grid'],
+      ['Ctrl/Cmd + C / V', 'Copy & paste selected instances'],
+      ['Delete / Backspace', 'Delete unlocked selected blocks'],
+    ],
+  },
+  {
+    title: 'Alignment, Measurement & Project',
+    items: [
+      ['Shift + click / Drag box', 'Multi-select blocks for group drag or align'],
+      ['A', 'Start two-edge directional alignment'],
+      ['M', 'Return to Select mode'],
+      ['K / Shift+K', 'Enter Ruler mode / Clear all rulers'],
+      ['O', 'Toggle orthogonal ruler lock'],
+      ['Q / Double-click block', 'Toggle & pin Properties inspector'],
+      ['Ctrl/Cmd + Z / Shift+Z', 'Undo / Redo (also U / Ctrl+Y)'],
+      ['Ctrl/Cmd + S', 'Save editable workspace in browser'],
+      ['Ctrl/Cmd + A / Esc', 'Select all / Cancel or clear selection'],
+    ],
+  },
 ];
 
-export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose }) => (
-  <div className="modal-overlay tutorial-overlay">
-    <div className="modal-content glass-panel tutorial-modal" role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
-      <header className="tutorial-header">
-        <div>
-          <span className="tutorial-eyebrow">Quick start</span>
-          <h2 id="tutorial-title">Welcome to IC Floorplanner</h2>
-          <p>Build a Cadence-ready hierarchy without losing track of coordinates, transforms, or spacing.</p>
+const walkthroughSteps = [
+  {
+    eyebrow: 'Step 01 · Architecture',
+    title: 'Configure the die, seal-ring inset, and pixel array.',
+    summary:
+      'Set your Top Cell library, dimensions, and placement grid (such as 0.005 µm). Add an optional Seal-Ring Inset so every pad row attaches neatly inside the die perimeter, and enable a Pixel Array overlay for image-sensor planning.',
+    tips: [
+      'Origin (0, 0) sits at the physical center of the Top Cell with +Y pointing upward — matching Cadence Virtuoso.',
+      'Double-click the Pixel Array anytime to edit its exact X, Y, Width, and Height in the Properties inspector.',
+    ],
+    diagram: (
+      <svg viewBox="0 0 360 190" className="walkthrough-svg" aria-hidden="true">
+        <rect x="24" y="16" width="312" height="158" rx="8" fill="#ffffff" stroke="#64748b" strokeWidth="2" strokeDasharray="7 5" />
+        <rect x="40" y="30" width="280" height="130" rx="4" fill="none" stroke="#d97706" strokeWidth="1.5" strokeDasharray="4 4" />
+        <rect x="92" y="44" width="176" height="84" rx="4" fill="rgba(139,92,246,0.14)" stroke="#8b5cf6" strokeWidth="1.8" strokeDasharray="5 4" />
+        <line x1="180" y1="16" x2="180" y2="174" stroke="#cbd5e1" strokeWidth="1" />
+        <line x1="24" y1="95" x2="336" y2="95" stroke="#cbd5e1" strokeWidth="1" />
+        <circle cx="180" cy="95" r="3.5" fill="#0071e3" />
+        {[0, 1, 2, 3, 4, 5].map(i => (
+          <rect key={i} x={100 + i * 28} y="30" width="16" height="10" rx="1.5" fill="#f59e0b" />
+        ))}
+        <text x="180" y="90" textAnchor="middle" fill="#6d28d9" fontSize="11" fontWeight="700">PIXEL ARRAY</text>
+        <text x="186" y="108" fill="#0071e3" fontSize="9.5" fontWeight="600">(0, 0)</text>
+        <text x="290" y="152" textAnchor="end" fill="#b45309" fontSize="9.5" fontWeight="600">Seal-Ring Inset</text>
+      </svg>
+    ),
+  },
+  {
+    eyebrow: 'Step 02 · Precision Alignment',
+    title: 'Align single blocks or groups by clicking two edges.',
+    summary:
+      'Select one or more blocks and press A (or click Align). Pick any amber edge on the moving selection, enter an exact directional spacing in µm, and click any green reference — another IP edge, pixel-array edge, die boundary, or orthogonal ruler.',
+    tips: [
+      'Every selected block translates by the exact same delta, preserving internal spacing in one Undo step.',
+      'Quick Align & Equal-Gap Distribute also respect transformed bounds for all eight Cadence orientations.',
+    ],
+    diagram: (
+      <svg viewBox="0 0 360 190" className="walkthrough-svg" aria-hidden="true">
+        <rect x="34" y="42" width="106" height="104" rx="6" fill="rgba(37,99,235,0.22)" stroke="#1e293b" strokeWidth="1.5" />
+        <line x1="140" y1="42" x2="140" y2="146" stroke="#f59e0b" strokeWidth="4.5" strokeLinecap="round" />
+        <rect x="220" y="54" width="106" height="92" rx="6" fill="rgba(16,185,129,0.18)" stroke="#1e293b" strokeWidth="1.5" />
+        <line x1="220" y1="54" x2="220" y2="146" stroke="#10b981" strokeWidth="4.5" strokeLinecap="round" />
+        <line x1="144" y1="95" x2="216" y2="95" stroke="#0071e3" strokeWidth="2" strokeDasharray="4 4" />
+        <polygon points="216,95 208,90 208,100" fill="#0071e3" />
+        <rect x="155" y="74" width="50" height="18" rx="9" fill="#0071e3" />
+        <text x="180" y="86" textAnchor="middle" fill="#ffffff" fontSize="9.5" fontWeight="700">25 µm</text>
+        <text x="87" y="98" textAnchor="middle" fill="#0f172a" fontSize="11" fontWeight="700">Source IP</text>
+        <text x="273" y="104" textAnchor="middle" fill="#0f172a" fontSize="11" fontWeight="700">Reference</text>
+      </svg>
+    ),
+  },
+  {
+    eyebrow: 'Step 03 · Group Control',
+    title: 'Drag multi-selections together, rename, and lock blocks.',
+    summary:
+      'Marquee-drag or Shift-click to select a cluster of macros, then drag any selected block to move the entire group together inside die bounds. Rename instances meaningfully in Properties and press L to lock finalized blocks against accidental edits.',
+    tips: [
+      'Locked blocks show a gold lock indicator and cannot be dragged, rotated, aligned, nudged, or deleted.',
+      'Use the Sidebar instance search and IP / Pad filter pills to locate blocks instantly on dense floorplans.',
+    ],
+    diagram: (
+      <svg viewBox="0 0 360 190" className="walkthrough-svg" aria-hidden="true">
+        <rect x="44" y="34" width="174" height="122" rx="8" fill="rgba(41,151,255,0.08)" stroke="#2997ff" strokeWidth="1.5" strokeDasharray="5 4" />
+        <rect x="58" y="48" width="68" height="44" rx="5" fill="rgba(14,165,233,0.28)" stroke="#f59e0b" strokeWidth="2.5" />
+        <rect x="136" y="48" width="68" height="44" rx="5" fill="rgba(14,165,233,0.28)" stroke="#38bdf8" strokeWidth="2.5" />
+        <rect x="58" y="102" width="146" height="40" rx="5" fill="rgba(124,58,237,0.24)" stroke="#38bdf8" strokeWidth="2.5" />
+        <rect x="242" y="48" width="84" height="94" rx="6" fill="rgba(245,158,11,0.18)" stroke="#d97706" strokeWidth="2" strokeDasharray="4 3" />
+        <text x="284" y="92" textAnchor="middle" fill="#b45309" fontSize="10.5" fontWeight="700">LOCKED</text>
+        <text x="284" y="107" textAnchor="middle" fill="#92400e" fontSize="9">I_PLL_BG</text>
+        <text x="131" y="126" textAnchor="middle" fill="#0f172a" fontSize="10" fontWeight="700">Group Drag (3 blocks)</text>
+      </svg>
+    ),
+  },
+  {
+    eyebrow: 'Step 04 · Metrology',
+    title: 'Measure clearances with smart rulers and Auto-Dim.',
+    summary:
+      'Press K to place rulers with edge snapping, and press O for Ortho mode — matching vertical or horizontal edges lock perpendicular with a Cadence-style reference extension. Toggle Auto-Dim for a full gap overview, or select one IP for focused gaps and pixel-array overlaps.',
+    tips: [
+      'Toggle the adaptive drafting grid with G or use the floating bottom-center viewport pill to zoom and fit.',
+      'Vertical and horizontal rulers double as alignment targets during two-edge alignment.',
+    ],
+    diagram: (
+      <svg viewBox="0 0 360 190" className="walkthrough-svg" aria-hidden="true">
+        <rect x="38" y="34" width="94" height="62" rx="5" fill="rgba(37,99,235,0.22)" stroke="#1e293b" strokeWidth="1.5" />
+        <rect x="224" y="94" width="96" height="64" rx="5" fill="rgba(20,184,166,0.22)" stroke="#1e293b" strokeWidth="1.5" />
+        <line x1="132" y1="65" x2="224" y2="65" stroke="#d97706" strokeWidth="2.2" />
+        <line x1="224" y1="65" x2="224" y2="126" stroke="#d97706" strokeWidth="1.8" strokeDasharray="4 3" />
+        <circle cx="224" cy="126" r="4" fill="#d97706" stroke="#ffffff" strokeWidth="1.5" />
+        <line x1="132" y1="57" x2="132" y2="73" stroke="#d97706" strokeWidth="2" />
+        <line x1="224" y1="57" x2="224" y2="73" stroke="#d97706" strokeWidth="2" />
+        <text x="178" y="56" textAnchor="middle" fill="#b45309" fontSize="10.5" fontWeight="700">L: 92 µm</text>
+        <text x="272" y="130" textAnchor="middle" fill="#0f172a" fontSize="10" fontWeight="700">Ref Edge</text>
+      </svg>
+    ),
+  },
+  {
+    eyebrow: 'Step 05 · Verification & Virtuoso',
+    title: 'Verify DRC overlaps, review metrics, and export safely.',
+    summary:
+      'Open Summary in the top bar for live die area (mm²), IP utilization %, whitespace, per-edge pad counts, overlap DRC checks, and CSV export. Preview Cadence SKILL with optional master preservation so iterative layout updates stay non-destructive.',
+    tips: [
+      'Red cross-hatched markers highlight any IP-IP, Pad-Pad, or IP-Pad overlap directly on the canvas.',
+      'Exported SVGs embed the complete editable project so any teammate can view or re-import them.',
+    ],
+    diagram: (
+      <svg viewBox="0 0 360 190" className="walkthrough-svg" aria-hidden="true">
+        <rect x="36" y="42" width="98" height="96" rx="5" fill="rgba(37,99,235,0.2)" stroke="#1e293b" strokeWidth="1.5" />
+        <rect x="106" y="64" width="96" height="86" rx="5" fill="rgba(249,115,22,0.2)" stroke="#1e293b" strokeWidth="1.5" />
+        <rect x="106" y="64" width="28" height="74" fill="rgba(239,68,68,0.32)" stroke="#ef4444" strokeWidth="2" strokeDasharray="4 3" />
+        <line x1="106" y1="64" x2="134" y2="138" stroke="#ef4444" strokeWidth="1.4" />
+        <line x1="134" y1="64" x2="106" y2="138" stroke="#ef4444" strokeWidth="1.4" />
+        <rect x="226" y="42" width="102" height="108" rx="8" fill="#0f172a" stroke="#334155" strokeWidth="1.5" />
+        <text x="238" y="64" fill="#38bdf8" fontSize="9" fontFamily="monospace">FPCreateFloorplan()</text>
+        <text x="238" y="82" fill="#94a3b8" fontSize="8.5" fontFamily="monospace">prBoundary OK</text>
+        <text x="238" y="98" fill="#4ade80" fontSize="8.5" fontFamily="monospace">Preserve Masters</text>
+        <text x="238" y="114" fill="#fbbf24" fontSize="8.5" fontFamily="monospace">CSV + SVG Export</text>
+        <text x="120" y="160" textAnchor="middle" fill="#dc2626" fontSize="9.5" fontWeight="700">Live DRC Overlap</text>
+      </svg>
+    ),
+  },
+];
+
+export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose, onLoadDemo }) => {
+  const [activeTab, setActiveTab] = useState<TutorialTab>('overview');
+  const [stepIndex, setStepIndex] = useState(0);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  const currentStep = walkthroughSteps[stepIndex];
+
+  return (
+    <div className="modal-overlay tutorial-overlay" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="modal-content glass-panel tutorial-modal" role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
+        <header className="tutorial-header">
+          <div className="tutorial-hero">
+            <span className="tutorial-eyebrow">IC Floorplanner · Pro Workflow Guide</span>
+            <h2 id="tutorial-title">Silicon floorplanning. Engineered for precision.</h2>
+            <p>Plan die geometry, pad rings, pixel arrays, and Cadence Virtuoso SKILL hierarchies right in your browser — with zero server uploads.</p>
+          </div>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close tutorial"><FiX /></button>
+        </header>
+
+        <nav className="tutorial-tabs" role="tablist" aria-label="Guide sections">
+          {([
+            ['overview', 'Overview'],
+            ['walkthrough', 'Interactive Walkthrough'],
+            ['features', 'Pro Features'],
+            ['shortcuts', 'Shortcuts'],
+          ] as Array<[TutorialTab, string]>).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === id}
+              className={`tutorial-tab${activeTab === id ? ' active' : ''}`}
+              onClick={() => setActiveTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="tutorial-scroll">
+          {activeTab === 'overview' && (
+            <>
+              <section className="tutorial-section">
+                <div className="tutorial-bento">
+                  <article className="bento-card bento-card--blue">
+                    <FiCpu />
+                    <h4>Cadence-Native Geometry</h4>
+                    <p>Center-origin (+Y up) coordinates, all 8 orientations, canonical grid snapping, and real OpenAccess <code>prBoundary</code> SKILL export.</p>
+                  </article>
+                  <article className="bento-card bento-card--amber">
+                    <FiAlignLeft />
+                    <h4>Two-Edge &amp; Group Alignment</h4>
+                    <p>Shift single blocks or multi-selections with directional edge spacing against IPs, pixel arrays, die edges, or orthogonal rulers.</p>
+                  </article>
+                  <article className="bento-card bento-card--violet">
+                    <FiLayers />
+                    <h4>CIS Pixel Array &amp; Seal Ring</h4>
+                    <p>Reserve perimeter seal-ring inset for auto/manual pad rings and inspect outside gaps, inside clearance, and partial array overlaps.</p>
+                  </article>
+                  <article className="bento-card bento-card--rose">
+                    <FiBarChart2 />
+                    <h4>Live DRC, Metrics &amp; CSV</h4>
+                    <p>Spot IP and pad overlaps immediately in red, review die utilization &amp; per-edge pad counts, and export CSV tables in one click.</p>
+                  </article>
+                </div>
+              </section>
+
+              <section className="tutorial-section">
+                <h3>Five-step workflow</h3>
+                <ol className="tutorial-steps">
+                  <li><span>1</span><div><strong>Configure Top Cell</strong><p>Set library, cell name, die size, grid, and optional seal-ring inset.</p></div></li>
+                  <li><span>2</span><div><strong>Define Masters</strong><p>Create reusable IP masters and perimeter pad cells with custom styling.</p></div></li>
+                  <li><span>3</span><div><strong>Place &amp; Arrange</strong><p>Place IPs, pad rows, and pixel arrays; drag groups or align by edges.</p></div></li>
+                  <li><span>4</span><div><strong>Measure &amp; Check</strong><p>Use ortho rulers, Auto-Dim, Summary metrics, and live overlap DRC.</p></div></li>
+                  <li><span>5</span><div><strong>Save &amp; Export</strong><p>Save locally, share editable SVGs, download CSV tables, or export SKILL.</p></div></li>
+                </ol>
+              </section>
+
+              <section className="tutorial-section">
+                <h3>Canvas visual legend</h3>
+                <div className="tutorial-legend">
+                  <span><i className="tutorial-dot tutorial-dot--anchor" />Amber: primary selection &amp; source edge</span>
+                  <span><i className="tutorial-dot tutorial-dot--selected" />Blue: multi-selected blocks</span>
+                  <span><i className="tutorial-dot tutorial-dot--target" />Green: alignment reference</span>
+                  <span><i className="tutorial-dot tutorial-dot--dimension" />Violet: Auto-Dim / Pixel Array</span>
+                  <span><i className="tutorial-dot tutorial-dot--drc" />Red hatch: DRC overlap violation</span>
+                </div>
+              </section>
+            </>
+          )}
+
+          {activeTab === 'walkthrough' && (
+            <section className="walkthrough-panel">
+              <div className="walkthrough-stage">
+                <div className="walkthrough-visual">
+                  {currentStep.diagram}
+                </div>
+                <div className="walkthrough-copy">
+                  <span className="tutorial-eyebrow">{currentStep.eyebrow}</span>
+                  <h3>{currentStep.title}</h3>
+                  <p>{currentStep.summary}</p>
+                  <ul className="walkthrough-tips">
+                    {currentStep.tips.map(tip => <li key={tip}>{tip}</li>)}
+                  </ul>
+                </div>
+              </div>
+
+              <div className="walkthrough-controls">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={stepIndex === 0}
+                  onClick={() => setStepIndex(index => Math.max(0, index - 1))}
+                >
+                  <FiChevronLeft /> Previous
+                </button>
+                <div className="walkthrough-dots" role="tablist" aria-label="Walkthrough steps">
+                  {walkthroughSteps.map((step, index) => (
+                    <button
+                      key={step.eyebrow}
+                      type="button"
+                      className={`walkthrough-dot${index === stepIndex ? ' active' : ''}`}
+                      onClick={() => setStepIndex(index)}
+                      aria-label={`Go to step ${index + 1}: ${step.title}`}
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    if (stepIndex < walkthroughSteps.length - 1) setStepIndex(index => index + 1);
+                    else onClose();
+                  }}
+                >
+                  {stepIndex < walkthroughSteps.length - 1 ? <>Next <FiChevronRight /></> : 'Done'}
+                </button>
+              </div>
+            </section>
+          )}
+
+          {activeTab === 'features' && (
+            <section className="tutorial-section">
+              <div className="tutorial-card-grid">
+                <article className="tutorial-card">
+                  <FiMove />
+                  <div><strong>Multi-block canvas dragging</strong><p>Marquee-select or Shift-click multiple blocks, then drag any selected block to move the entire group together in one Undo step while respecting die bounds and pad perimeters.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiLock />
+                  <div><strong>Rename &amp; lock instances</strong><p>Give blocks and pads meaningful Virtuoso names in Properties. Press <kbd>L</kbd> or click Lock to protect finalized placements from accidental drags, rotations, or deletes.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiRotateCw />
+                  <div><strong>Center-stable rotation</strong><p>Right-click a block to rotate 90° clockwise; Shift-right-click rotates counterclockwise. Mirrored blocks remain in the mirrored orientation family.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiGrid />
+                  <div><strong>Edge pads with seal-ring inset</strong><p>Define an optional seal-ring margin (µm) in Top Cell or Place Edge Pads. Both automatic rows and auto-rotating manual groups attach cleanly to the inner pad ring.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiSliders />
+                  <div><strong>Pixel Array inspector</strong><p>Select or double-click the Pixel Array to edit exact X, Y, Width, and Height in the Properties panel, or toggle visibility without losing its saved geometry.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiAlertTriangle />
+                  <div><strong>Live Overlap DRC &amp; CSV</strong><p>Open Summary in the top bar for die utilization, whitespace, per-edge pad counts, clickable overlap DRC violations, and one-click CSV coordinate export.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiMinimize2 />
+                  <div><strong>Ortho rulers &amp; extensions</strong><p>Enable Ortho (<kbd>O</kbd>) and snap two matching vertical or horizontal edges to measure separation with a Cadence-style perpendicular reference extension.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiDownload />
+                  <div><strong>Non-destructive SKILL export</strong><p>In Preview Code, enable <em>Preserve existing masters</em> to skip overwriting populated layouts, and choose between origin-anchored IP wrappers or direct top-cell placement.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiMousePointer />
+                  <div><strong>Adaptive grid &amp; viewport HUD</strong><p>Toggle the zoom-adaptive drafting grid (<kbd>G</kbd>) and use the floating bottom pill for quick zoom, 100% fit, and live cursor coordinates.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiSave />
+                  <div><strong>Editable SVG round-trip</strong><p>Every exported SVG embeds full project metadata (including pad inset and locked flags) so teammates can view it in any browser or re-import it losslessly.</p></div>
+                </article>
+              </div>
+              <aside className="tutorial-warning">
+                <FiBox />
+                <p><strong>Cadence Virtuoso note:</strong> ensure the Top Cell library already exists in <code>cds.lib</code> and is technology-attached before running <code>load("...")</code>. Canvas colors are visual aids; Virtuoso display colors follow your tech file.</p>
+              </aside>
+            </section>
+          )}
+
+          {activeTab === 'shortcuts' && (
+            <section className="tutorial-section">
+              <div className="shortcut-groups">
+                {shortcutGroups.map(group => (
+                  <div key={group.title} className="shortcut-group">
+                    <h4>{group.title}</h4>
+                    <div className="tutorial-shortcuts">
+                      {group.items.map(([key, action]) => (
+                        <div key={key}><kbd>{key}</kbd><span>{action}</span></div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
-        <button className="modal-close-btn" onClick={onClose} aria-label="Close tutorial"><FiX /></button>
-      </header>
 
-      <div className="tutorial-scroll">
-        <section className="tutorial-section">
-          <h3>Build your first floorplan</h3>
-          <ol className="tutorial-steps">
-            <li><span>1</span><div><strong>Configure the Top Cell</strong><p>Set its Cadence library, cell name, width, height, and placement grid.</p></div></li>
-            <li><span>2</span><div><strong>Create Master IPs</strong><p>Use the left sidebar’s + button to define reusable blocks, dimensions, planning colors, fill transparency, and outline style. Their library automatically follows the Top Cell.</p></div></li>
-            <li><span>3</span><div><strong>Place instances</strong><p>Click a master’s crosshair or press <kbd>i</kbd>, then click the canvas. Press <kbd>Esc</kbd> when finished.</p></div></li>
-            <li><span>4</span><div><strong>Arrange and inspect</strong><p>Select one or several objects to move, click Align (or press a), choose any selected edge, then click a green IP, top-cell, or ruler reference. The target click applies immediately.</p></div></li>
-            <li><span>5</span><div><strong>Save, import, and export</strong><p>Save keeps the working project in this browser. Import SVG opens an editable project file; Export SVG creates a visual copy for review.</p></div></li>
-          </ol>
-        </section>
-
-        <section className="tutorial-section">
-          <h3>Essential interactions</h3>
-          <div className="tutorial-card-grid">
-            <article className="tutorial-card">
-              <FiMousePointer />
-              <div><strong>Select and edit</strong><p>Click a block for Properties. Double-click it to open and pin Properties immediately. Middle-drag pans; the wheel zooms.</p></div>
-            </article>
-            <article className="tutorial-card">
-              <FiRotateCw />
-              <div><strong>Rotate safely</strong><p>Right-click an IP or pad to rotate it 90° clockwise; Shift-right-click rotates counterclockwise. Pad edge attachment uses the rotated physical footprint, including swapped width and height at R90/R270.</p></div>
-            </article>
-            <article className="tutorial-card">
-              <FiAlignLeft />
-              <div><strong>Align by edges</strong><p>Select one or several moving objects and click Align. Pick an amber edge from any selected object, then a green reference. Every selected object shifts by the same delta. Spacing is directional: selected + spacing = reference when selected is left/below; reference + spacing = selected when selected is right/above.</p></div>
-            </article>
-            <article className="tutorial-card">
-              <FiLayers />
-              <div><strong>Read Auto-Dim</strong><p>Selecting an IP shows focused blue gaps. With a visible pixel array, outside edges show gaps, fully contained edges show inside clearance, and partially embedded edges show the penetration depth as “overlap.” Hiding the array removes those distances.</p></div>
-            </article>
-            <article className="tutorial-card">
-              <FiMinimize2 />
-              <div><strong>Measure separated edges</strong><p>Enable Ortho and click two matching IP edges. Vertical edges report X spacing and horizontal edges report Y spacing, even without overlap. A perpendicular extension reaches the exact reference-edge endpoint.</p></div>
-            </article>
-            <article className="tutorial-card">
-              <FiGrid />
-              <div><strong>Place edge pads</strong><p>Automatic Row rotates by edge by default. Shift is measured from the Top Cell’s left edge for top/bottom rows, or bottom edge for left/right rows. Manual / Separated also rotates its preview automatically as the mouse moves between edges, while allowing arbitrary gaps. Every instance reuses one Cadence pad cell.</p></div>
-            </article>
-            <article className="tutorial-card">
-              <FiGrid />
-              <div><strong>Place and align a pixel array</strong><p>Define and place the region, then select it and use Align exactly like an IP. Its selected edge can align to an IP, top boundary, pixel-array reference, or ruler, and overlap with IPs is allowed.</p></div>
-            </article>
-            <article className="tutorial-card">
-              <FiSave />
-              <div><strong>Protect your work</strong><p>Save stores the current editable workspace in this browser. Exported SVGs also embed project metadata and can be imported later.</p></div>
-            </article>
-            <article className="tutorial-card">
-              <FiDownload />
-              <div><strong>Export to Virtuoso</strong><p>SKILL creates cell-name-based IP wrappers such as <code>Top_ADC_PLACED</code>, with explicit adaptive labels at each transformed center, plus one <code>Top_PAD_BANK</code> and optional pixel-array cell.</p></div>
-            </article>
+        <footer className="tutorial-footer">
+          <span>Open this guide anytime from <strong>Help</strong> in the top bar.</span>
+          <div className="tutorial-footer__actions">
+            {onLoadDemo && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  onLoadDemo();
+                  onClose();
+                }}
+              >
+                <FiCpu /> Load Live CIS Demo
+              </button>
+            )}
+            <button type="button" className="btn btn-primary" onClick={onClose}>Start Planning</button>
           </div>
-        </section>
-
-        <section className="tutorial-section">
-          <h3>Selection colors</h3>
-          <div className="tutorial-legend">
-            <span><i className="tutorial-dot tutorial-dot--anchor" />Amber: moving selection and chosen source edge</span>
-            <span><i className="tutorial-dot tutorial-dot--selected" />Blue: additional selected blocks</span>
-            <span><i className="tutorial-dot tutorial-dot--target" />Green: alignment target</span>
-            <span><i className="tutorial-dot tutorial-dot--dimension" />Violet: Auto-Dim gap</span>
-          </div>
-        </section>
-
-        <section className="tutorial-section">
-          <h3>Keyboard reference</h3>
-          <div className="tutorial-shortcuts">
-            {shortcuts.map(([key, action]) => <div key={key}><kbd>{key}</kbd><span>{action}</span></div>)}
-          </div>
-        </section>
-
-        <aside className="tutorial-warning">
-          <FiBox />
-          <p><strong>Cadence export note:</strong> the Top Cell library must already exist and be technology-attached. Canvas colors are planning aids; geometry, orientation, and visible pixel-array drawing follow the export.</p>
-        </aside>
+        </footer>
       </div>
-
-      <footer className="tutorial-footer">
-        <span>Open this guide anytime from <strong>Help</strong> in the top bar.</span>
-        <button className="btn btn-primary" onClick={onClose}>Start planning</button>
-      </footer>
     </div>
-  </div>
-);
+  );
+};

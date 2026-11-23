@@ -1,6 +1,6 @@
 import React from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
-import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff } from 'react-icons/fi';
+import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock } from 'react-icons/fi';
 import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
 
@@ -15,6 +15,7 @@ export const PropertiesPanel: React.FC = () => {
     selectedInstanceIds,
     updateInstancePosition,
     renameInstance,
+    toggleInstanceLock,
     updateInstanceOrientation,
     deleteSelectedInstances,
     pixelArray,
@@ -332,6 +333,11 @@ export const PropertiesPanel: React.FC = () => {
 
             <div className="prop-section">
               <h4 className="sub-title">Transform (Virtuoso)</h4>
+              {selectedInstance.locked && (
+                <div className="locked-banner">
+                  Locked — unlock (L) to move, rotate, align, or delete this block.
+                </div>
+              )}
               <div className="form-row">
                 <div className="form-group">
                   <label className="label">X (um)</label>
@@ -340,6 +346,7 @@ export const PropertiesPanel: React.FC = () => {
                     step={gridSize}
                     className="input-field" 
                     value={draftX}
+                    disabled={Boolean(selectedInstance.locked)}
                     onChange={e => setDraftX(e.target.value)}
                     onBlur={() => commitPosition('x')}
                     onKeyDown={event => handlePositionKeyDown(event, 'x')}
@@ -352,6 +359,7 @@ export const PropertiesPanel: React.FC = () => {
                     step={gridSize}
                     className="input-field" 
                     value={draftY}
+                    disabled={Boolean(selectedInstance.locked)}
                     onChange={e => setDraftY(e.target.value)}
                     onBlur={() => commitPosition('y')}
                     onKeyDown={event => handlePositionKeyDown(event, 'y')}
@@ -369,6 +377,7 @@ export const PropertiesPanel: React.FC = () => {
                 <select
                   className="input-field"
                   value={selectedInstance.orientation}
+                  disabled={Boolean(selectedInstance.locked)}
                   onChange={e => applyOrientation(e.target.value)}
                 >
                   {ORIENTATIONS.map(ort => (
@@ -379,6 +388,7 @@ export const PropertiesPanel: React.FC = () => {
                   <button
                     className="btn"
                     type="button"
+                    disabled={Boolean(selectedInstance.locked)}
                     onClick={() => applyOrientation(rotateOrientationByQuarterTurns(selectedInstance.orientation, -1))}
                     title="Rotate 90° clockwise"
                   >
@@ -387,6 +397,7 @@ export const PropertiesPanel: React.FC = () => {
                   <button
                     className="btn"
                     type="button"
+                    disabled={Boolean(selectedInstance.locked)}
                     onClick={() => applyOrientation(rotateOrientationByQuarterTurns(selectedInstance.orientation, 1))}
                     title="Rotate 90° counter-clockwise"
                   >
@@ -398,7 +409,15 @@ export const PropertiesPanel: React.FC = () => {
             </div>
 
             <div className="prop-section">
-              <button className="btn btn-danger" onClick={deleteSelectedInstances}>
+              <button
+                className={`btn lock-toggle-btn${selectedInstance.locked ? ' is-locked' : ''}`}
+                type="button"
+                onClick={() => toggleInstanceLock(selectedInstanceIds.length > 0 ? selectedInstanceIds : [selectedInstance.id])}
+                title="Lock or unlock selection (L)"
+              >
+                {selectedInstance.locked ? <><FiUnlock /> Unlock {selectedInstanceIds.length > 1 ? 'Selection' : 'Instance'}</> : <><FiLock /> Lock {selectedInstanceIds.length > 1 ? 'Selection' : 'Instance'}</>}
+              </button>
+              <button className="btn btn-danger" disabled={Boolean(selectedInstance.locked && selectedInstanceIds.length === 1)} onClick={deleteSelectedInstances}>
                 <FiTrash2 /> Delete {selectedInstanceIds.length > 1 ? `${selectedInstanceIds.length} Instances` : 'Instance'}
               </button>
             </div>
