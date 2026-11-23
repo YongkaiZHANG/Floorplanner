@@ -180,3 +180,14 @@ test('rejects a master outside the Top Cell library', () => {
     /must use the Top Cell library demoLib/,
   );
 });
+
+test('wrapper size labels preserve exact drawn master dimensions regardless of grid step', () => {
+  const cells = {
+    ip: { id: 'ip', libName: 'demoLib', cellName: 'ANALOG', width: 12.3, height: 6.7, color: '#fff' },
+  };
+  const instances = [
+    { id: 'ip0', cellId: 'ip', name: 'I0', x: 0, y: 0, orientation: 'R0' },
+  ];
+  const code = generateSkillCode('demoLib', 'top', 100, 100, cells, instances, 1);
+  assert.match(code, /"12\.3 x 6\.7 um"/);
+});

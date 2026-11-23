@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
 import type { Cell, PadSide } from '../store/useStore';
 import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove } from 'react-icons/fi';
@@ -22,9 +22,9 @@ const OUTLINE_STYLES: Array<{ value: NonNullable<Cell['outlineStyle']>; label: s
 export const Sidebar: React.FC = () => {
   const { 
     topWidth, topHeight, topLibName, topCellName, 
-    setTopDimensions, setTopNames,
+    setTopConfig,
     masterCells, instances, selectedInstanceIds, setSelectedInstance,
-    addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, createPadRow, prepareManualPadPlacement,
+    addMasterCell, updateMasterCell, deleteMasterCell, createPadRow, prepareManualPadPlacement,
     pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
@@ -67,15 +67,23 @@ export const Sidebar: React.FC = () => {
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (newCellName && newWidth && newHeight) {
+    const width = Number.parseFloat(newWidth);
+    const height = Number.parseFloat(newHeight);
+    if (!newCellName.trim() || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      alert('Enter a valid cell name and positive width and height.');
+      return;
+    }
+    try {
       if (editingCellId) {
-        updateMasterCell(editingCellId, topLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor, Number(newOpacity) / 100, newOutlineStyle);
+        updateMasterCell(editingCellId, topLibName, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle);
         setEditingCellId(null);
       } else {
-        addMasterCell(topLibName, newCellName, parseFloat(newWidth), parseFloat(newHeight), newColor, Number(newOpacity) / 100, newOutlineStyle);
+        addMasterCell(topLibName, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle);
       }
       setShowCreateModal(false);
       setNewCellName('');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to save the Master IP definition.');
     }
   };
 
@@ -174,6 +182,10 @@ export const Sidebar: React.FC = () => {
   const padAvailable = padSide === 'top' || padSide === 'bottom' ? topWidth : topHeight;
   const padStartCoordinate = -padAvailable / 2 + Number(padOffset);
   const padEndCoordinate = padStartCoordinate + padSpan;
+
+  useEffect(() => () => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+  }, []);
 
   const handleMouseEnter = () => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
@@ -276,7 +288,7 @@ export const Sidebar: React.FC = () => {
                   <button className="icon-btn" onClick={() => openEditModal(cell)} title="Edit IP Definition">
                     <FiSettings />
                   </button>
-                  <button className="icon-btn" style={{color: '#3b82f6'}} onClick={() => placeInstance(cell.id)} title="Instantiate">
+                  <button className="icon-btn" style={{color: '#3b82f6'}} onClick={() => setPlacement(cell.id, 'R0')} title="Attach to Cursor">
                     <FiCrosshair />
                   </button>
                 </div>
@@ -290,7 +302,7 @@ export const Sidebar: React.FC = () => {
 
         <div className="sidebar-section">
           <div className="section-header">
-            <h3 className="section-title"><FiBox /> top_asic Instances</h3>
+            <h3 className="section-title"><FiBox /> {topCellName} Instances</h3>
           </div>
           <ul className="instance-list">
             {instances.map(inst => {
@@ -506,9 +518,12 @@ export const Sidebar: React.FC = () => {
           </div>
           <form onSubmit={(e) => {
             e.preventDefault();
-            setTopNames(editTopLibName, editTopCellName);
-            setTopDimensions(parseFloat(editTopWidth), parseFloat(editTopHeight));
-            setShowEditTopModal(false);
+            try {
+              setTopConfig(editTopLibName, editTopCellName, Number.parseFloat(editTopWidth), Number.parseFloat(editTopHeight));
+              setShowEditTopModal(false);
+            } catch (error) {
+              alert(error instanceof Error ? error.message : 'Unable to update the top cell.');
+            }
           }}>
             <div className="form-group">
               <label className="label">Library Name</label>

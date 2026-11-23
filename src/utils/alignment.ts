@@ -1,3 +1,5 @@
+import { snapToGrid } from './grid.ts';
+
 export type CadenceOrientation =
   | 'R0'
   | 'R90'
@@ -144,7 +146,7 @@ const snapWithin = (value: number, min: number, max: number, grid: number) => {
     throw new RangeError('No grid-snapped position fits inside the top-cell bounds');
   }
   const step = Math.max(minStep, Math.min(Math.round(value / grid), maxStep));
-  return step * grid;
+  return snapToGrid(step * grid, grid);
 };
 
 const placeInsideTop = (

@@ -1,9 +1,11 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
 import { useStore, clampInstancePosition, computePadGroupPositions, getTransformProps, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
-import { getAlignmentEdgeAxis } from '../utils/alignment';
+import type { Instance } from '../store/useStore';
+import { getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
-import { formatGridValue } from '../utils/grid';
+import { SCALE_FACTOR } from '../utils/canvasConstants';
+import { formatGridValue, snapToGrid } from '../utils/grid';
 import { getIpPixelArrayEdgeMeasurements } from '../utils/pixelArrayDimensions';
 import { resolveOrthogonalRulerEnd } from '../utils/ruler';
 import type { SnapEdgeAxis } from '../utils/ruler';
@@ -14,8 +16,9 @@ import type { KonvaEventObject } from 'konva/lib/Node';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
+const MIN_STAGE_SCALE = 0.001;
+const MAX_STAGE_SCALE = 50;
 const MARQUEE_DRAG_THRESHOLD_PX = 3;
-export const SCALE_FACTOR = 100; // 1um = 100px on screen
 
 export const FloorplanCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -67,7 +70,6 @@ export const FloorplanCanvas: React.FC = () => {
     placeInstance,
     pendingManualPadGroup,
     placeManualPadGroup,
-    rightSidebarPinned,
     setRightSidebarPinned,
     orthogonalRuler,
     showAutoDim,
@@ -91,10 +93,11 @@ export const FloorplanCanvas: React.FC = () => {
       const th = topHeight * SCALE_FACTOR;
       
       const padding = 100;
-      const scaleX = (offsetWidth - padding * 2) / tw;
-      const scaleY = (offsetHeight - padding * 2) / th;
-      let initialScale = Math.min(scaleX, scaleY);
-      if (initialScale > 1.5) initialScale = 1.5;
+      const availableWidth = Math.max(1, offsetWidth - padding * 2);
+      const availableHeight = Math.max(1, offsetHeight - padding * 2);
+      const scaleX = availableWidth / tw;
+      const scaleY = availableHeight / th;
+      const initialScale = Math.max(MIN_STAGE_SCALE, Math.min(scaleX, scaleY, 1.5));
       
       setStageScale(initialScale);
       setStagePos({ 
@@ -109,14 +112,22 @@ export const FloorplanCanvas: React.FC = () => {
     const updateSize = () => {
       if (containerRef.current) {
         setDimensions({
-          width: containerRef.current.offsetWidth,
-          height: containerRef.current.offsetHeight
+          width: Math.max(1, containerRef.current.offsetWidth),
+          height: Math.max(1, containerRef.current.offsetHeight),
         });
       }
     };
-    setTimeout(updateSize, 50);
+    const timer = window.setTimeout(updateSize, 50);
     window.addEventListener('resize', updateSize);
-    return () => window.removeEventListener('resize', updateSize);
+    const observer = typeof ResizeObserver !== 'undefined' && containerRef.current
+      ? new ResizeObserver(updateSize)
+      : null;
+    if (observer && containerRef.current) observer.observe(containerRef.current);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('resize', updateSize);
+      observer?.disconnect();
+    };
   }, [fitView]);
 
   useEffect(() => {
@@ -243,10 +254,14 @@ export const FloorplanCanvas: React.FC = () => {
           if (state.selectedInstanceId) {
             const instance = state.instances.find(item => item.id === state.selectedInstanceId);
             if (instance) {
-              state.updateInstanceOrientation(
-                instance.id,
-                rotateOrientationByQuarterTurns(instance.orientation, e.shiftKey ? -1 : 1),
-              );
+              try {
+                state.updateInstanceOrientation(
+                  instance.id,
+                  rotateOrientationByQuarterTurns(instance.orientation, e.shiftKey ? -1 : 1),
+                );
+              } catch (error) {
+                alert(error instanceof Error ? error.message : 'Unable to rotate the selected block.');
+              }
             }
           }
           break;
@@ -262,11 +277,13 @@ export const FloorplanCanvas: React.FC = () => {
             state.setPlacement(null);
           } else if (state.appMode === 'pixel-array') {
             state.setAppMode('select');
-          } else if (appMode === 'measure') {
+          } else if (state.appMode === 'measure') {
             setAppMode('select');
             setIsMeasuring(false);
+            setMeasureStart(null);
             setCurrentRuler(null);
-          } else if (selectedInstanceId) {
+            setSnapIndicator(null);
+          } else if (state.selectedInstanceId || state.selectedInstanceIds.length > 0) {
             setSelectedInstance(null);
           } else if (state.pixelArraySelected) {
             state.setPixelArraySelected(false);
@@ -280,14 +297,20 @@ export const FloorplanCanvas: React.FC = () => {
         setIsSpaceDown(false);
       }
     };
+
+    const handleWindowBlur = () => {
+      setIsSpaceDown(false);
+    };
     
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleWindowBlur);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [appMode, selectedInstanceId, rightSidebarPinned, clearRulers, fitView, setAppMode, setSelectedInstance]);
+  }, [clearRulers, fitView, setAppMode, setSelectedInstance]);
 
   const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -303,7 +326,8 @@ export const FloorplanCanvas: React.FC = () => {
       y: (pointer.y - stage.y()) / -oldScale, 
     };
 
-    const newScale = e.evt.deltaY < 0 ? oldScale * ZOOM_SPEED : oldScale / ZOOM_SPEED;
+    const rawScale = e.evt.deltaY < 0 ? oldScale * ZOOM_SPEED : oldScale / ZOOM_SPEED;
+    const newScale = Math.max(MIN_STAGE_SCALE, Math.min(MAX_STAGE_SCALE, rawScale));
     setStageScale(newScale);
     setStagePos({
       x: pointer.x - mousePointTo.x * newScale,
@@ -326,29 +350,15 @@ export const FloorplanCanvas: React.FC = () => {
     return { x: cx, y: cy, dist: Math.hypot(p.x - cx, p.y - cy) };
   };
 
-  const getInstanceCorners = (inst: any) => {
+  const getInstanceCorners = (inst: Instance) => {
     const master = masterCells[inst.cellId];
     if (!master) return null;
-    const t = getTransformProps(inst.orientation);
-    const rad = t.rotation * Math.PI / 180;
-    const cos = Math.round(Math.cos(rad));
-    const sin = Math.round(Math.sin(rad));
-    const w = master.width;
-    const h = master.height;
-
-    const transformPoint = (px: number, py: number) => {
-      let sx = px * t.scaleX;
-      let sy = py * t.scaleY;
-      let rx = sx * cos - sy * sin;
-      let ry = sx * sin + sy * cos;
-      return { x: inst.x + rx, y: inst.y + ry };
-    };
-
+    const bounds = getPhysicalBounds({ ...inst, width: master.width, height: master.height });
     return [
-      transformPoint(0, 0),
-      transformPoint(w, 0),
-      transformPoint(w, h),
-      transformPoint(0, h)
+      { x: bounds.left, y: bounds.bottom },
+      { x: bounds.right, y: bounds.bottom },
+      { x: bounds.right, y: bounds.top },
+      { x: bounds.left, y: bounds.top },
     ];
   };
 
@@ -379,6 +389,21 @@ export const FloorplanCanvas: React.FC = () => {
         segments.push({ a, b, axis: Math.abs(a.x - b.x) <= 1e-9 ? 'vertical' : 'horizontal' });
       }
 
+      // visible pixel array boundary
+      if (pixelArray?.visible) {
+        const arrayCorners = [
+          { x: pixelArray.x, y: pixelArray.y },
+          { x: pixelArray.x + pixelArray.width, y: pixelArray.y },
+          { x: pixelArray.x + pixelArray.width, y: pixelArray.y + pixelArray.height },
+          { x: pixelArray.x, y: pixelArray.y + pixelArray.height },
+        ];
+        for (let i = 0; i < 4; i++) {
+          const a = arrayCorners[i];
+          const b = arrayCorners[(i + 1) % 4];
+          segments.push({ a, b, axis: Math.abs(a.x - b.x) <= 1e-9 ? 'vertical' : 'horizontal' });
+        }
+      }
+
       // instances
       for (const inst of instances) {
         const corners = getInstanceCorners(inst);
@@ -404,8 +429,8 @@ export const FloorplanCanvas: React.FC = () => {
       }
     }
 
-    umX = Math.round(umX / gridSize) * gridSize;
-    umY = Math.round(umY / gridSize) * gridSize;
+    umX = snapToGrid(umX, gridSize);
+    umY = snapToGrid(umY, gridSize);
     return { umX, umY, isSnapped: false, snapEdgeAxis: undefined };
   };
 
@@ -547,85 +572,82 @@ export const FloorplanCanvas: React.FC = () => {
     finishMarqueeSelection(e.evt?.shiftKey ?? false);
   };
 
-  // Drag bound logic: compute physical bounds, clamp them in real-time, then snap to grid
+  // Drag bound logic: clamp physical bounds inside top cell and snap to exact grid steps
   const dragBoundFunc = (pos: {x: number, y: number}, cellId: string, orientation: string) => {
     const master = masterCells[cellId];
     if (!master) return pos;
 
-    const t = getTransformProps(orientation);
-    const rad = t.rotation * Math.PI / 180;
-    const cos = Math.round(Math.cos(rad));
-    const sin = Math.round(Math.sin(rad));
-
-    const w = master.width;
-    const h = master.height;
-
-    const transformPoint = (px: number, py: number) => {
-      let sx = px * t.scaleX;
-      let sy = py * t.scaleY;
-      let rx = sx * cos - sy * sin;
-      let ry = sx * sin + sy * cos;
-      return { x: rx, y: ry };
-    };
-
-    const p1 = transformPoint(0, 0);
-    const p2 = transformPoint(w, 0);
-    const p3 = transformPoint(w, h);
-    const p4 = transformPoint(0, h);
-
-    const minX = Math.min(p1.x, p2.x, p3.x, p4.x);
-    const maxX = Math.max(p1.x, p2.x, p3.x, p4.x);
-    const minY = Math.min(p1.y, p2.y, p3.y, p4.y);
-    const maxY = Math.max(p1.y, p2.y, p3.y, p4.y);
-
-    const minAllowedX = -topWidth / 2 - minX;
-    const maxAllowedX = topWidth / 2 - maxX;
-    const minAllowedY = -topHeight / 2 - minY;
-    const maxAllowedY = topHeight / 2 - maxY;
-
-    // Convert requested pixel position to world um
     const worldX = (pos.x - stagePos.x) / stageScale;
     const worldY = (pos.y - stagePos.y) / -stageScale;
-    let umX = worldX / SCALE_FACTOR;
-    let umY = worldY / SCALE_FACTOR;
+    const umX = worldX / SCALE_FACTOR;
+    const umY = worldY / SCALE_FACTOR;
 
-    if (master.kind === 'pad') {
-      const snapped = snapPadToNearestEdge(
+    try {
+      const snapped = master.kind === 'pad'
+        ? snapPadToNearestEdge(
+            umX,
+            umY,
+            master.width,
+            master.height,
+            topWidth,
+            topHeight,
+            gridSize,
+            orientation,
+          )
+        : clampInstancePosition(
+            umX,
+            umY,
+            orientation,
+            master.width,
+            master.height,
+            topWidth,
+            topHeight,
+            gridSize,
+          );
+      return {
+        x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
+        y: snapped.y * SCALE_FACTOR * -stageScale + stagePos.y,
+      };
+    } catch {
+      return pos;
+    }
+  };
+
+  const pixelArrayDragBoundFunc = (pos: { x: number; y: number }) => {
+    if (!pixelArray) return pos;
+    const worldX = (pos.x - stagePos.x) / stageScale;
+    const worldY = (pos.y - stagePos.y) / -stageScale;
+    const umX = worldX / SCALE_FACTOR;
+    const umY = worldY / SCALE_FACTOR;
+    try {
+      const snapped = clampInstancePosition(
         umX,
         umY,
-        master.width,
-        master.height,
+        'R0',
+        pixelArray.width,
+        pixelArray.height,
         topWidth,
         topHeight,
         gridSize,
-        orientation,
       );
       return {
         x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
         y: snapped.y * SCALE_FACTOR * -stageScale + stagePos.y,
       };
+    } catch {
+      return pos;
     }
-
-    // Clamp
-    umX = Math.max(minAllowedX, Math.min(umX, maxAllowedX));
-    umY = Math.max(minAllowedY, Math.min(umY, maxAllowedY));
-
-    // Snap to grid
-    umX = Math.round(umX / gridSize) * gridSize;
-    umY = Math.round(umY / gridSize) * gridSize;
-
-    // Convert back to pixels
-    const pxX = umX * SCALE_FACTOR * stageScale + stagePos.x;
-    const pxY = umY * SCALE_FACTOR * -stageScale + stagePos.y;
-
-    return { x: pxX, y: pxY };
   };
 
   const handleDragEnd = (e: KonvaEventObject<DragEvent>, instanceId: string) => {
     const node = e.target;
     const umX = node.x() / SCALE_FACTOR;
     const umY = node.y() / SCALE_FACTOR;
-    updateInstancePosition(instanceId, umX, umY);
+    try {
+      updateInstancePosition(instanceId, umX, umY);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to move the selected block.');
+    }
   };
 
   // ----------------------------------------------------------------
@@ -633,25 +655,26 @@ export const FloorplanCanvas: React.FC = () => {
   // ----------------------------------------------------------------
   type BBox = { minX: number; maxX: number; minY: number; maxY: number };
 
-  const computeInstanceBBox = (inst: typeof instances[0]): BBox | null => {
+  const computeInstanceBBox = (inst: Instance): BBox | null => {
     const m = masterCells[inst.cellId];
     if (!m) return null;
-    const t = getTransformProps(inst.orientation);
-    const rad = t.rotation * Math.PI / 180;
-    const cos = Math.round(Math.cos(rad));
-    const sin = Math.round(Math.sin(rad));
-    const corners = [[0,0],[m.width,0],[m.width,m.height],[0,m.height]].map(([px,py]) => {
-      const sx = px * t.scaleX;
-      const sy = py * t.scaleY;
-      return { x: inst.x + sx*cos - sy*sin, y: inst.y + sx*sin + sy*cos };
-    });
+    const bounds = getPhysicalBounds({ ...inst, width: m.width, height: m.height });
     return {
-      minX: Math.min(...corners.map(c=>c.x)),
-      maxX: Math.max(...corners.map(c=>c.x)),
-      minY: Math.min(...corners.map(c=>c.y)),
-      maxY: Math.max(...corners.map(c=>c.y)),
+      minX: bounds.left,
+      maxX: bounds.right,
+      minY: bounds.bottom,
+      maxY: bounds.top,
     };
   };
+
+  const sortedInstances = useMemo(() => (
+    [...instances].sort((a, b) => {
+      const mA = masterCells[a.cellId];
+      const mB = masterCells[b.cellId];
+      if (!mA || !mB) return 0;
+      return (mB.width * mB.height) - (mA.width * mA.height);
+    })
+  ), [instances, masterCells]);
 
   const renderGapAnnotations = (selectedId: string | null, autoMode: boolean) => {
     const sf = SCALE_FACTOR;
@@ -1039,7 +1062,7 @@ export const FloorplanCanvas: React.FC = () => {
         );
         
         // Intermediate tick text
-        const strVal = parseFloat(tickDist.toFixed(4)).toString();
+        const strVal = formatGridValue(tickDist, gridSize);
         texts.push(
           <Text
             key={`tick-text-${key}-${i}`}
@@ -1082,12 +1105,12 @@ export const FloorplanCanvas: React.FC = () => {
       // End text (Total length)
       const absDx = Math.abs(dx);
       const absDy = Math.abs(dy);
-      const finalDist = parseFloat((Math.round(dist / gridSize) * gridSize).toFixed(4)).toString();
+      const finalDist = formatGridValue(dist, gridSize);
       
       let endTextString = `L: ${finalDist}`;
       if (absDx > 0.0001 && absDy > 0.0001) {
-        const finalDx = parseFloat((Math.round(absDx / gridSize) * gridSize).toFixed(4)).toString();
-        const finalDy = parseFloat((Math.round(absDy / gridSize) * gridSize).toFixed(4)).toString();
+        const finalDx = formatGridValue(absDx, gridSize);
+        const finalDy = formatGridValue(absDy, gridSize);
         endTextString += ` | dX: ${finalDx} | dY: ${finalDy}`;
         
         // Draw right triangle dashed lines
@@ -1302,15 +1325,22 @@ export const FloorplanCanvas: React.FC = () => {
               x={pixelArray.x * SCALE_FACTOR}
               y={pixelArray.y * SCALE_FACTOR}
               draggable={appMode === 'select' && !edgeAlignmentSession}
+              dragBoundFunc={pixelArrayDragBoundFunc}
               onClick={(event) => {
                 event.cancelBubble = true;
                 if (appMode === 'select' && !edgeAlignmentSession) setPixelArraySelected(true);
               }}
               onDragStart={() => setPixelArraySelected(true)}
-              onDragEnd={(event) => updatePixelArrayPosition(
-                event.target.x() / SCALE_FACTOR,
-                event.target.y() / SCALE_FACTOR,
-              )}
+              onDragEnd={(event) => {
+                try {
+                  updatePixelArrayPosition(
+                    event.target.x() / SCALE_FACTOR,
+                    event.target.y() / SCALE_FACTOR,
+                  );
+                } catch (error) {
+                  alert(error instanceof Error ? error.message : 'Unable to move the pixel array.');
+                }
+              }}
             >
               <Rect
                 name="overlay"
@@ -1426,12 +1456,7 @@ export const FloorplanCanvas: React.FC = () => {
         </Layer>
         
         <Layer>
-          {[...instances].sort((a, b) => {
-            const mA = masterCells[a.cellId];
-            const mB = masterCells[b.cellId];
-            if (!mA || !mB) return 0;
-            return (mB.width * mB.height) - (mA.width * mA.height);
-          }).map(inst => {
+          {sortedInstances.map(inst => {
             const masterCell = masterCells[inst.cellId];
             if (!masterCell) return null;
             const w = masterCell.width * SCALE_FACTOR;
@@ -1468,10 +1493,14 @@ export const FloorplanCanvas: React.FC = () => {
                   e.cancelBubble = true;
                   if (appMode !== 'select' || edgeAlignmentSession) return;
                   setSelectedInstance(inst.id);
-                  useStore.getState().updateInstanceOrientation(
-                    inst.id,
-                    rotateOrientationByQuarterTurns(inst.orientation, e.evt.shiftKey ? -1 : 1),
-                  );
+                  try {
+                    useStore.getState().updateInstanceOrientation(
+                      inst.id,
+                      rotateOrientationByQuarterTurns(inst.orientation, e.evt.shiftKey ? 1 : -1),
+                    );
+                  } catch (error) {
+                    alert(error instanceof Error ? error.message : 'Unable to rotate the selected block.');
+                  }
                 }}
               >
                 <Rect
@@ -1825,6 +1854,12 @@ export const FloorplanCanvas: React.FC = () => {
               } catch {
                 return null;
               }
+            } else {
+              try {
+                ghostPosition = clampInstancePosition(mousePos.x, mousePos.y, placementOrientation, m.width, m.height, topWidth, topHeight, gridSize);
+              } catch {
+                return null;
+              }
             }
             const t = getTransformProps(previewOrientation);
             return (
@@ -1913,7 +1948,9 @@ export const FloorplanCanvas: React.FC = () => {
       )}
       {appMode === 'place' && placementMasterId && masterCells[placementMasterId]?.kind === 'pad' && (
         <div className="coordinate-overlay manual-pad-placement-hint">
-          Manual Pad Groups · Auto-rotate by nearest edge · {pendingManualPadGroup?.count ?? 1} pads at {pendingManualPadGroup?.pitch ?? 0} um pitch · Click each group location · Esc finishes
+          {pendingManualPadGroup
+            ? `Manual Pad Groups · Auto-rotate by nearest edge · ${pendingManualPadGroup.count} pads at ${pendingManualPadGroup.pitch} um pitch · Click each group location · Esc finishes`
+            : `Pad Placement · Orientation ${placementOrientation} · Snaps to nearest edge · Click to place · Esc finishes`}
         </div>
       )}
       {showAutoDim && appMode !== 'measure' && !pixelArraySelected && (

@@ -17,6 +17,7 @@ export const snapToGrid = (value: number, gridSize: number): number => {
   const precision = getGridPrecision(gridSize);
   const scale = 10 ** precision;
   const gridUnits = Math.round(gridSize * scale);
+  if (gridUnits === 0) return Math.round(value / gridSize) * gridSize;
   const snappedUnits = Math.round((value * scale) / gridUnits) * gridUnits;
   return snappedUnits / scale;
 };

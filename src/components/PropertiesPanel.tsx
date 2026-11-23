@@ -30,12 +30,31 @@ export const PropertiesPanel: React.FC = () => {
       setDraftY(formatGridValue(selectedInstance.y, gridSize));
       return;
     }
-    updateInstancePosition(
-      selectedInstance.id,
-      axis === 'x' ? value : selectedInstance.x,
-      axis === 'y' ? value : selectedInstance.y,
-    );
+    try {
+      updateInstancePosition(
+        selectedInstance.id,
+        axis === 'x' ? value : selectedInstance.x,
+        axis === 'y' ? value : selectedInstance.y,
+      );
+    } catch (error) {
+      setDraftX(formatGridValue(selectedInstance.x, gridSize));
+      setDraftY(formatGridValue(selectedInstance.y, gridSize));
+      alert(error instanceof Error ? error.message : 'Unable to move the selected instance.');
+    }
   };
+
+  const applyOrientation = (orientation: string) => {
+    if (!selectedInstance) return;
+    try {
+      updateInstanceOrientation(selectedInstance.id, orientation);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to orient the selected instance.');
+    }
+  };
+
+  React.useEffect(() => () => {
+    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+  }, []);
 
   const handlePositionKeyDown = (event: React.KeyboardEvent<HTMLInputElement>, axis: 'x' | 'y') => {
     if (event.key === 'Enter') event.currentTarget.blur();
@@ -151,7 +170,7 @@ export const PropertiesPanel: React.FC = () => {
                   <select
                     className="input-field"
                     value={selectedInstance.orientation}
-                    onChange={e => updateInstanceOrientation(selectedInstance.id, e.target.value)}
+                    onChange={e => applyOrientation(e.target.value)}
                   >
                     {ORIENTATIONS.map(ort => (
                       <option key={ort} value={ort}>{ort}</option>
@@ -161,7 +180,7 @@ export const PropertiesPanel: React.FC = () => {
                     <button
                       className="btn"
                       type="button"
-                      onClick={() => updateInstanceOrientation(selectedInstance.id, rotateOrientationByQuarterTurns(selectedInstance.orientation, -1))}
+                      onClick={() => applyOrientation(rotateOrientationByQuarterTurns(selectedInstance.orientation, -1))}
                       title="Rotate 90° clockwise"
                     >
                       <FiRotateCw /> −90°
@@ -169,7 +188,7 @@ export const PropertiesPanel: React.FC = () => {
                     <button
                       className="btn"
                       type="button"
-                      onClick={() => updateInstanceOrientation(selectedInstance.id, rotateOrientationByQuarterTurns(selectedInstance.orientation, 1))}
+                      onClick={() => applyOrientation(rotateOrientationByQuarterTurns(selectedInstance.orientation, 1))}
                       title="Rotate 90° counter-clockwise"
                     >
                       <FiRotateCcw /> +90°

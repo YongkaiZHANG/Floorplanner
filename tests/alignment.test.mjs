@@ -212,3 +212,14 @@ test('rejects a block that cannot fit on a legal grid point', () => {
   const source = [block('too-wide', 0, 0, 101, 5), block('other', 0, 10)];
   assert.throws(() => alignInstances(source, 'left', options), /larger than the top cell/);
 });
+
+test('snaps aligned coordinates canonically without IEEE-754 drift', () => {
+  const source = block('source', 0, 0, 10, 5);
+  const result = alignInstanceToCoordinate(source, 'left', 0.015, 0, {
+    topWidth: 100,
+    topHeight: 100,
+    gridSize: 0.005,
+  });
+  assert.equal(result.x, 0.015);
+  assert.equal(String(result.x), '0.015');
+});

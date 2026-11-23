@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getProjectSnapshot, PIXEL_ARRAY_ALIGNMENT_ID, useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
-import { exportSVG } from '../utils/svgExport';
+import { exportSVG, extractProjectFromSvg } from '../utils/svgExport';
+import { formatGridValue } from '../utils/grid';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
 import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
@@ -12,7 +13,7 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, pixelArray, pixelArraySelected, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, rulers, pixelArray, pixelArraySelected, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
@@ -23,13 +24,24 @@ export const Topbar: React.FC = () => {
   });
   const [tempW, setTempW] = useState(topWidth.toString());
   const [tempH, setTempH] = useState(topHeight.toString());
+  const [draftGridSize, setDraftGridSize] = useState(() => formatGridValue(gridSize, gridSize));
   
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
   const [savedSignature, setSavedSignature] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const recoveryLoaded = useRef(false);
-  const projectSignature = JSON.stringify(getProjectSnapshot(useStore.getState()));
+  const projectSignature = useMemo(() => JSON.stringify({
+    gridSize,
+    topWidth,
+    topHeight,
+    topLibName,
+    topCellName,
+    masterCells,
+    instances,
+    rulers,
+    pixelArray,
+  }), [gridSize, topWidth, topHeight, topLibName, topCellName, masterCells, instances, rulers, pixelArray]);
   const isDirty = savedSignature === null ? history.past.length > 0 : projectSignature !== savedSignature;
   const saveStatus = isDirty ? 'Unsaved' : savedSignature === null ? 'Not saved' : 'Saved';
   const alignmentSource = edgeAlignmentSession
@@ -51,10 +63,32 @@ export const Topbar: React.FC = () => {
       ? 'Click an amber edge on any selected object'
       : `Click an amber edge of ${alignmentSourceName}`;
 
-  const showToast = (message: string, kind: ToastKind = 'success') => {
+  const showToast = useCallback((message: string, kind: ToastKind = 'success') => {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts(current => [...current, { id, message, kind }].slice(-3));
     window.setTimeout(() => setToasts(current => current.filter(toast => toast.id !== id)), 3200);
+  }, []);
+
+  useEffect(() => {
+    setDraftGridSize(formatGridValue(gridSize, gridSize));
+  }, [gridSize]);
+
+  const commitGridSize = () => {
+    const size = Number(draftGridSize);
+    if (!Number.isFinite(size) || size <= 0) {
+      setDraftGridSize(formatGridValue(gridSize, gridSize));
+      return;
+    }
+    if (size === gridSize) {
+      setDraftGridSize(formatGridValue(gridSize, gridSize));
+      return;
+    }
+    try {
+      setGridSize(size);
+    } catch (error) {
+      setDraftGridSize(formatGridValue(gridSize, gridSize));
+      showToast(error instanceof Error ? error.message : 'Unable to apply that placement grid.', 'error');
+    }
   };
 
   const createSkillCode = () => {
@@ -72,7 +106,7 @@ export const Topbar: React.FC = () => {
     downloadSkillFile(`${topCellName}.il`, skillCode);
   };
 
-  const handleSaveWorkspace = () => {
+  const handleSaveWorkspace = useCallback(() => {
     const snapshot = getProjectSnapshot(useStore.getState());
     if (!saveRecovery(snapshot)) {
       alert('Unable to save the workspace in this browser. Check that site storage is available.');
@@ -80,7 +114,7 @@ export const Topbar: React.FC = () => {
     }
     setSavedSignature(JSON.stringify(snapshot));
     showToast('Workspace saved in this browser');
-  };
+  }, [showToast]);
 
   const handleExportSvg = () => {
     try {
@@ -110,7 +144,7 @@ export const Topbar: React.FC = () => {
     };
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
-  });
+  }, [handleSaveWorkspace]);
 
   useEffect(() => {
     const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
@@ -139,22 +173,15 @@ export const Topbar: React.FC = () => {
     reader.onload = (event) => {
       const text = event.target?.result as string;
       try {
-        let jsonData = null;
-        if (text.includes('<metadata class="floorplan-data">')) {
-          const match = text.match(/<!\[CDATA\[(.*?)\]\]>/s);
-          if (match && match[1]) {
-            jsonData = parseProjectDocument(match[1]);
-          }
-        } else {
-          jsonData = parseProjectDocument(text);
-        }
+        const extracted = extractProjectFromSvg(text);
+        const jsonData = extracted ? parseProjectDocument(extracted) : parseProjectDocument(text);
         
         if (jsonData) {
           useStore.getState().loadProject(jsonData);
           setSavedSignature(JSON.stringify(getProjectSnapshot(useStore.getState())));
           showToast(`${jsonData.topCellName} opened`);
         } else {
-          throw new Error("No valid data found");
+          throw new Error('No valid data found');
         }
       } catch {
         alert('Invalid SVG project. Please choose an SVG exported from this tool.');
@@ -184,9 +211,25 @@ export const Topbar: React.FC = () => {
     }
   };
 
+  const openConfigModal = () => {
+    setTempW(topWidth.toString());
+    setTempH(topHeight.toString());
+    setShowConfig(true);
+  };
+
   const handleSaveConfig = () => {
-    setTopDimensions(parseFloat(tempW) || 100, parseFloat(tempH) || 100);
-    setShowConfig(false);
+    const width = Number.parseFloat(tempW);
+    const height = Number.parseFloat(tempH);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      showToast('Top-cell width and height must be positive numbers.', 'error');
+      return;
+    }
+    try {
+      setTopDimensions(width, height);
+      setShowConfig(false);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to resize the top cell.', 'error');
+    }
   };
 
   return (
@@ -201,14 +244,14 @@ export const Topbar: React.FC = () => {
           <button 
             className={`mode-btn ${appMode === 'select' ? 'active' : ''}`}
             onClick={() => setAppMode('select')}
-            title="Select & Move (V)"
+            title="Select & Move (M)"
           >
             <FiMousePointer /> Select
           </button>
           <button 
             className={`mode-btn ${appMode === 'measure' ? 'active' : ''}`}
             onClick={() => setAppMode('measure')}
-            title="Measure Distance (M)"
+            title="Measure Distance (K)"
           >
             <FiMinimize2 /> Ruler
           </button>
@@ -297,7 +340,7 @@ export const Topbar: React.FC = () => {
         </button>
         <div className="vertical-divider" />
 
-        <button className="btn config-btn" onClick={() => setShowConfig(true)}>
+        <button className="btn config-btn" onClick={openConfigModal}>
           <FiSettings /> {topCellName} ({topWidth}x{topHeight})
         </button>
         <div className="grid-settings">
@@ -306,10 +349,15 @@ export const Topbar: React.FC = () => {
             type="number" 
             min="0.000000000001"
             step="any"
-            value={gridSize} 
-            onChange={event => {
-              const size = Number(event.target.value);
-              if (Number.isFinite(size) && size > 0) setGridSize(size);
+            value={draftGridSize} 
+            onChange={event => setDraftGridSize(event.target.value)}
+            onBlur={commitGridSize}
+            onKeyDown={event => {
+              if (event.key === 'Enter') event.currentTarget.blur();
+              if (event.key === 'Escape') {
+                setDraftGridSize(formatGridValue(gridSize, gridSize));
+                event.currentTarget.blur();
+              }
             }}
             className="input-field grid-input"
             title="Changing the grid re-snaps every instance to an exact grid multiple"

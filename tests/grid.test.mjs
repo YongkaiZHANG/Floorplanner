@@ -15,3 +15,7 @@ test('recognizes exact grid multiples at large and small coordinates', () => {
   assert.equal(isOnGrid(3452.005, 0.005), true);
   assert.equal(isOnGrid(3452.003, 0.005), false);
 });
+
+test('remains finite when grid size is below 1e-12', () => {
+  assert.ok(Number.isFinite(snapToGrid(10, 1e-13)));
+});

@@ -601,3 +601,67 @@ test('pad rows reject overlapping pitch and rows that cannot fit', () => {
   );
   assert.equal(useStore.getState().instances.length, 0);
 });
+
+test('pad moves never leak extra properties and quick align preserves perimeter attachment', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().createPadRow({
+    libName: 'testLib', cellName: 'EDGE_PAD', width: 10, height: 5, color: '#fff',
+    count: 1, pitch: 10, side: 'top', offset: 0,
+  });
+  useStore.getState().addMasterCell('testLib', 'CORE', 10, 10, '#2563eb');
+  const coreMaster = Object.values(useStore.getState().masterCells).find(cell => cell.cellName === 'CORE');
+  useStore.getState().placeInstance(coreMaster.id, 0, 0, 'R0');
+
+  const pad = useStore.getState().instances[0];
+  const core = useStore.getState().instances[1];
+  useStore.getState().updateInstancePosition(pad.id, -10, 48);
+  assert.equal('side' in useStore.getState().instances[0], false);
+
+  useStore.getState().setSelection([pad.id, core.id]);
+  assert.throws(
+    () => useStore.getState().alignSelectedInstances('bottom'),
+    /leave the top-cell perimeter/,
+  );
+});
+
+test('multi-block nudge aborts atomically when any block would hit the top-cell boundary', () => {
+  useStore.getState().loadProject({ ...emptyProject, gridSize: 1 });
+  useStore.getState().addMasterCell('testLib', 'BLK', 10, 10, '#2563eb');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -50, 0, 'R0');
+  useStore.getState().placeInstance(master.id, 0, 0, 'R0');
+  const [leftBlock, centerBlock] = useStore.getState().instances;
+  useStore.getState().setSelection([leftBlock.id, centerBlock.id]);
+
+  useStore.getState().nudgeSelection(-1, 0);
+  assert.deepEqual(
+    useStore.getState().instances.map(instance => instance.x),
+    [-50, 0],
+  );
+});
+
+test('setTopConfig updates names and dimensions in one atomic undo step and deleting a master clears placement', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'IP_A', 10, 10, '#2563eb');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().setPlacement(master.id, 'R0');
+  assert.equal(useStore.getState().placementMasterId, master.id);
+
+  useStore.getState().deleteMasterCell(master.id);
+  assert.equal(useStore.getState().placementMasterId, null);
+  assert.equal(useStore.getState().appMode, 'select');
+
+  const beforeUndoCount = useStore.getState().history.past.length;
+  useStore.getState().setTopConfig('newLib', 'newTop', 200, 150);
+  assert.equal(useStore.getState().history.past.length, beforeUndoCount + 1);
+  assert.equal(useStore.getState().topLibName, 'newLib');
+  assert.equal(useStore.getState().topCellName, 'newTop');
+  assert.equal(useStore.getState().topWidth, 200);
+  assert.equal(useStore.getState().topHeight, 150);
+
+  useStore.getState().undo();
+  assert.equal(useStore.getState().topLibName, 'testLib');
+  assert.equal(useStore.getState().topCellName, 'top');
+  assert.equal(useStore.getState().topWidth, 100);
+  assert.equal(useStore.getState().topHeight, 100);
+});
