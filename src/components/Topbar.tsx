@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getProjectSnapshot, PIXEL_ARRAY_ALIGNMENT_ID, useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
+import type { SkillExportOptions } from '../utils/skillExport';
 import { exportSVG, extractProjectFromSvg } from '../utils/svgExport';
+import { computeFloorplanMetrics, downloadCsvFile, generateFloorplanCsv } from '../utils/floorplanMetrics';
 import { formatGridValue } from '../utils/grid';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
-import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave } from 'react-icons/fi';
+import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import { EditingToolbar } from './EditingToolbar';
 import type { AlignmentAction } from './EditingToolbar';
@@ -13,8 +15,9 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, setTopDimensions, masterCells, instances, rulers, pixelArray, pixelArraySelected, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, history, selectedInstanceId, selectedInstanceIds, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, padInset, setTopDimensions, masterCells, instances, rulers, pixelArray, pixelArraySelected, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
       return localStorage.getItem('ic-floorplanner:tutorial-seen:v18') !== 'yes';
@@ -28,10 +31,12 @@ export const Topbar: React.FC = () => {
   
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
+  const [preserveExistingMasters, setPreserveExistingMasters] = useState(false);
+  const [useIpWrappers, setUseIpWrappers] = useState(true);
   const [savedSignature, setSavedSignature] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const recoveryLoaded = useRef(false);
-  const projectSignature = useMemo(() => JSON.stringify({
+  const currentSnapshot = useMemo(() => ({
     gridSize,
     topWidth,
     topHeight,
@@ -41,7 +46,10 @@ export const Topbar: React.FC = () => {
     instances,
     rulers,
     pixelArray,
-  }), [gridSize, topWidth, topHeight, topLibName, topCellName, masterCells, instances, rulers, pixelArray]);
+    ...(padInset > 0 ? { padInset } : {}),
+  }), [gridSize, topWidth, topHeight, topLibName, topCellName, padInset, masterCells, instances, rulers, pixelArray]);
+  const projectSignature = useMemo(() => JSON.stringify(currentSnapshot), [currentSnapshot]);
+  const metrics = useMemo(() => computeFloorplanMetrics(currentSnapshot), [currentSnapshot]);
   const isDirty = savedSignature === null ? history.past.length > 0 : projectSignature !== savedSignature;
   const saveStatus = isDirty ? 'Unsaved' : savedSignature === null ? 'Not saved' : 'Saved';
   const alignmentSource = edgeAlignmentSession
@@ -91,9 +99,14 @@ export const Topbar: React.FC = () => {
     }
   };
 
-  const createSkillCode = () => {
+  const createSkillCode = (optionsOverride?: SkillExportOptions) => {
+    const options: SkillExportOptions = {
+      preserveExistingMasters,
+      useIpWrappers,
+      ...optionsOverride,
+    };
     try {
-      return generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray);
+      return generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray, options);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to generate Cadence SKILL code.');
       return null;
@@ -104,6 +117,17 @@ export const Topbar: React.FC = () => {
     const skillCode = createSkillCode();
     if (!skillCode) return;
     downloadSkillFile(`${topCellName}.il`, skillCode);
+  };
+
+  const handleExportCsv = () => {
+    try {
+      const csv = generateFloorplanCsv(currentSnapshot);
+      const filename = `${topCellName}_floorplan.csv`;
+      downloadCsvFile(filename, csv);
+      showToast(`${filename} exported`);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to export the CSV table.');
+    }
   };
 
   const handleSaveWorkspace = useCallback(() => {
@@ -364,6 +388,19 @@ export const Topbar: React.FC = () => {
           />
         </div>
         <div className="vertical-divider vertical-divider--compact" />
+        <button
+          className={`btn metrics-btn${metrics.overlaps.length > 0 ? ' metrics-btn--alert' : ''}`}
+          onClick={() => setShowSummary(true)}
+          title={metrics.overlaps.length > 0
+            ? `${metrics.overlaps.length} overlap violation${metrics.overlaps.length === 1 ? '' : 's'} detected — click to inspect summary & DRC`
+            : 'Floorplan area metrics, DRC status, and CSV export'}
+        >
+          {metrics.overlaps.length > 0 ? (
+            <><FiAlertTriangle /> {metrics.overlaps.length} Overlap{metrics.overlaps.length === 1 ? '' : 's'}</>
+          ) : (
+            <><FiBarChart2 /> Summary</>
+          )}
+        </button>
         <button className="btn shortcuts-btn" onClick={() => setShowTutorial(true)}>
           <FiBookOpen /> Help
         </button>
@@ -404,6 +441,95 @@ export const Topbar: React.FC = () => {
         <TutorialModal onClose={closeTutorial} />
       )}
       
+      {showSummary && (
+        <div className="modal-overlay">
+          <div className="modal-content glass-panel summary-modal">
+            <div className="modal-header">
+              <h2 className="modal-title">Floorplan Summary &amp; DRC</h2>
+              <button className="modal-close-btn" onClick={() => setShowSummary(false)}>
+                <FiX />
+              </button>
+            </div>
+            <div className="summary-grid">
+              <div className="summary-card">
+                <span className="summary-card__label">Die Area</span>
+                <strong>{metrics.dieAreaMm2.toFixed(4)} mm²</strong>
+                <small>{metrics.dieAreaUm2.toLocaleString()} µm² · W/H {metrics.aspectRatio.toFixed(2)}</small>
+              </div>
+              <div className="summary-card">
+                <span className="summary-card__label">IP Blocks ({metrics.ipCount})</span>
+                <strong>{metrics.ipUtilizationPct.toFixed(1)}%</strong>
+                <small>{metrics.ipAreaUm2.toLocaleString()} µm² total IP area</small>
+              </div>
+              <div className="summary-card">
+                <span className="summary-card__label">Whitespace</span>
+                <strong>{metrics.whitespacePct.toFixed(1)}%</strong>
+                <small>{metrics.whitespaceUm2.toLocaleString()} µm² free (excl. IP &amp; pads)</small>
+              </div>
+              <div className="summary-card">
+                <span className="summary-card__label">Pads ({metrics.padCount})</span>
+                <strong>T:{metrics.padsBySide.top} R:{metrics.padsBySide.right} B:{metrics.padsBySide.bottom} L:{metrics.padsBySide.left}</strong>
+                <small>{padInset > 0 ? `Seal-ring inset: ${formatGridValue(padInset, gridSize)} µm` : 'Attached flush to die edge'}</small>
+              </div>
+              {pixelArray?.visible && (
+                <div className="summary-card">
+                  <span className="summary-card__label">Pixel Array</span>
+                  <strong>{metrics.pixelArrayPct.toFixed(1)}%</strong>
+                  <small>{metrics.pixelArrayAreaUm2.toLocaleString()} µm² ({formatGridValue(pixelArray.width, gridSize)} × {formatGridValue(pixelArray.height, gridSize)} µm)</small>
+                </div>
+              )}
+            </div>
+
+            <div className="drc-section">
+              <div className="drc-section__header">
+                <h3 className="drc-section__title">
+                  {metrics.overlaps.length === 0 ? (
+                    <span className="drc-status drc-status--clean"><FiCheckCircle /> No instance overlaps detected</span>
+                  ) : (
+                    <span className="drc-status drc-status--error"><FiAlertTriangle /> {metrics.overlaps.length} overlap violation{metrics.overlaps.length === 1 ? '' : 's'}</span>
+                  )}
+                </h3>
+                <label className="drc-toggle">
+                  <input type="checkbox" checked={showOverlapDrc} onChange={toggleOverlapDrc} />
+                  Highlight overlaps on canvas
+                </label>
+              </div>
+              {metrics.overlaps.length > 0 && (
+                <ul className="drc-list">
+                  {metrics.overlaps.map(violation => (
+                    <li key={violation.id}>
+                      <button
+                        type="button"
+                        className="drc-item"
+                        onClick={() => {
+                          setSelection([violation.idA, violation.idB]);
+                          setShowSummary(false);
+                        }}
+                      >
+                        <span className="drc-item__names">
+                          <strong>{violation.nameA}</strong> ↔ <strong>{violation.nameB}</strong>
+                        </span>
+                        <span className="drc-item__meta">
+                          <span className="drc-kind-badge">{violation.kind.toUpperCase()}</span>
+                          {formatGridValue(violation.width, gridSize)} × {formatGridValue(violation.height, gridSize)} µm ({violation.areaUm2.toFixed(2)} µm²)
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setShowSummary(false)}>Close</button>
+              <button className="btn btn-primary" onClick={handleExportCsv}>
+                <FiDownload /> Export CSV Table
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCodePreview && (
         <div className="modal-overlay">
           <div className="modal-content glass-panel code-preview-modal">
@@ -412,6 +538,34 @@ export const Topbar: React.FC = () => {
               <button className="modal-close-btn" onClick={() => setShowCodePreview(false)}>
                 <FiX />
               </button>
+            </div>
+            <div className="skill-options-bar">
+              <label className="skill-option-toggle">
+                <input
+                  type="checkbox"
+                  checked={preserveExistingMasters}
+                  onChange={event => {
+                    const next = event.target.checked;
+                    setPreserveExistingMasters(next);
+                    const updated = createSkillCode({ preserveExistingMasters: next });
+                    if (updated) setGeneratedCode(updated);
+                  }}
+                />
+                <span>Preserve existing masters (skip overwrite if cellview exists)</span>
+              </label>
+              <label className="skill-option-toggle">
+                <input
+                  type="checkbox"
+                  checked={useIpWrappers}
+                  onChange={event => {
+                    const next = event.target.checked;
+                    setUseIpWrappers(next);
+                    const updated = createSkillCode({ useIpWrappers: next });
+                    if (updated) setGeneratedCode(updated);
+                  }}
+                />
+                <span>Use origin-anchored IP wrappers</span>
+              </label>
             </div>
             <div className="code-container">
               <pre>

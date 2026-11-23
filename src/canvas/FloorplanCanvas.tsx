@@ -5,6 +5,7 @@ import type { Instance } from '../store/useStore';
 import { getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
 import { SCALE_FACTOR } from '../utils/canvasConstants';
+import { findOverlapViolations } from '../utils/floorplanMetrics';
 import { formatGridValue, snapToGrid } from '../utils/grid';
 import { getIpPixelArrayEdgeMeasurements } from '../utils/pixelArrayDimensions';
 import { resolveOrthogonalRulerEnd } from '../utils/ruler';
@@ -46,6 +47,16 @@ export const FloorplanCanvas: React.FC = () => {
   const ignoreBackgroundClickUntilRef = useRef(0);
   const [panStart, setPanStart] = useState<{ x: number; y: number; stageX: number; stageY: number } | null>(null);
   const [isSpaceDown, setIsSpaceDown] = useState(false);
+  const [multiDragDelta, setMultiDragDelta] = useState<{ anchorId: string; dx: number; dy: number } | null>(null);
+  const multiDragBoundsRef = useRef<{
+    anchorId: string;
+    startX: number;
+    startY: number;
+    minDx: number;
+    maxDx: number;
+    minDy: number;
+    maxDy: number;
+  } | null>(null);
 
   const { 
 
@@ -54,11 +65,13 @@ export const FloorplanCanvas: React.FC = () => {
     topWidth,
     topHeight,
     topCellName,
+    padInset,
     masterCells, 
     instances,
     rulers,
     gridSize, 
     updateInstancePosition,
+    moveInstancesByDelta,
     selectedInstanceId,
     selectedInstanceIds,
     setSelectedInstance,
@@ -73,6 +86,7 @@ export const FloorplanCanvas: React.FC = () => {
     setRightSidebarPinned,
     orthogonalRuler,
     showAutoDim,
+    showOverlapDrc,
     edgeAlignmentSession,
     setEdgeAlignmentEdge,
     completeEdgeAlignment,
@@ -572,8 +586,64 @@ export const FloorplanCanvas: React.FC = () => {
     finishMarqueeSelection(e.evt?.shiftKey ?? false);
   };
 
+  const handleDragStart = (inst: Instance) => {
+    if (selectedInstanceIds.length <= 1 || !selectedInstanceIds.includes(inst.id)) {
+      multiDragBoundsRef.current = null;
+      setMultiDragDelta(null);
+      return;
+    }
+
+    const halfW = topWidth / 2;
+    const halfH = topHeight / 2;
+    const padHalfW = halfW - padInset;
+    const padHalfH = halfH - padInset;
+    let minDx = -Infinity;
+    let maxDx = Infinity;
+    let minDy = -Infinity;
+    let maxDy = Infinity;
+
+    for (const id of selectedInstanceIds) {
+      const item = instances.find(candidate => candidate.id === id);
+      if (!item) continue;
+      const master = masterCells[item.cellId];
+      if (!master) continue;
+      const bounds = getPhysicalBounds({ ...item, width: master.width, height: master.height });
+      if (master.kind === 'pad') {
+        const onTopOrBottom = Math.abs(bounds.top - padHalfH) <= 1e-6 || Math.abs(bounds.bottom + padHalfH) <= 1e-6;
+        const onLeftOrRight = Math.abs(bounds.left + padHalfW) <= 1e-6 || Math.abs(bounds.right - padHalfW) <= 1e-6;
+        minDx = Math.max(minDx, -padHalfW - bounds.left);
+        maxDx = Math.min(maxDx, padHalfW - bounds.right);
+        minDy = Math.max(minDy, -padHalfH - bounds.bottom);
+        maxDy = Math.min(maxDy, padHalfH - bounds.top);
+        if (onTopOrBottom && !onLeftOrRight) {
+          minDy = Math.max(minDy, 0);
+          maxDy = Math.min(maxDy, 0);
+        } else if (onLeftOrRight && !onTopOrBottom) {
+          minDx = Math.max(minDx, 0);
+          maxDx = Math.min(maxDx, 0);
+        }
+      } else {
+        minDx = Math.max(minDx, -halfW - bounds.left);
+        maxDx = Math.min(maxDx, halfW - bounds.right);
+        minDy = Math.max(minDy, -halfH - bounds.bottom);
+        maxDy = Math.min(maxDy, halfH - bounds.top);
+      }
+    }
+
+    multiDragBoundsRef.current = {
+      anchorId: inst.id,
+      startX: inst.x,
+      startY: inst.y,
+      minDx,
+      maxDx,
+      minDy,
+      maxDy,
+    };
+    setMultiDragDelta({ anchorId: inst.id, dx: 0, dy: 0 });
+  };
+
   // Drag bound logic: clamp physical bounds inside top cell and snap to exact grid steps
-  const dragBoundFunc = (pos: {x: number, y: number}, cellId: string, orientation: string) => {
+  const dragBoundFunc = (pos: {x: number, y: number}, cellId: string, orientation: string, instanceId: string) => {
     const master = masterCells[cellId];
     if (!master) return pos;
 
@@ -581,6 +651,23 @@ export const FloorplanCanvas: React.FC = () => {
     const worldY = (pos.y - stagePos.y) / -stageScale;
     const umX = worldX / SCALE_FACTOR;
     const umY = worldY / SCALE_FACTOR;
+
+    const groupDrag = multiDragBoundsRef.current;
+    if (groupDrag && groupDrag.anchorId === instanceId) {
+      const snapDelta = (raw: number, min: number, max: number) => {
+        const minStep = Math.ceil((min - 1e-9) / gridSize);
+        const maxStep = Math.floor((max + 1e-9) / gridSize);
+        if (minStep > maxStep) return 0;
+        const step = Math.max(minStep, Math.min(Math.round(raw / gridSize), maxStep));
+        return snapToGrid(step * gridSize, gridSize);
+      };
+      const dx = snapDelta(umX - groupDrag.startX, groupDrag.minDx, groupDrag.maxDx);
+      const dy = snapDelta(umY - groupDrag.startY, groupDrag.minDy, groupDrag.maxDy);
+      return {
+        x: (groupDrag.startX + dx) * SCALE_FACTOR * stageScale + stagePos.x,
+        y: (groupDrag.startY + dy) * SCALE_FACTOR * -stageScale + stagePos.y,
+      };
+    }
 
     try {
       const snapped = master.kind === 'pad'
@@ -593,6 +680,7 @@ export const FloorplanCanvas: React.FC = () => {
             topHeight,
             gridSize,
             orientation,
+            padInset,
           )
         : clampInstancePosition(
             umX,
@@ -611,6 +699,18 @@ export const FloorplanCanvas: React.FC = () => {
     } catch {
       return pos;
     }
+  };
+
+  const handleDragMove = (e: KonvaEventObject<DragEvent>, instanceId: string) => {
+    const groupDrag = multiDragBoundsRef.current;
+    if (!groupDrag || groupDrag.anchorId !== instanceId) return;
+    const dx = snapToGrid(e.target.x() / SCALE_FACTOR - groupDrag.startX, gridSize);
+    const dy = snapToGrid(e.target.y() / SCALE_FACTOR - groupDrag.startY, gridSize);
+    setMultiDragDelta(prev => (
+      prev && prev.anchorId === instanceId && prev.dx === dx && prev.dy === dy
+        ? prev
+        : { anchorId: instanceId, dx, dy }
+    ));
   };
 
   const pixelArrayDragBoundFunc = (pos: { x: number; y: number }) => {
@@ -641,6 +741,26 @@ export const FloorplanCanvas: React.FC = () => {
 
   const handleDragEnd = (e: KonvaEventObject<DragEvent>, instanceId: string) => {
     const node = e.target;
+    const groupDrag = multiDragBoundsRef.current;
+    if (groupDrag && groupDrag.anchorId === instanceId) {
+      multiDragBoundsRef.current = null;
+      setMultiDragDelta(null);
+      const dx = snapToGrid(node.x() / SCALE_FACTOR - groupDrag.startX, gridSize);
+      const dy = snapToGrid(node.y() / SCALE_FACTOR - groupDrag.startY, gridSize);
+      if (Math.abs(dx) <= 1e-12 && Math.abs(dy) <= 1e-12) {
+        node.x(groupDrag.startX * SCALE_FACTOR);
+        node.y(groupDrag.startY * SCALE_FACTOR);
+        return;
+      }
+      try {
+        moveInstancesByDelta(selectedInstanceIds, dx, dy);
+      } catch (error) {
+        node.x(groupDrag.startX * SCALE_FACTOR);
+        node.y(groupDrag.startY * SCALE_FACTOR);
+        alert(error instanceof Error ? error.message : 'Unable to move the selected blocks.');
+      }
+      return;
+    }
     const umX = node.x() / SCALE_FACTOR;
     const umY = node.y() / SCALE_FACTOR;
     try {
@@ -649,6 +769,11 @@ export const FloorplanCanvas: React.FC = () => {
       alert(error instanceof Error ? error.message : 'Unable to move the selected block.');
     }
   };
+
+  const overlapViolations = useMemo(
+    () => (showOverlapDrc ? findOverlapViolations({ masterCells, instances }) : []),
+    [showOverlapDrc, masterCells, instances],
+  );
 
   // ----------------------------------------------------------------
   // Gap annotation helpers
@@ -1236,6 +1361,11 @@ export const FloorplanCanvas: React.FC = () => {
           if (appMode !== 'select') return;
           let node = e.target as Konva.Node | null;
           while (node) {
+            if (node.name() === 'pixel-array') {
+              setPixelArraySelected(true);
+              setRightSidebarPinned(true);
+              return;
+            }
             const id = node.id();
             if (id && instances.some(instance => instance.id === id)) {
               setSelectedInstance(id);
@@ -1318,6 +1448,22 @@ export const FloorplanCanvas: React.FC = () => {
             shadowColor="rgba(0,0,0,0.1)"
             shadowBlur={10 / stageScale}
           />
+
+          {/* Optional seal-ring / pad-inset inner perimeter guide */}
+          {padInset > 0 && (
+            <Rect
+              x={-tw / 2 + padInset * SCALE_FACTOR}
+              y={-th / 2 + padInset * SCALE_FACTOR}
+              width={tw - padInset * 2 * SCALE_FACTOR}
+              height={th - padInset * 2 * SCALE_FACTOR}
+              fillEnabled={false}
+              stroke="#d97706"
+              strokeWidth={1.25 / stageScale}
+              dash={[6 / stageScale, 6 / stageScale]}
+              opacity={0.65}
+              listening={false}
+            />
+          )}
 
           {pixelArray?.visible && (
             <Group
@@ -1470,17 +1616,25 @@ export const FloorplanCanvas: React.FC = () => {
               ? [8 / stageScale, 6 / stageScale]
               : outlineStyle === 'dotted' ? [1.5 / stageScale, 4 / stageScale] : undefined;
 
+            const groupDragOffset = multiDragDelta && inst.id !== multiDragDelta.anchorId && selectedInstanceIds.includes(inst.id)
+              ? multiDragDelta
+              : null;
+            const renderX = (inst.x + (groupDragOffset?.dx ?? 0)) * SCALE_FACTOR;
+            const renderY = (inst.y + (groupDragOffset?.dy ?? 0)) * SCALE_FACTOR;
+
             return (
               <Group
                 key={inst.id}
                 id={inst.id}
-                x={inst.x * SCALE_FACTOR}
-                y={inst.y * SCALE_FACTOR}
+                x={renderX}
+                y={renderY}
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
                 draggable={appMode === 'select' && !edgeAlignmentSession}
-                dragBoundFunc={(pos) => dragBoundFunc(pos, inst.cellId, inst.orientation)}
+                dragBoundFunc={(pos) => dragBoundFunc(pos, inst.cellId, inst.orientation, inst.id)}
+                onDragStart={() => handleDragStart(inst)}
+                onDragMove={(e) => handleDragMove(e, inst.id)}
                 onDragEnd={(e) => handleDragEnd(e, inst.id)}
                 onClick={(e) => {
                   e.cancelBubble = true;
@@ -1600,6 +1754,40 @@ export const FloorplanCanvas: React.FC = () => {
                     </Group>
                   );
                 })()}
+              </Group>
+            );
+          })}
+
+          {/* Overlap / DRC Violation Highlights */}
+          {showOverlapDrc && overlapViolations.map(violation => {
+            const vx = violation.minX * SCALE_FACTOR;
+            const vy = violation.minY * SCALE_FACTOR;
+            const vw = violation.width * SCALE_FACTOR;
+            const vh = violation.height * SCALE_FACTOR;
+            return (
+              <Group key={`drc-overlap-${violation.id}`} listening={false}>
+                <Rect
+                  x={vx}
+                  y={vy}
+                  width={vw}
+                  height={vh}
+                  fill="rgba(239, 68, 68, 0.28)"
+                  stroke="#ef4444"
+                  strokeWidth={2 / stageScale}
+                  dash={[5 / stageScale, 3 / stageScale]}
+                />
+                <Line
+                  points={[vx, vy, vx + vw, vy + vh]}
+                  stroke="#ef4444"
+                  strokeWidth={1.25 / stageScale}
+                  opacity={0.75}
+                />
+                <Line
+                  points={[vx, vy + vh, vx + vw, vy]}
+                  stroke="#ef4444"
+                  strokeWidth={1.25 / stageScale}
+                  opacity={0.75}
+                />
               </Group>
             );
           })}
@@ -1818,7 +2006,7 @@ export const FloorplanCanvas: React.FC = () => {
             if (m.kind === 'pad') {
               try {
                 if (pendingManualPadGroup) {
-                  const snapped = snapPadToAutoOrientedEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize);
+                  const snapped = snapPadToAutoOrientedEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize, padInset);
                   previewOrientation = snapped.orientation;
                   const t = getTransformProps(previewOrientation);
                   const horizontal = snapped.side === 'top' || snapped.side === 'bottom';
@@ -1826,7 +2014,7 @@ export const FloorplanCanvas: React.FC = () => {
                   const positions = computePadGroupPositions({
                     width: m.width, height: m.height, count: pendingManualPadGroup.count,
                     pitch: pendingManualPadGroup.pitch, side: snapped.side, centerAlong,
-                    orientation: previewOrientation, topWidth, topHeight, gridSize,
+                    orientation: previewOrientation, topWidth, topHeight, gridSize, padInset,
                   });
                   return <>{positions.map((position, index) => (
                     <Group
@@ -1850,7 +2038,7 @@ export const FloorplanCanvas: React.FC = () => {
                     </Group>
                   ))}</>;
                 }
-                ghostPosition = snapPadToNearestEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize, placementOrientation);
+                ghostPosition = snapPadToNearestEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize, placementOrientation, padInset);
               } catch {
                 return null;
               }

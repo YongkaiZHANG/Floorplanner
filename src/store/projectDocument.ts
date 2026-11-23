@@ -13,6 +13,8 @@ export type ProjectSnapshot = {
   instances: Instance[];
   rulers: Ruler[];
   pixelArray?: PixelArray | null;
+  /** Optional seal-ring / edge margin (um) from the top-cell outer boundary to edge pads. */
+  padInset?: number;
 };
 
 export type ProjectDocument = {
@@ -102,6 +104,15 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     pixelArray = raw as PixelArray;
   }
 
+  let padInset: number | undefined;
+  if (value.padInset !== undefined) {
+    if (!finite(value.padInset) || value.padInset < 0 ||
+        value.padInset * 2 >= value.topWidth || value.padInset * 2 >= value.topHeight) {
+      throw new Error('Invalid pad inset.');
+    }
+    padInset = value.padInset;
+  }
+
   return {
     gridSize: value.gridSize,
     topWidth: value.topWidth,
@@ -112,6 +123,7 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     instances,
     rulers,
     ...(value.pixelArray === undefined ? {} : { pixelArray }),
+    ...(padInset === undefined ? {} : { padInset }),
   };
 };
 

@@ -21,8 +21,8 @@ const OUTLINE_STYLES: Array<{ value: NonNullable<Cell['outlineStyle']>; label: s
 
 export const Sidebar: React.FC = () => {
   const { 
-    topWidth, topHeight, topLibName, topCellName, 
-    setTopConfig,
+    topWidth, topHeight, topLibName, topCellName, padInset,
+    setTopConfig, setPadInset,
     masterCells, instances, selectedInstanceIds, setSelectedInstance,
     addMasterCell, updateMasterCell, deleteMasterCell, createPadRow, prepareManualPadPlacement,
     pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
@@ -48,6 +48,7 @@ export const Sidebar: React.FC = () => {
   const [editTopCellName, setEditTopCellName] = useState(topCellName);
   const [editTopWidth, setEditTopWidth] = useState(topWidth.toString());
   const [editTopHeight, setEditTopHeight] = useState(topHeight.toString());
+  const [editPadInset, setEditPadInset] = useState(padInset.toString());
 
   const [showPadModal, setShowPadModal] = useState(false);
   const [padCellName, setPadCellName] = useState('PAD');
@@ -57,6 +58,7 @@ export const Sidebar: React.FC = () => {
   const [padPitch, setPadPitch] = useState('12');
   const [padSide, setPadSide] = useState<PadSide>('top');
   const [padOffset, setPadOffset] = useState('0');
+  const [padInsetDraft, setPadInsetDraft] = useState(padInset.toString());
   const [padColor, setPadColor] = useState('#f59e0b');
   const [padOrientation, setPadOrientation] = useState('R0');
   const [padAutoOrient, setPadAutoOrient] = useState(true);
@@ -90,6 +92,13 @@ export const Sidebar: React.FC = () => {
   const handlePadSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     try {
+      const requestedInset = Number(padInsetDraft);
+      if (!Number.isFinite(requestedInset) || requestedInset < 0) {
+        throw new RangeError('Pad inset must be a finite number greater than or equal to zero.');
+      }
+      if (Math.abs(requestedInset - padInset) > 1e-9) {
+        setPadInset(requestedInset);
+      }
       if (padPlacementMode === 'manual') {
         prepareManualPadPlacement({
           libName: topLibName,
@@ -157,14 +166,16 @@ export const Sidebar: React.FC = () => {
     setShowCreateModal(true);
   };
 
+  const parsedPadInset = Number.isFinite(Number(padInsetDraft)) && Number(padInsetDraft) >= 0 ? Number(padInsetDraft) : 0;
+
   const fitPadsToEdge = () => {
     const rotated = resolvedPadOrientation === 'R90' || resolvedPadOrientation === 'R270';
     const physicalWidth = rotated ? Number(padHeight) : Number(padWidth);
     const physicalHeight = rotated ? Number(padWidth) : Number(padHeight);
     const along = padSide === 'top' || padSide === 'bottom' ? physicalWidth : physicalHeight;
-    const available = padSide === 'top' || padSide === 'bottom' ? topWidth : topHeight;
+    const available = (padSide === 'top' || padSide === 'bottom' ? topWidth : topHeight) - parsedPadInset * 2;
     const pitch = Number(padPitch);
-    if (!Number.isFinite(along) || along <= 0 || !Number.isFinite(pitch) || pitch < along) return;
+    if (!Number.isFinite(along) || along <= 0 || !Number.isFinite(pitch) || pitch < along || available < along) return;
     setPadCount(String(Math.max(1, Math.floor((available - along) / pitch) + 1)));
     setPadOffset('0');
   };
@@ -179,7 +190,7 @@ export const Sidebar: React.FC = () => {
   const padAlong = padSide === 'top' || padSide === 'bottom' ? padPhysicalWidth : padPhysicalHeight;
   const padGap = Number(padPitch) - padAlong;
   const padSpan = Math.max(0, (Number(padCount) - 1) * Number(padPitch) + padAlong);
-  const padAvailable = padSide === 'top' || padSide === 'bottom' ? topWidth : topHeight;
+  const padAvailable = Math.max(0, (padSide === 'top' || padSide === 'bottom' ? topWidth : topHeight) - parsedPadInset * 2);
   const padStartCoordinate = -padAvailable / 2 + Number(padOffset);
   const padEndCoordinate = padStartCoordinate + padSpan;
 
@@ -216,6 +227,7 @@ export const Sidebar: React.FC = () => {
                 setEditTopCellName(topCellName);
                 setEditTopWidth(topWidth.toString());
                 setEditTopHeight(topHeight.toString());
+                setEditPadInset(padInset.toString());
                 setShowEditTopModal(true);
               }} title="Edit Top Cell">
                 <FiSettings />
@@ -227,11 +239,19 @@ export const Sidebar: React.FC = () => {
               <span className="cell-name">{topCellName}</span>
               <span className="lib-badge">{topLibName}</span>
             </div>
-            <div className="size-badge" style={{display: 'inline-block'}}>
-              {topWidth.toFixed(1)}x{topHeight.toFixed(1)}
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap'}}>
+              <div className="size-badge" style={{display: 'inline-block'}}>
+                {topWidth.toFixed(1)}x{topHeight.toFixed(1)}
+              </div>
+              {padInset > 0 && (
+                <div className="lib-badge" title="Seal-ring / pad inset margin">
+                  Inset {formatGridValue(padInset, gridSize)} um
+                </div>
+              )}
             </div>
           </div>
           <button className="edge-pad-action" type="button" onClick={() => {
+            setPadInsetDraft(padInset.toString());
             setShowPadModal(true);
           }}>
             <FiGrid />
@@ -519,7 +539,13 @@ export const Sidebar: React.FC = () => {
           <form onSubmit={(e) => {
             e.preventDefault();
             try {
-              setTopConfig(editTopLibName, editTopCellName, Number.parseFloat(editTopWidth), Number.parseFloat(editTopHeight));
+              setTopConfig(
+                editTopLibName,
+                editTopCellName,
+                Number.parseFloat(editTopWidth),
+                Number.parseFloat(editTopHeight),
+                Number.parseFloat(editPadInset || '0'),
+              );
               setShowEditTopModal(false);
             } catch (error) {
               alert(error instanceof Error ? error.message : 'Unable to update the top cell.');
@@ -542,6 +568,11 @@ export const Sidebar: React.FC = () => {
                 <label className="label">Height (um)</label>
                 <input type="number" step="any" className="input-field" value={editTopHeight} onChange={e => setEditTopHeight(e.target.value)} required />
               </div>
+            </div>
+            <div className="form-group">
+              <label className="label">Pad Edge Inset / Seal Ring (um)</label>
+              <input type="number" min="0" step="any" className="input-field" value={editPadInset} onChange={e => setEditPadInset(e.target.value)} />
+              <small className="field-help">Optional margin from the die edge reserved for seal ring / scribe line before edge pads attach.</small>
             </div>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setShowEditTopModal(false)}>Cancel</button>
@@ -596,6 +627,10 @@ export const Sidebar: React.FC = () => {
               <div className="form-group">
                 <label className="label">Pad Height (um)</label>
                 <input type="number" min="0" step="any" className="input-field" value={padHeight} onChange={event => setPadHeight(event.target.value)} required />
+              </div>
+              <div className="form-group">
+                <label className="label">Seal-Ring Inset (um)</label>
+                <input type="number" min="0" step="any" className="input-field" value={padInsetDraft} onChange={event => setPadInsetDraft(event.target.value)} />
               </div>
             </div>
             <div className="form-row">

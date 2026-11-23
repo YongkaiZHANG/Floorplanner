@@ -191,3 +191,21 @@ test('wrapper size labels preserve exact drawn master dimensions regardless of g
   const code = generateSkillCode('demoLib', 'top', 100, 100, cells, instances, 1);
   assert.match(code, /"12\.3 x 6\.7 um"/);
 });
+
+test('supports non-destructive master preservation and direct top-cell IP placement options', () => {
+  const cells = {
+    ip: { id: 'ip', libName: 'demoLib', cellName: 'ADC', width: 20, height: 10, color: '#fff' },
+  };
+  const instances = [
+    { id: 'ip0', cellId: 'ip', name: 'I_ADC', x: 10, y: -5, orientation: 'R90' },
+  ];
+  const code = generateSkillCode('demoLib', 'top', 100, 100, cells, instances, 0.005, null, {
+    preserveExistingMasters: true,
+    useIpWrappers: false,
+  });
+
+  assert.match(code, /if\(ddGetObj\("demoLib" "ADC" "layout"\) then/);
+  assert.match(code, /Preserving existing master/);
+  assert.doesNotMatch(code, /top_ADC_PLACED/);
+  assert.match(code, /dbCreateInst\(cv master "I_ADC" 10:-5 "R90" 1\)/);
+});

@@ -104,6 +104,8 @@ export type ProjectState = {
   topHeight: number;
   topLibName: string;
   topCellName: string;
+  /** Optional perimeter margin (um) reserved for seal ring / scribe line before edge pads. */
+  padInset: number;
   
   masterCells: Record<string, Cell>;
   instances: Instance[];
@@ -120,6 +122,7 @@ export type ProjectState = {
   rightSidebarPinned: boolean;
   orthogonalRuler: boolean;
   showAutoDim: boolean;
+  showOverlapDrc: boolean;
   
   placementMasterId: string | null;
   placementOrientation: string;
@@ -133,7 +136,8 @@ export type ProjectState = {
   setAppMode: (mode: AppMode) => void;
   setTopDimensions: (w: number, h: number) => void;
   setTopNames: (lib: string, cell: string) => void;
-  setTopConfig: (lib: string, cell: string, w: number, h: number) => void;
+  setTopConfig: (lib: string, cell: string, w: number, h: number, padInset?: number) => void;
+  setPadInset: (inset: number) => void;
   setShowCreateModal: (show: boolean) => void;
   setShowInstantiateModal: (show: boolean) => void;
   setLeftSidebarPinned: (pinned: boolean) => void;
@@ -150,11 +154,14 @@ export type ProjectState = {
   startPixelArrayPlacement: (width: number, height: number) => void;
   placePixelArray: (centerX: number, centerY: number) => void;
   updatePixelArrayPosition: (x: number, y: number) => void;
+  updatePixelArrayGeometry: (x: number, y: number, width: number, height: number) => void;
   setPixelArrayVisible: (visible: boolean) => void;
   setPixelArraySelected: (selected: boolean) => void;
   deletePixelArray: () => void;
   
   updateInstancePosition: (instanceId: string, x: number, y: number) => void;
+  moveInstancesByDelta: (instanceIds: string[], deltaX: number, deltaY: number) => void;
+  renameInstance: (instanceId: string, name: string) => void;
   updateInstanceOrientation: (instanceId: string, orientation: string) => void;
   setSelectedInstance: (id: string | null, additive?: boolean) => void;
   setSelection: (ids: string[]) => void;
@@ -185,6 +192,7 @@ export type ProjectState = {
   distributeSelectedInstances: (axis: DistributionAxis) => void;
   toggleOrthogonalRuler: () => void;
   toggleAutoDim: () => void;
+  toggleOverlapDrc: () => void;
   loadProject: (data: ProjectSnapshot) => void;
 };
 
@@ -257,6 +265,17 @@ export const clampInstancePosition = (
   return { x: clampedX, y: clampedY };
 };
 
+const normalizePadInset = (inset: number, topWidth: number, topHeight: number, gridSize: number) => {
+  if (!Number.isFinite(inset) || inset < 0) {
+    throw new RangeError('Pad inset must be a finite number greater than or equal to zero');
+  }
+  const snapped = snapToGrid(inset, gridSize);
+  if (snapped * 2 >= topWidth || snapped * 2 >= topHeight) {
+    throw new RangeError('Pad inset must leave a positive interior inside the top cell');
+  }
+  return snapped;
+};
+
 export const snapPadToNearestEdge = (
   x: number,
   y: number,
@@ -266,14 +285,20 @@ export const snapPadToNearestEdge = (
   topHeight: number,
   gridSize: number,
   orientation = 'R0',
+  padInset = 0,
 ) => {
+  const innerW = topWidth - padInset * 2;
+  const innerH = topHeight - padInset * 2;
+  if (innerW <= 0 || innerH <= 0) {
+    throw new RangeError('Pad inset leaves no room inside the top cell');
+  }
   const localBounds = getPhysicalBounds({ id: 'pad-preview', x: 0, y: 0, orientation, width, height });
-  const inside = clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, gridSize);
+  const inside = clampInstancePosition(x, y, orientation, width, height, innerW, innerH, gridSize);
   const edgeCoordinates = {
-    left: -topWidth / 2 - localBounds.left,
-    right: topWidth / 2 - localBounds.right,
-    bottom: -topHeight / 2 - localBounds.bottom,
-    top: topHeight / 2 - localBounds.top,
+    left: -innerW / 2 - localBounds.left,
+    right: innerW / 2 - localBounds.right,
+    bottom: -innerH / 2 - localBounds.bottom,
+    top: innerH / 2 - localBounds.top,
   };
   const onGrid = (value: number) => Math.abs(snapToGrid(value, gridSize) - value) <= 1e-9;
   const candidates = [
@@ -303,29 +328,35 @@ export const snapPadToAutoOrientedEdge = (
   topWidth: number,
   topHeight: number,
   gridSize: number,
+  padInset = 0,
 ) => {
+  const innerW = topWidth - padInset * 2;
+  const innerH = topHeight - padInset * 2;
+  if (innerW <= 0 || innerH <= 0) {
+    throw new RangeError('Pad inset leaves no room inside the top cell');
+  }
   const candidates = (Object.keys(PAD_ORIENTATION_BY_SIDE) as PadSide[]).map(side => {
     const orientation = PAD_ORIENTATION_BY_SIDE[side];
     const local = getPhysicalBounds({ id: 'auto-pad-preview', x: 0, y: 0, orientation, width, height });
-    const inside = clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, gridSize);
+    const inside = clampInstancePosition(x, y, orientation, width, height, innerW, innerH, gridSize);
     const target = {
       x: side === 'left'
-        ? -topWidth / 2 - local.left
+        ? -innerW / 2 - local.left
         : side === 'right'
-          ? topWidth / 2 - local.right
+          ? innerW / 2 - local.right
           : inside.x,
       y: side === 'bottom'
-        ? -topHeight / 2 - local.bottom
+        ? -innerH / 2 - local.bottom
         : side === 'top'
-          ? topHeight / 2 - local.top
+          ? innerH / 2 - local.top
           : inside.y,
     };
     const snapped = { x: snapToGrid(target.x, gridSize), y: snapToGrid(target.y, gridSize) };
     const physical = getPhysicalBounds({ id: 'auto-pad-candidate', ...snapped, orientation, width, height });
-    const attached = side === 'left' ? Math.abs(physical.left + topWidth / 2) <= 1e-9
-      : side === 'right' ? Math.abs(physical.right - topWidth / 2) <= 1e-9
-        : side === 'bottom' ? Math.abs(physical.bottom + topHeight / 2) <= 1e-9
-          : Math.abs(physical.top - topHeight / 2) <= 1e-9;
+    const attached = side === 'left' ? Math.abs(physical.left + innerW / 2) <= 1e-9
+      : side === 'right' ? Math.abs(physical.right - innerW / 2) <= 1e-9
+        : side === 'bottom' ? Math.abs(physical.bottom + innerH / 2) <= 1e-9
+          : Math.abs(physical.top - innerH / 2) <= 1e-9;
     return attached ? { ...snapped, side, orientation, distance: Math.hypot(x - snapped.x, y - snapped.y) } : null;
   }).filter((candidate): candidate is { x: number; y: number; side: PadSide; orientation: string; distance: number } => candidate !== null);
 
@@ -345,10 +376,17 @@ type PadGroupGeometry = {
   topWidth: number;
   topHeight: number;
   gridSize: number;
+  padInset?: number;
   clampAlong?: boolean;
 };
 
 export const computePadGroupPositions = (config: PadGroupGeometry) => {
+  const padInset = config.padInset ?? 0;
+  const innerW = config.topWidth - padInset * 2;
+  const innerH = config.topHeight - padInset * 2;
+  if (innerW <= 0 || innerH <= 0) {
+    throw new RangeError('Pad inset leaves no room inside the top cell');
+  }
   const local = getPhysicalBounds({ id: 'pad-group-preview', x: 0, y: 0, orientation: config.orientation, width: config.width, height: config.height });
   const horizontal = config.side === 'top' || config.side === 'bottom';
   const padAlong = horizontal ? local.right - local.left : local.top - local.bottom;
@@ -356,7 +394,7 @@ export const computePadGroupPositions = (config: PadGroupGeometry) => {
     throw new RangeError(`Pad pitch must be at least the rotated pad ${horizontal ? 'width' : 'height'} (${padAlong} um) to avoid overlap`);
   }
   const span = (config.count - 1) * config.pitch + padAlong;
-  const available = horizontal ? config.topWidth : config.topHeight;
+  const available = horizontal ? innerW : innerH;
   if (span > available + 1e-9) throw new RangeError(`Pad group span ${span} um exceeds the ${available} um top-cell edge`);
 
   const minCenter = -available / 2 + span / 2;
@@ -374,11 +412,11 @@ export const computePadGroupPositions = (config: PadGroupGeometry) => {
     const along = firstCenter + index * config.pitch;
     const targetX = horizontal
       ? along - local.centerX
-      : config.side === 'left' ? -config.topWidth / 2 - local.left : config.topWidth / 2 - local.right;
+      : config.side === 'left' ? -innerW / 2 - local.left : innerW / 2 - local.right;
     const targetY = horizontal
-      ? config.side === 'bottom' ? -config.topHeight / 2 - local.bottom : config.topHeight / 2 - local.top
+      ? config.side === 'bottom' ? -innerH / 2 - local.bottom : innerH / 2 - local.top
       : along - local.centerY;
-    const position = clampInstancePosition(targetX, targetY, config.orientation, config.width, config.height, config.topWidth, config.topHeight, config.gridSize);
+    const position = clampInstancePosition(targetX, targetY, config.orientation, config.width, config.height, innerW, innerH, config.gridSize);
     if (Math.abs(position.x - targetX) > 1e-8 || Math.abs(position.y - targetY) > 1e-8) {
       throw new RangeError('Pad group must fit inside the top cell and land exactly on the placement grid');
     }
@@ -450,6 +488,7 @@ export const getProjectSnapshot = (state: ProjectState): ProjectSnapshot => ({
   instances: state.instances,
   rulers: state.rulers,
   pixelArray: state.pixelArray,
+  ...(state.padInset > 0 ? { padInset: state.padInset } : {}),
 });
 
 const commitProjectPatch = (
@@ -458,7 +497,8 @@ const commitProjectPatch = (
   patch: Partial<ProjectSnapshot>,
 ) => {
   const before = getProjectSnapshot(state);
-  const after = { ...before, ...patch };
+  const after: ProjectSnapshot = { ...before, ...patch };
+  if (after.padInset === 0) delete after.padInset;
   return {
     ...patch,
     history: recordHistory(state.history, label, before, after),
@@ -528,12 +568,23 @@ const isPadTouchingPerimeter = (
   bounds: { left: number; right: number; bottom: number; top: number },
   topWidth: number,
   topHeight: number,
-) => (
-  Math.abs(bounds.left + topWidth / 2) <= 1e-9
-  || Math.abs(bounds.right - topWidth / 2) <= 1e-9
-  || Math.abs(bounds.bottom + topHeight / 2) <= 1e-9
-  || Math.abs(bounds.top - topHeight / 2) <= 1e-9
-);
+  padInset = 0,
+) => {
+  const halfW = topWidth / 2 - padInset;
+  const halfH = topHeight / 2 - padInset;
+  return (
+    bounds.left >= -halfW - 1e-9
+    && bounds.right <= halfW + 1e-9
+    && bounds.bottom >= -halfH - 1e-9
+    && bounds.top <= halfH + 1e-9
+    && (
+      Math.abs(bounds.left + halfW) <= 1e-9
+      || Math.abs(bounds.right - halfW) <= 1e-9
+      || Math.abs(bounds.bottom + halfH) <= 1e-9
+      || Math.abs(bounds.top - halfH) <= 1e-9
+    )
+  );
+};
 
 const alignmentGroupPositionPatch = (
   state: ProjectState,
@@ -566,7 +617,7 @@ const alignmentGroupPositionPatch = (
     }
     if (master.kind === 'pad') {
       const bounds = getPhysicalBounds({ ...instance, x: checked.x, y: checked.y, width: master.width, height: master.height });
-      if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight)) {
+      if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
         throw new RangeError(`Cannot shift the group because pad ${instance.name} would leave the top-cell perimeter`);
       }
     }
@@ -692,6 +743,7 @@ export const useStore = create<ProjectState>((set) => ({
   topHeight: 100,
   topLibName: 'chip_lib',
   topCellName: 'top_asic',
+  padInset: 0,
   
   masterCells: {},
   instances: [],
@@ -714,15 +766,17 @@ export const useStore = create<ProjectState>((set) => ({
   lastAlignmentSpacing: readStoredAlignmentSpacing(),
   orthogonalRuler: false,
   showAutoDim: false,
+  showOverlapDrc: true,
   clipboard: [],
 
   setGridSize: (size) => set((state) => {
     if (!Number.isFinite(size) || size <= 0) return state;
+    const padInset = normalizePadInset(state.padInset, state.topWidth, state.topHeight, size);
     const instances = state.instances.map(instance => {
       const master = state.masterCells[instance.cellId];
       if (!master) return instance;
       const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, state.topWidth, state.topHeight, size, instance.orientation)
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, state.topWidth, state.topHeight, size, instance.orientation, padInset)
         : clampInstancePosition(
             instance.x,
             instance.y,
@@ -738,7 +792,7 @@ export const useStore = create<ProjectState>((set) => ({
     const pixelArray = state.pixelArray
       ? normalizePixelArray(state.pixelArray, state.topWidth, state.topHeight, size)
       : null;
-    return commitProjectPatch(state, 'Change grid', { gridSize: size, instances, pixelArray });
+    return commitProjectPatch(state, 'Change grid', { gridSize: size, padInset, instances, pixelArray });
   }),
   setAppMode: (mode) => set({
     appMode: mode,
@@ -750,18 +804,19 @@ export const useStore = create<ProjectState>((set) => ({
     if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
       throw new RangeError('Top-cell width and height must be positive finite numbers');
     }
+    const padInset = normalizePadInset(state.padInset, w, h, state.gridSize);
     const instances = state.instances.map(instance => {
       const master = state.masterCells[instance.cellId];
       if (!master) return instance;
       const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, w, h, state.gridSize, instance.orientation)
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, w, h, state.gridSize, instance.orientation, padInset)
         : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, w, h, state.gridSize);
       return { ...instance, x: position.x, y: position.y };
     });
     const pixelArray = state.pixelArray
       ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
       : null;
-    return commitProjectPatch(state, 'Resize top cell', { topWidth: w, topHeight: h, instances, pixelArray });
+    return commitProjectPatch(state, 'Resize top cell', { topWidth: w, topHeight: h, padInset, instances, pixelArray });
   }),
   setTopNames: (lib, cell) => set((state) => {
     const topLibName = lib.trim();
@@ -773,13 +828,14 @@ export const useStore = create<ProjectState>((set) => ({
     ]));
     return commitProjectPatch(state, 'Rename top cell library and hierarchy', { topLibName, topCellName, masterCells });
   }),
-  setTopConfig: (lib, cell, w, h) => set((state) => {
+  setTopConfig: (lib, cell, w, h, rawPadInset) => set((state) => {
     const topLibName = lib.trim();
     const topCellName = cell.trim();
     if (!topLibName || !topCellName) throw new Error('Top library and cell names are required');
     if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
       throw new RangeError('Top-cell width and height must be positive finite numbers');
     }
+    const padInset = normalizePadInset(rawPadInset ?? state.padInset, w, h, state.gridSize);
     const masterCells = Object.fromEntries(Object.entries(state.masterCells).map(([id, master]) => [
       id,
       { ...master, libName: topLibName },
@@ -788,7 +844,7 @@ export const useStore = create<ProjectState>((set) => ({
       const master = masterCells[instance.cellId];
       if (!master) return instance;
       const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, w, h, state.gridSize, instance.orientation)
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, w, h, state.gridSize, instance.orientation, padInset)
         : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, w, h, state.gridSize);
       return { ...instance, x: position.x, y: position.y };
     });
@@ -800,10 +856,31 @@ export const useStore = create<ProjectState>((set) => ({
       topCellName,
       topWidth: w,
       topHeight: h,
+      padInset,
       masterCells,
       instances,
       pixelArray,
     });
+  }),
+  setPadInset: (rawInset) => set((state) => {
+    const padInset = normalizePadInset(rawInset, state.topWidth, state.topHeight, state.gridSize);
+    const instances = state.instances.map(instance => {
+      const master = state.masterCells[instance.cellId];
+      if (!master || master.kind !== 'pad') return instance;
+      const position = snapPadToNearestEdge(
+        instance.x,
+        instance.y,
+        master.width,
+        master.height,
+        state.topWidth,
+        state.topHeight,
+        state.gridSize,
+        instance.orientation,
+        padInset,
+      );
+      return { ...instance, x: position.x, y: position.y };
+    });
+    return commitProjectPatch(state, `Set pad inset ${padInset} um`, { padInset, instances });
   }),
   setShowCreateModal: (show) => set({ showCreateModal: show }),
   setShowInstantiateModal: (show) => set({ showInstantiateModal: show }),
@@ -862,7 +939,7 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = state.instances.map(instance => {
       if (instance.cellId !== id) return instance;
       const position = masterCells[id].kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, w, h, state.topWidth, state.topHeight, state.gridSize, instance.orientation)
+        ? snapPadToNearestEdge(instance.x, instance.y, w, h, state.topWidth, state.topHeight, state.gridSize, instance.orientation, state.padInset)
         : clampInstancePosition(instance.x, instance.y, instance.orientation, w, h, state.topWidth, state.topHeight, state.gridSize);
       return { ...instance, x: position.x, y: position.y };
     });
@@ -897,7 +974,7 @@ export const useStore = create<ProjectState>((set) => ({
 
     const effectiveOrientation = orientation;
     const clamped = master.kind === 'pad'
-      ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, effectiveOrientation)
+      ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, effectiveOrientation, state.padInset)
       : clampInstancePosition(targetX, targetY, effectiveOrientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
     
     const newInst: Instance = {
@@ -948,6 +1025,7 @@ export const useStore = create<ProjectState>((set) => ({
       state.topHeight,
       state.gridSize,
       orientation,
+      state.padInset,
     );
 
     const horizontal = config.side === 'top' || config.side === 'bottom';
@@ -959,14 +1037,15 @@ export const useStore = create<ProjectState>((set) => ({
       ? localBounds.right - localBounds.left
       : localBounds.top - localBounds.bottom;
     const rowSpan = (config.count - 1) * config.pitch + padAlong;
-    const availableAlong = horizontal ? state.topWidth : state.topHeight;
+    const availableAlong = (horizontal ? state.topWidth : state.topHeight) - state.padInset * 2;
     const centerAlong = config.offsetReference === 'start'
       ? -availableAlong / 2 + config.offset + rowSpan / 2
       : config.offset;
     const positions = computePadGroupPositions({
       width: config.width, height: config.height, count: config.count, pitch: config.pitch,
       side: config.side, centerAlong, orientation,
-      topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize, clampAlong: false,
+      topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize,
+      padInset: state.padInset, clampAlong: false,
     });
 
     const existingMaster = Object.values(state.masterCells).find(cell => (
@@ -1047,6 +1126,7 @@ export const useStore = create<ProjectState>((set) => ({
       state.topWidth,
       state.topHeight,
       state.gridSize,
+      state.padInset,
     );
     const existingMaster = Object.values(state.masterCells).find(cell => (
       cell.libName === libName && cell.cellName === cellName
@@ -1095,13 +1175,14 @@ export const useStore = create<ProjectState>((set) => ({
     if (!pending) return state;
     const master = state.masterCells[pending.masterId];
     if (!master || master.kind !== 'pad') return state;
-    const snapped = snapPadToAutoOrientedEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+    const snapped = snapPadToAutoOrientedEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, state.padInset);
     const horizontal = snapped.side === 'top' || snapped.side === 'bottom';
     const centerAlong = horizontal ? x : y;
     const positions = computePadGroupPositions({
       width: master.width, height: master.height, count: pending.count, pitch: pending.pitch,
       side: snapped.side, centerAlong, orientation: snapped.orientation,
       topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize,
+      padInset: state.padInset,
     });
     const instances = [...state.instances];
     for (const position of positions) {
@@ -1172,6 +1253,31 @@ export const useStore = create<ProjectState>((set) => ({
     return commitProjectPatch(state, 'Move pixel array', { pixelArray });
   }),
 
+  updatePixelArrayGeometry: (x, y, width, height) => set((state) => {
+    if (!state.pixelArray) return state;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+      throw new RangeError('Pixel array coordinates and dimensions must be finite numbers');
+    }
+    if (width <= 0 || height <= 0) {
+      throw new RangeError('Pixel array width and height must be positive');
+    }
+    const snappedWidth = snapToGrid(width, state.gridSize);
+    const snappedHeight = snapToGrid(height, state.gridSize);
+    if (snappedWidth <= 0 || snappedHeight <= 0) {
+      throw new RangeError('Pixel array dimensions must be at least one placement-grid step');
+    }
+    if (snappedWidth >= state.topWidth || snappedHeight >= state.topHeight) {
+      throw new RangeError('Pixel array must be smaller than the top cell in both dimensions');
+    }
+    const pixelArray = normalizePixelArray(
+      { ...state.pixelArray, x, y, width: snappedWidth, height: snappedHeight },
+      state.topWidth,
+      state.topHeight,
+      state.gridSize,
+    );
+    return commitProjectPatch(state, 'Edit pixel array', { pixelArray });
+  }),
+
   setPixelArrayVisible: (visible) => set((state) => {
     if (!state.pixelArray || state.pixelArray.visible === visible) return state;
     return {
@@ -1208,6 +1314,7 @@ export const useStore = create<ProjectState>((set) => ({
             state.topHeight,
             state.gridSize,
             inst.orientation,
+            state.padInset,
           );
           return { ...inst, x: position.x, y: position.y };
         }
@@ -1217,6 +1324,60 @@ export const useStore = create<ProjectState>((set) => ({
       return inst;
     });
     return commitProjectPatch(state, `Move ${state.instances.find(instance => instance.id === instanceId)?.name ?? 'instance'}`, { instances });
+  }),
+
+  moveInstancesByDelta: (instanceIds, deltaX, deltaY) => set((state) => {
+    if (instanceIds.length === 0) return state;
+    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+      throw new RangeError('Movement delta must be finite');
+    }
+    const snappedDx = snapToGrid(deltaX, state.gridSize);
+    const snappedDy = snapToGrid(deltaY, state.gridSize);
+    if (Math.abs(snappedDx) <= 1e-12 && Math.abs(snappedDy) <= 1e-12) return state;
+    const idSet = new Set(instanceIds);
+    const instances = state.instances.map(inst => {
+      if (!idSet.has(inst.id)) return inst;
+      const master = state.masterCells[inst.cellId];
+      if (!master) return inst;
+      const requestedX = snapToGrid(inst.x + snappedDx, state.gridSize);
+      const requestedY = snapToGrid(inst.y + snappedDy, state.gridSize);
+      const checked = clampInstancePosition(
+        requestedX,
+        requestedY,
+        inst.orientation,
+        master.width,
+        master.height,
+        state.topWidth,
+        state.topHeight,
+        state.gridSize,
+      );
+      if (Math.abs(checked.x - requestedX) > 1e-9 || Math.abs(checked.y - requestedY) > 1e-9) {
+        throw new RangeError(`Cannot move the selected group without placing ${inst.name} outside the top cell`);
+      }
+      if (master.kind === 'pad') {
+        const bounds = getPhysicalBounds({ ...inst, x: checked.x, y: checked.y, width: master.width, height: master.height });
+        if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
+          throw new RangeError(`Cannot move the group because pad ${inst.name} would leave the pad perimeter`);
+        }
+      }
+      return { ...inst, x: checked.x, y: checked.y };
+    });
+    return commitProjectPatch(state, `Move ${instanceIds.length} block${instanceIds.length === 1 ? '' : 's'}`, { instances });
+  }),
+
+  renameInstance: (instanceId, rawName) => set((state) => {
+    const existing = state.instances.find(inst => inst.id === instanceId);
+    if (!existing) return state;
+    const name = rawName.trim();
+    if (!name) throw new Error('Instance name is required');
+    if (name === existing.name) return state;
+    if (state.instances.some(inst => inst.id !== instanceId && inst.name === name)) {
+      throw new Error(`Instance name ${name} is already used`);
+    }
+    const instances = state.instances.map(inst => (
+      inst.id === instanceId ? { ...inst, name } : inst
+    ));
+    return commitProjectPatch(state, `Rename ${existing.name} to ${name}`, { instances });
   }),
   
   updateInstanceOrientation: (instanceId, orientation) => set((state) => {
@@ -1229,7 +1390,7 @@ export const useStore = create<ProjectState>((set) => ({
         const centeredX = currentBounds.centerX - nextLocalBounds.centerX;
         const centeredY = currentBounds.centerY - nextLocalBounds.centerY;
         const clamped = master.kind === 'pad'
-          ? snapPadToNearestEdge(centeredX, centeredY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation)
+          ? snapPadToNearestEdge(centeredX, centeredY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset)
           : clampInstancePosition(centeredX, centeredY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
         return { ...inst, orientation, x: clamped.x, y: clamped.y };
       }
@@ -1326,7 +1487,7 @@ export const useStore = create<ProjectState>((set) => ({
         }
         if (master.kind === 'pad') {
           const bounds = getPhysicalBounds({ ...inst, x: clamped.x, y: clamped.y, width: master.width, height: master.height });
-          if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight)) {
+          if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
             error = true;
             return inst;
           }
@@ -1369,7 +1530,7 @@ export const useStore = create<ProjectState>((set) => ({
         const x = item.x + offset;
         const y = item.y - offset; // y points up, so -offset moves it down visually
         const clamped = master.kind === 'pad'
-          ? snapPadToNearestEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation)
+          ? snapPadToNearestEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset)
           : clampInstancePosition(x, y, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
         newInst.x = clamped.x;
         newInst.y = clamped.y;
@@ -1377,7 +1538,7 @@ export const useStore = create<ProjectState>((set) => ({
         // Fallback to original spot clamped
         try {
           const clamped = master.kind === 'pad'
-            ? snapPadToNearestEdge(item.x, item.y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation)
+            ? snapPadToNearestEdge(item.x, item.y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset)
             : clampInstancePosition(item.x, item.y, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
           newInst.x = clamped.x;
           newInst.y = clamped.y;
@@ -1417,6 +1578,7 @@ export const useStore = create<ProjectState>((set) => ({
     if (!result) return state;
     return {
       ...result.snapshot,
+      padInset: result.snapshot.padInset ?? 0,
       history: result.history,
       ...selectionAfterInstancesChange(state, result.snapshot.instances),
       edgeAlignmentSession: null,
@@ -1433,6 +1595,7 @@ export const useStore = create<ProjectState>((set) => ({
     if (!result) return state;
     return {
       ...result.snapshot,
+      padInset: result.snapshot.padInset ?? 0,
       history: result.history,
       ...selectionAfterInstancesChange(state, result.snapshot.instances),
       edgeAlignmentSession: null,
@@ -1467,7 +1630,7 @@ export const useStore = create<ProjectState>((set) => ({
       const master = state.masterCells[instance.cellId];
       if (master?.kind === 'pad') {
         const bounds = getPhysicalBounds({ ...instance, x: position.x, y: position.y, width: master.width, height: master.height });
-        if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight)) {
+        if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
           throw new RangeError(`Cannot align because pad ${instance.name} would leave the top-cell perimeter`);
         }
       }
@@ -1661,7 +1824,7 @@ export const useStore = create<ProjectState>((set) => ({
       const master = state.masterCells[instance.cellId];
       if (master?.kind === 'pad') {
         const bounds = getPhysicalBounds({ ...instance, x: position.x, y: position.y, width: master.width, height: master.height });
-        if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight)) {
+        if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
           throw new RangeError(`Cannot distribute because pad ${instance.name} would leave the top-cell perimeter`);
         }
       }
@@ -1672,11 +1835,13 @@ export const useStore = create<ProjectState>((set) => ({
   
   toggleOrthogonalRuler: () => set((state) => ({ orthogonalRuler: !state.orthogonalRuler })),
   toggleAutoDim: () => set((state) => ({ showAutoDim: !state.showAutoDim })),
+  toggleOverlapDrc: () => set((state) => ({ showOverlapDrc: !state.showOverlapDrc })),
 
   loadProject: (data) => set((state) => {
     const gridSize = data.gridSize ?? state.gridSize;
     const topWidth = data.topWidth ?? state.topWidth;
     const topHeight = data.topHeight ?? state.topHeight;
+    const padInset = normalizePadInset(data.padInset ?? 0, topWidth, topHeight, gridSize);
     const masterCells = Object.fromEntries(Object.entries(data.masterCells ?? {}).map(([id, master]) => [
       id,
       { ...master, libName: data.topLibName ?? state.topLibName },
@@ -1685,7 +1850,7 @@ export const useStore = create<ProjectState>((set) => ({
       const master = masterCells[instance.cellId];
       if (!master) return instance;
       const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, topWidth, topHeight, gridSize, instance.orientation)
+        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, topWidth, topHeight, gridSize, instance.orientation, padInset)
         : clampInstancePosition(
             instance.x,
             instance.y,
@@ -1706,6 +1871,7 @@ export const useStore = create<ProjectState>((set) => ({
       gridSize,
       topWidth,
       topHeight,
+      padInset,
       topLibName: data.topLibName ?? state.topLibName,
       topCellName: data.topCellName ?? state.topCellName,
       masterCells,

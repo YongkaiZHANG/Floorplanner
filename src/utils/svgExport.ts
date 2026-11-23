@@ -89,6 +89,7 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     instances: state.instances,
     rulers: state.rulers,
     pixelArray: state.pixelArray ?? null,
+    ...(state.padInset !== undefined && state.padInset > 0 ? { padInset: state.padInset } : {}),
   };
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${-maxY} ${vbW} ${vbH}" style="background-color: #f8fafc;">\n`;
@@ -99,6 +100,11 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
   
   // Top ASIC Boundary
   svg += `  <rect x="${-tw / 2}" y="${-th / 2}" width="${tw}" height="${th}" fill="#ffffff" stroke="#334155" stroke-width="3" stroke-dasharray="20,10" vector-effect="non-scaling-stroke" />\n`;
+
+  if (state.padInset && state.padInset > 0) {
+    const insetPx = state.padInset * sf;
+    svg += `  <rect x="${-tw / 2 + insetPx}" y="${-th / 2 + insetPx}" width="${tw - insetPx * 2}" height="${th - insetPx * 2}" fill="none" stroke="#d97706" stroke-width="1.5" stroke-dasharray="6,6" opacity="0.6" vector-effect="non-scaling-stroke" />\n`;
+  }
 
   if (state.pixelArray?.visible) {
     const array = state.pixelArray;

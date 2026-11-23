@@ -73,3 +73,17 @@ test('pixel array survives serialization and must remain inside the top cell', (
   pixelProject.pixelArray = { x: -50, y: -40, width: 100, height: 20, visible: true };
   assert.throws(() => parseProjectDocument(JSON.stringify(pixelProject)), /Invalid pixel array/);
 });
+
+test('pad inset survives serialization and rejects negative or oversized values', () => {
+  const insetProject = { ...structuredClone(project), padInset: 10 };
+  assert.deepEqual(parseProjectDocument(serializeProjectDocument(insetProject)), insetProject);
+
+  assert.throws(
+    () => parseProjectDocument(JSON.stringify({ ...project, padInset: -5 })),
+    /Invalid pad inset/,
+  );
+  assert.throws(
+    () => parseProjectDocument(JSON.stringify({ ...project, padInset: 40 })),
+    /Invalid pad inset/,
+  );
+});

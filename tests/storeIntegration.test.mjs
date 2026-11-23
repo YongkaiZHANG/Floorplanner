@@ -665,3 +665,57 @@ test('setTopConfig updates names and dimensions in one atomic undo step and dele
   assert.equal(useStore.getState().topWidth, 100);
   assert.equal(useStore.getState().topHeight, 100);
 });
+
+test('instance renaming, pixel array geometry edits, multi-block drag deltas, and pad inset all integrate with undo', () => {
+  useStore.getState().loadProject({ ...emptyProject, gridSize: 1 });
+  useStore.getState().addMasterCell('testLib', 'ADC', 10, 10, '#2563eb');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -20, 0, 'R0');
+  useStore.getState().placeInstance(master.id, 10, 0, 'R0');
+  const [first, second] = useStore.getState().instances;
+
+  // Rename instance & reject duplicates
+  useStore.getState().renameInstance(first.id, 'I_ADC_L');
+  assert.equal(useStore.getState().instances[0].name, 'I_ADC_L');
+  assert.throws(() => useStore.getState().renameInstance(second.id, 'I_ADC_L'), /already used/);
+  useStore.getState().undo();
+  assert.equal(useStore.getState().instances[0].name, 'I0');
+  useStore.getState().redo();
+  assert.equal(useStore.getState().instances[0].name, 'I_ADC_L');
+
+  // Multi-block drag delta moves both blocks in one Undo step
+  const beforeDrag = useStore.getState().history.past.length;
+  useStore.getState().moveInstancesByDelta([first.id, second.id], 5, -10);
+  assert.equal(useStore.getState().history.past.length, beforeDrag + 1);
+  assert.deepEqual(
+    useStore.getState().instances.map(instance => [instance.x, instance.y]),
+    [[-15, -10], [15, -10]],
+  );
+  assert.throws(
+    () => useStore.getState().moveInstancesByDelta([first.id, second.id], 40, 0),
+    /outside the top cell/,
+  );
+
+  // Pixel array geometry editing
+  useStore.getState().startPixelArrayPlacement(40, 30);
+  useStore.getState().placePixelArray(0, 0);
+  useStore.getState().updatePixelArrayGeometry(-10, -5, 50, 20);
+  assert.deepEqual(useStore.getState().pixelArray, {
+    x: -10, y: -5, width: 50, height: 20, visible: true,
+  });
+
+  // Pad inset (seal-ring margin) shifts pad perimeter inward and restores on undo
+  useStore.getState().setPadInset(10);
+  assert.equal(useStore.getState().padInset, 10);
+  useStore.getState().createPadRow({
+    libName: 'testLib', cellName: 'PAD', width: 10, height: 5, color: '#f59e0b',
+    count: 2, pitch: 20, side: 'top', offset: 0,
+  });
+  const padMaster = Object.values(useStore.getState().masterCells).find(cell => cell.kind === 'pad');
+  const pads = useStore.getState().instances.filter(instance => instance.cellId === padMaster.id);
+  const padBounds = pads.map(pad => getPhysicalBounds({ ...pad, width: padMaster.width, height: padMaster.height }));
+  assert.deepEqual(padBounds.map(b => b.top), [40, 40]); // 50 - 10 inset = 40
+  useStore.getState().undo(); // undo pad row
+  useStore.getState().undo(); // undo setPadInset
+  assert.equal(useStore.getState().padInset, 0);
+});
