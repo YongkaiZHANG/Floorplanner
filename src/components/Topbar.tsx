@@ -7,7 +7,7 @@ import { computeFloorplanMetrics, downloadCsvFile, generateFloorplanCsv } from '
 import { createCisDemoProject } from '../utils/demoProjects';
 import { formatGridValue } from '../utils/grid';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
-import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle } from 'react-icons/fi';
+import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle, FiFolder, FiChevronDown, FiCpu, FiFileText } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import { EditingToolbar } from './EditingToolbar';
 import type { AlignmentAction } from './EditingToolbar';
@@ -19,6 +19,9 @@ export const Topbar: React.FC = () => {
   const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, padInset, setTopDimensions, masterCells, instances, rulers, pixelArray, pixelArraySelected, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
+  const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
+  const fileMenuRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
       return localStorage.getItem('ic-floorplanner:tutorial-seen:v19') !== 'yes';
@@ -184,13 +187,23 @@ export const Topbar: React.FC = () => {
   useEffect(() => {
     const closeModalsOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (showCodePreview) setShowCodePreview(false);
+      if (isFileMenuOpen) setIsFileMenuOpen(false);
+      else if (showCodePreview) setShowCodePreview(false);
       else if (showSummary) setShowSummary(false);
       else if (showConfig) setShowConfig(false);
     };
     window.addEventListener('keydown', closeModalsOnEscape);
     return () => window.removeEventListener('keydown', closeModalsOnEscape);
-  }, [showCodePreview, showSummary, showConfig]);
+  }, [isFileMenuOpen, showCodePreview, showSummary, showConfig]);
+
+  useEffect(() => {
+    if (!isFileMenuOpen) return;
+    const handleOutside = (event: PointerEvent) => {
+      if (!fileMenuRef.current?.contains(event.target as Node)) setIsFileMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', handleOutside);
+    return () => window.removeEventListener('pointerdown', handleOutside);
+  }, [isFileMenuOpen]);
 
   useEffect(() => {
     const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
@@ -292,31 +305,31 @@ export const Topbar: React.FC = () => {
             onClick={() => setAppMode('select')}
             title="Select & Move (M)"
           >
-            <FiMousePointer /> Select
+            <FiMousePointer /> <span className="topbar-label-sm">Select</span>
           </button>
           <button 
             className={`mode-btn ${appMode === 'measure' ? 'active' : ''}`}
             onClick={() => setAppMode('measure')}
             title="Measure Distance (K)"
           >
-            <FiMinimize2 /> Ruler
+            <FiMinimize2 /> <span className="topbar-label-sm">Ruler</span>
           </button>
           {appMode === 'measure' && (
             <>
               <button
                 className={`mode-btn${orthogonalRuler ? ' active' : ''}`}
                 onClick={toggleOrthogonalRuler}
-                title="Lock rulers perpendicular to matching IP edges (O)"
+                title={`Orthogonal ruler lock (O): currently ${orthogonalRuler ? 'ON' : 'OFF'}`}
                 aria-pressed={orthogonalRuler}
               >
-                <FiGrid /> Ortho {orthogonalRuler ? 'ON' : 'OFF'}
+                <FiGrid /> <span className="topbar-label-md">Ortho</span>
               </button>
               <button
                 className="mode-btn mode-btn--danger"
                 onClick={() => clearRulers()}
-                title="Clear Rulers"
+                title="Clear all rulers (Shift+K)"
               >
-                <FiTrash2 /> Clear Rulers
+                <FiTrash2 /> <span className="topbar-label-lg">Clear</span>
               </button>
             </>
           )}
@@ -325,7 +338,7 @@ export const Topbar: React.FC = () => {
             onClick={toggleAutoDim}
             title="Auto-Dimension: show a nearest-gap overview, then select one IP to focus only its local gaps."
           >
-            <FiGrid /> Auto-Dim
+            <FiGrid /> <span className="topbar-label-md">Auto-Dim</span>
           </button>
         </div>
       </div>
@@ -359,76 +372,153 @@ export const Topbar: React.FC = () => {
           </div>
         ) : <>
           <EditingToolbar
-          canUndo={history.past.length > 0}
-          canRedo={history.future.length > 0}
-          selectionCount={pixelArraySelected ? 1 : selectedInstanceIds.length}
-          anchorName={pixelArraySelected ? 'Pixel Array' : instances.find(instance => instance.id === selectedInstanceId)?.name}
-          onUndo={undo}
-          onRedo={redo}
-          onAlign={handleAlignment}
-          onStartEdgeAlign={() => {
-            setAppMode('select');
-            if (pixelArraySelected) startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
-            else if (selectedInstanceId) startEdgeAlignment(selectedInstanceId);
-          }}
-        />
-
-        <button className={`btn save-btn${isDirty ? ' has-unsaved' : ''}`} onClick={handleSaveWorkspace} title={`Save the editable workspace in this browser (Ctrl/Cmd+S) · ${saveStatus}`}>
-          <FiSave /> Save
-          <span className={`save-status ${isDirty ? 'dirty' : savedSignature === null ? 'new' : ''}`}>{saveStatus}</span>
-        </button>
-        <label className="btn file-open-btn" title="Import an editable SVG project">
-          <FiUpload /> Import SVG
-          <input type="file" accept=".svg,image/svg+xml" onChange={handleLoadProject} />
-        </label>
-        <button className="btn export-svg-btn" onClick={handleExportSvg} title="Export a visual SVG with editable project data embedded">
-          <FiDownload /> Export SVG
-        </button>
-        <div className="vertical-divider" />
-
-        <button className="btn config-btn" onClick={openConfigModal}>
-          <FiSettings /> {topCellName} ({topWidth}x{topHeight})
-        </button>
-        <div className="grid-settings">
-          <label>Grid (um):</label>
-          <input 
-            type="number" 
-            min="0.000000000001"
-            step="any"
-            value={draftGridSize} 
-            onChange={event => setDraftGridSize(event.target.value)}
-            onBlur={commitGridSize}
-            onKeyDown={event => {
-              if (event.key === 'Enter') event.currentTarget.blur();
-              if (event.key === 'Escape') {
-                setDraftGridSize(formatGridValue(gridSize, gridSize));
-                event.currentTarget.blur();
-              }
+            canUndo={history.past.length > 0}
+            canRedo={history.future.length > 0}
+            selectionCount={pixelArraySelected ? 1 : selectedInstanceIds.length}
+            anchorName={pixelArraySelected ? 'Pixel Array' : instances.find(instance => instance.id === selectedInstanceId)?.name}
+            onUndo={undo}
+            onRedo={redo}
+            onAlign={handleAlignment}
+            onStartEdgeAlign={() => {
+              setAppMode('select');
+              if (pixelArraySelected) startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
+              else if (selectedInstanceId) startEdgeAlignment(selectedInstanceId);
             }}
-            className="input-field grid-input"
-            title="Changing the grid re-snaps every instance to an exact grid multiple"
           />
-        </div>
-        <div className="vertical-divider vertical-divider--compact" />
-        <button
-          className={`btn metrics-btn${metrics.overlaps.length > 0 ? ' metrics-btn--alert' : ''}`}
-          onClick={() => setShowSummary(true)}
-          title={metrics.overlaps.length > 0
-            ? `${metrics.overlaps.length} overlap violation${metrics.overlaps.length === 1 ? '' : 's'} detected — click to inspect summary & DRC`
-            : 'Floorplan area metrics, DRC status, and CSV export'}
-        >
-          {metrics.overlaps.length > 0 ? (
-            <><FiAlertTriangle /> {metrics.overlaps.length} Overlap{metrics.overlaps.length === 1 ? '' : 's'}</>
-          ) : (
-            <><FiBarChart2 /> Summary</>
-          )}
-        </button>
-        <button className="btn shortcuts-btn" onClick={() => setShowTutorial(true)}>
-          <FiBookOpen /> Help
-        </button>
-        <button className="btn btn-primary preview-btn" onClick={handlePreview}>
-          <FiCode /> Preview Code
-        </button>
+
+          <button className={`btn save-btn${isDirty ? ' has-unsaved' : ''}`} onClick={handleSaveWorkspace} title={`Save workspace in browser (Ctrl/Cmd+S) · ${saveStatus}`}>
+            <FiSave />
+            <span className="topbar-label-md">Save</span>
+            <span className={`save-dot ${isDirty ? 'dirty' : savedSignature === null ? 'new' : 'saved'}`} aria-label={saveStatus} />
+          </button>
+
+          <div className="topbar-file-menu" ref={fileMenuRef}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".svg,image/svg+xml"
+              onChange={handleLoadProject}
+              style={{ display: 'none' }}
+            />
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setIsFileMenuOpen(open => !open)}
+              aria-expanded={isFileMenuOpen}
+              aria-haspopup="menu"
+              title="Import SVG, export SVG/CSV, or load demo"
+            >
+              <FiFolder />
+              <span className="topbar-label-md">File</span>
+              <FiChevronDown />
+            </button>
+            {isFileMenuOpen && (
+              <div className="topbar-dropdown" role="menu" aria-label="Project file actions">
+                <button
+                  type="button"
+                  className="topbar-dropdown__item"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsFileMenuOpen(false);
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  <FiUpload /> <span>Import SVG Project…</span>
+                </button>
+                <button
+                  type="button"
+                  className="topbar-dropdown__item"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsFileMenuOpen(false);
+                    handleExportSvg();
+                  }}
+                >
+                  <FiDownload /> <span>Export Editable SVG</span>
+                </button>
+                <button
+                  type="button"
+                  className="topbar-dropdown__item"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsFileMenuOpen(false);
+                    handleExportCsv();
+                  }}
+                >
+                  <FiFileText /> <span>Export CSV Table</span>
+                </button>
+                <div className="topbar-dropdown__divider" />
+                <button
+                  type="button"
+                  className="topbar-dropdown__item"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsFileMenuOpen(false);
+                    handleLoadDemo();
+                  }}
+                >
+                  <FiCpu /> <span>Load 2MP CIS Demo</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="vertical-divider" />
+
+          <button
+            className="btn config-btn"
+            onClick={openConfigModal}
+            title={`Configure Top Cell: ${topLibName}/${topCellName} (${topWidth} × ${topHeight} µm)`}
+          >
+            <FiSettings />
+            <span className="config-btn__text">{topWidth}×{topHeight}</span>
+          </button>
+          <div className="grid-settings">
+            <label>Grid:</label>
+            <input 
+              type="number" 
+              min="0.000000000001"
+              step="any"
+              value={draftGridSize} 
+              onChange={event => setDraftGridSize(event.target.value)}
+              onBlur={commitGridSize}
+              onKeyDown={event => {
+                if (event.key === 'Enter') event.currentTarget.blur();
+                if (event.key === 'Escape') {
+                  setDraftGridSize(formatGridValue(gridSize, gridSize));
+                  event.currentTarget.blur();
+                }
+              }}
+              className="input-field grid-input"
+              title="Placement grid (µm) — re-snaps every instance to an exact grid multiple"
+              aria-label="Placement grid in micrometers"
+            />
+          </div>
+          <div className="vertical-divider vertical-divider--compact" />
+          <button
+            className={`btn metrics-btn${metrics.overlaps.length > 0 ? ' metrics-btn--alert' : ''}`}
+            onClick={() => setShowSummary(true)}
+            title={metrics.overlaps.length > 0
+              ? `${metrics.overlaps.length} overlap violation${metrics.overlaps.length === 1 ? '' : 's'} detected — click to inspect summary & DRC`
+              : 'Floorplan area metrics, DRC status, and CSV export'}
+          >
+            {metrics.overlaps.length > 0 ? (
+              <><FiAlertTriangle /> <span>{metrics.overlaps.length}</span><span className="topbar-label-lg"> Overlap{metrics.overlaps.length === 1 ? '' : 's'}</span></>
+            ) : (
+              <><FiBarChart2 /> <span className="topbar-label-lg">Summary</span></>
+            )}
+          </button>
+          <button
+            className="btn shortcuts-btn topbar-icon-pill"
+            onClick={() => setShowTutorial(true)}
+            title="Help & Interactive Walkthrough"
+            aria-label="Help and walkthrough"
+          >
+            <FiBookOpen />
+          </button>
+          <button className="btn btn-primary preview-btn" onClick={handlePreview} title="Preview & download Cadence Virtuoso SKILL">
+            <FiCode /> <span>SKILL</span>
+          </button>
         </>}
       </div>
 

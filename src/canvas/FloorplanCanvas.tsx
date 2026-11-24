@@ -2212,11 +2212,6 @@ export const FloorplanCanvas: React.FC = () => {
           })()}
         </Layer>
       </Stage>
-      {mousePos && (
-        <div className="coordinate-overlay">
-          X: {formatGridValue(mousePos.x, gridSize)} Y: {formatGridValue(mousePos.y, gridSize)}
-        </div>
-      )}
       {appMode === 'measure' && (
         <div className="coordinate-overlay measure-mode-hint">
           Measure Mode · Click two snapped points · Press O for Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc cancels
@@ -2235,6 +2230,14 @@ export const FloorplanCanvas: React.FC = () => {
         </div>
       )}
       <div className="viewport-hud" aria-label="Viewport controls">
+        {mousePos && (
+          <>
+            <span className="viewport-hud__coords">
+              X {formatGridValue(mousePos.x, gridSize)} · Y {formatGridValue(mousePos.y, gridSize)}
+            </span>
+            <span className="viewport-hud__divider" aria-hidden="true" />
+          </>
+        )}
         <button
           type="button"
           className="viewport-hud__btn"

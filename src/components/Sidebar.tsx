@@ -312,25 +312,25 @@ export const Sidebar: React.FC = () => {
           <ul className="cell-list">
             {Object.values(masterCells).map(cell => (
               <li key={cell.id} className="cell-item static">
-                <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+                <div className="cell-item__info">
                   <div
                     className={`cell-swatch cell-swatch--${cell.outlineStyle ?? 'solid'}`}
                   >
                     <i style={{ backgroundColor: cell.color, opacity: cell.opacity ?? 0.5 }} />
                   </div>
-                  <div>
-                    <span className="cell-name">{cell.cellName}</span>
-                    <span className="lib-badge">{cell.libName}</span>
+                  <div className="cell-item__text">
+                    <span className="cell-name" title={cell.cellName}>{cell.cellName}</span>
+                    <div className="cell-item__meta">
+                      <span className="size-badge">{cell.width.toFixed(1)}×{cell.height.toFixed(1)}</span>
+                      <span className="lib-badge" title={cell.libName}>{cell.libName}</span>
+                    </div>
                   </div>
                 </div>
-                <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-                  <div className="size-badge">
-                    {cell.width.toFixed(1)}x{cell.height.toFixed(1)}
-                  </div>
+                <div className="cell-item__actions">
                   <button className="icon-btn" onClick={() => openEditModal(cell)} title="Edit IP Definition">
                     <FiSettings />
                   </button>
-                  <button className="icon-btn" style={{color: '#3b82f6'}} onClick={() => setPlacement(cell.id, 'R0')} title="Attach to Cursor">
+                  <button className="icon-btn" style={{color: '#2997ff'}} onClick={() => setPlacement(cell.id, 'R0')} title="Attach to Cursor">
                     <FiCrosshair />
                   </button>
                 </div>
