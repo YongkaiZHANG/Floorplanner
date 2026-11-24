@@ -200,6 +200,26 @@ export const Sidebar: React.FC = () => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
   }, []);
 
+  useEffect(() => {
+    const closeModalsOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (showCreateModal) {
+        setShowCreateModal(false);
+        setEditingCellId(null);
+      } else if (showInstantiateModal) {
+        setShowInstantiateModal(false);
+      } else if (showEditTopModal) {
+        setShowEditTopModal(false);
+      } else if (showPadModal) {
+        setShowPadModal(false);
+      } else if (showPixelArrayModal) {
+        setShowPixelArrayModal(false);
+      }
+    };
+    window.addEventListener('keydown', closeModalsOnEscape);
+    return () => window.removeEventListener('keydown', closeModalsOnEscape);
+  }, [showCreateModal, showInstantiateModal, showEditTopModal, showPadModal, showPixelArrayModal, setShowCreateModal, setShowInstantiateModal]);
+
   const handleMouseEnter = () => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
     hoverTimeout.current = setTimeout(() => setIsHovered(true), 300);
@@ -236,18 +256,18 @@ export const Sidebar: React.FC = () => {
               </button>
             </div>
           </div>
-          <div style={{padding: '0 8px'}}>
-            <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px'}}>
+          <div className="top-cell-card">
+            <div className="top-cell-card__row">
               <span className="cell-name">{topCellName}</span>
               <span className="lib-badge">{topLibName}</span>
             </div>
-            <div style={{display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap'}}>
-              <div className="size-badge" style={{display: 'inline-block'}}>
-                {topWidth.toFixed(1)}x{topHeight.toFixed(1)}
+            <div className="top-cell-card__row">
+              <div className="size-badge">
+                {topWidth.toFixed(1)} × {topHeight.toFixed(1)} µm
               </div>
               {padInset > 0 && (
                 <div className="lib-badge" title="Seal-ring / pad inset margin">
-                  Inset {formatGridValue(padInset, gridSize)} um
+                  Inset {formatGridValue(padInset, gridSize)} µm
                 </div>
               )}
             </div>
@@ -408,7 +428,7 @@ export const Sidebar: React.FC = () => {
     </div>
 
     {showCreateModal && (
-          <div className="modal-overlay">
+          <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) { setShowCreateModal(false); setEditingCellId(null); } }}>
             <div className="modal-content glass-panel master-modal">
               <div className="modal-header">
                 <h2 className="modal-title">{editingCellId ? 'Edit Master IP' : 'Create Master IP'}</h2>
@@ -457,15 +477,16 @@ export const Sidebar: React.FC = () => {
                 </div>
                 <div className="form-group">
                   <label className="label">IP Color</label>
-                  <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
+                  <div className="color-swatch-grid">
                     {PRESET_COLORS.map(c => (
-                      <div 
+                      <button
                         key={c}
+                        type="button"
+                        className={`color-swatch-btn${newColor === c ? ' active' : ''}`}
                         onClick={() => setNewColor(c)}
-                        style={{
-                          width: '24px', height: '24px', borderRadius: '4px', background: c, cursor: 'pointer',
-                          border: newColor === c ? '2px solid #ffffff' : '1px solid #333'
-                        }}
+                        style={{ backgroundColor: c }}
+                        aria-label={`Select color ${c}`}
+                        aria-pressed={newColor === c}
                       />
                     ))}
                   </div>
@@ -532,7 +553,7 @@ export const Sidebar: React.FC = () => {
         )}
 
         {showInstantiateModal && (
-          <div className="modal-overlay">
+          <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowInstantiateModal(false); }}>
             <div className="modal-content glass-panel">
               <div className="modal-header">
                 <h2 className="modal-title">Add Instance</h2>
@@ -574,7 +595,7 @@ export const Sidebar: React.FC = () => {
         )}
 
     {showEditTopModal && (
-      <div className="modal-overlay">
+      <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowEditTopModal(false); }}>
         <div className="modal-content glass-panel">
           <div className="modal-header">
             <h2 className="modal-title">Edit Top Cell</h2>
@@ -630,7 +651,7 @@ export const Sidebar: React.FC = () => {
     )}
 
     {showPadModal && (
-      <div className="modal-overlay">
+      <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowPadModal(false); }}>
         <div className="modal-content glass-panel pad-row-modal">
           <div className="modal-header">
             <div>
@@ -788,7 +809,7 @@ export const Sidebar: React.FC = () => {
     )}
 
     {showPixelArrayModal && (
-      <div className="modal-overlay">
+      <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowPixelArrayModal(false); }}>
         <div className="modal-content glass-panel pixel-array-modal">
           <div className="modal-header">
             <div>

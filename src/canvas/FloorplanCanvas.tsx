@@ -1507,11 +1507,12 @@ export const FloorplanCanvas: React.FC = () => {
             width={tw} 
             height={th} 
             fill="#ffffff"
-            stroke="#475569" 
-            strokeWidth={2 / stageScale}
-            dash={[10 / stageScale, 10 / stageScale]}
-            shadowColor="rgba(0,0,0,0.1)"
-            shadowBlur={10 / stageScale}
+            stroke="#64748b" 
+            strokeWidth={1.75 / stageScale}
+            dash={[10 / stageScale, 8 / stageScale]}
+            shadowColor="rgba(15, 23, 42, 0.1)"
+            shadowBlur={24 / stageScale}
+            shadowOffsetY={-4 / stageScale}
           />
 
           {/* Adaptive drafting grid */}

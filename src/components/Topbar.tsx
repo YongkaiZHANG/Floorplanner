@@ -373,7 +373,7 @@ export const Topbar: React.FC = () => {
           }}
         />
 
-        <button className={`btn btn-primary save-btn${isDirty ? ' has-unsaved' : ''}`} onClick={handleSaveWorkspace} title={`Save the editable workspace in this browser (Ctrl/Cmd+S) · ${saveStatus}`}>
+        <button className={`btn save-btn${isDirty ? ' has-unsaved' : ''}`} onClick={handleSaveWorkspace} title={`Save the editable workspace in this browser (Ctrl/Cmd+S) · ${saveStatus}`}>
           <FiSave /> Save
           <span className={`save-status ${isDirty ? 'dirty' : savedSignature === null ? 'new' : ''}`}>{saveStatus}</span>
         </button>
@@ -433,7 +433,7 @@ export const Topbar: React.FC = () => {
       </div>
 
       {showConfig && (
-        <div className="modal-overlay">
+        <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowConfig(false); }}>
           <div className="modal-content glass-panel config-modal">
             <div className="modal-header">
               <h2 className="modal-title">Configure Top ASIC</h2>
@@ -464,7 +464,7 @@ export const Topbar: React.FC = () => {
       )}
       
       {showSummary && (
-        <div className="modal-overlay">
+        <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowSummary(false); }}>
           <div className="modal-content glass-panel summary-modal">
             <div className="modal-header">
               <h2 className="modal-title">Floorplan Summary &amp; DRC</h2>
@@ -553,7 +553,7 @@ export const Topbar: React.FC = () => {
       )}
 
       {showCodePreview && (
-        <div className="modal-overlay">
+        <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowCodePreview(false); }}>
           <div className="modal-content glass-panel code-preview-modal">
             <div className="modal-header">
               <h2 className="modal-title">SKILL Code Preview</h2>
