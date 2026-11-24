@@ -221,6 +221,7 @@ export type ProjectState = {
   navigateBreadcrumb: (index: number) => void;
   
   addMasterCell: (libName: string, cellName: string, w: number, h: number, color: string, opacity?: number, outlineStyle?: Cell['outlineStyle'], openAfterCreate?: boolean, autoBounds?: boolean) => void;
+  createEmptyCell: (libName: string, cellName: string, color?: string, openAfterCreate?: boolean) => void;
   updateMasterCell: (id: string, libName: string, cellName: string, w: number, h: number, color: string, opacity?: number, outlineStyle?: Cell['outlineStyle']) => void;
   deleteMasterCell: (id: string) => void;
   setActiveDrawLpp: (layer: string, purpose: string, color?: string) => void;
@@ -362,6 +363,7 @@ const normalizePadInset = (inset: number, topWidth: number, topHeight: number, g
     throw new RangeError('Pad inset must be a finite number greater than or equal to zero');
   }
   const snapped = snapToGrid(inset, gridSize);
+  if (snapped === 0) return 0;
   if (snapped * 2 >= topWidth || snapped * 2 >= topHeight) {
     throw new RangeError('Pad inset must leave a positive interior inside the top cell');
   }
@@ -700,24 +702,80 @@ const clampInstancesToContainer = (
   return { ...instance, x: position.x, y: position.y };
 });
 
+/** Returns true when a Virtuoso cellview has no geometry yet (empty 0x0 auto-bounds cell). */
+export const isCellEmpty = (cell: Pick<Cell, 'width' | 'height'>): boolean => (
+  !(Number.isFinite(cell.width) && Number.isFinite(cell.height) && cell.width > 0 && cell.height > 0)
+);
+
+/**
+ * Recomputes bounding boxes bottom-up for every `autoBounds` cell in the hierarchy
+ * so editing a leaf cell automatically updates any parent cells that instantiate it.
+ */
+const propagateAutoBounds = (
+  masterCells: Record<string, Cell>,
+  cellViews: Record<string, CellViewContent>,
+): Record<string, Cell> => {
+  const next: Record<string, Cell> = { ...masterCells };
+  const ids = Object.keys(next);
+  for (let pass = 0; pass < Math.max(1, ids.length); pass += 1) {
+    let changed = false;
+    for (const id of ids) {
+      const master = next[id];
+      if (!master?.autoBounds) continue;
+      const view = cellViews[id];
+      const bounds = view
+        ? computeCellContentBounds(view.shapes ?? [], view.instances ?? [], next, view.pixelArray)
+        : null;
+      const targetW = bounds ? bounds.width : 0;
+      const targetH = bounds ? bounds.height : 0;
+      const targetOx = bounds && Math.abs(bounds.originX) > 1e-9 ? bounds.originX : undefined;
+      const targetOy = bounds && Math.abs(bounds.originY) > 1e-9 ? bounds.originY : undefined;
+      const curOx = master.originX ?? 0;
+      const curOy = master.originY ?? 0;
+      if (
+        Math.abs((targetOx ?? 0) - curOx) > 1e-9
+        || Math.abs((targetOy ?? 0) - curOy) > 1e-9
+        || Math.abs(targetW - master.width) > 1e-9
+        || Math.abs(targetH - master.height) > 1e-9
+      ) {
+        const updated: Cell = {
+          ...master,
+          width: targetW,
+          height: targetH,
+          ...(targetOx !== undefined ? { originX: targetOx } : {}),
+          ...(targetOy !== undefined ? { originY: targetOy } : {}),
+        };
+        if (targetOx === undefined) delete updated.originX;
+        if (targetOy === undefined) delete updated.originY;
+        next[id] = updated;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return next;
+};
+
 /**
  * Updates the active IP master cell's `(originX, originY, width, height)` when shapes
- * or sub-instances are drawn/modified inside its cellview.
- * - If `master.autoBounds` is true: tightly fits the exact bounding box of its contents.
+ * or sub-instances are drawn/modified inside its cellview, and propagates updated
+ * auto-bounds upward to any parent cells instantiating this cell.
+ * - If `master.autoBounds` is true (or `promoteAutoBounds` is true): tightly fits the exact bounding box of its contents (or resets to empty 0x0 if all contents are deleted).
  * - Otherwise: expands only when new content extends outside the existing bounding box.
  */
 const syncMasterBoundsForActiveCell = (
-  state: Pick<ProjectState, 'activeCellId' | 'masterCells' | 'topWidth' | 'topHeight' | 'gridSize'>,
+  state: Pick<ProjectState, 'activeCellId' | 'masterCells' | 'cellViews' | 'rulers' | 'padInset' | 'activeCoordinateMode' | 'topWidth' | 'topHeight' | 'gridSize'>,
   nextShapes: readonly LayoutShape[],
   nextInstances: readonly Instance[],
   nextPixelArray: PixelArray | null,
   forceTightFit = false,
+  promoteAutoBounds = false,
 ): { masterCells: Record<string, Cell>; topWidth: number; topHeight: number } | null => {
   if (!state.activeCellId) return null;
   const master = state.masterCells[state.activeCellId];
   if (!master) return null;
+  const shouldAutoFit = Boolean(master.autoBounds) || forceTightFit || promoteAutoBounds;
   const contentBounds = computeCellContentBounds(nextShapes, nextInstances, state.masterCells, nextPixelArray);
-  if (!contentBounds) return null;
 
   const curOx = master.originX ?? 0;
   const curOy = master.originY ?? 0;
@@ -729,7 +787,13 @@ const syncMasterBoundsForActiveCell = (
   let nextW: number;
   let nextH: number;
 
-  if (master.autoBounds || forceTightFit) {
+  if (!contentBounds) {
+    if (!shouldAutoFit) return null;
+    nextOx = 0;
+    nextOy = 0;
+    nextW = 0;
+    nextH = 0;
+  } else if (shouldAutoFit) {
     nextOx = contentBounds.originX;
     nextOy = contentBounds.originY;
     nextW = contentBounds.width;
@@ -745,12 +809,13 @@ const syncMasterBoundsForActiveCell = (
     nextH = maxY - minY;
   }
 
-  if (
-    Math.abs(nextOx - curOx) <= 1e-9
+  const nextAutoBounds = promoteAutoBounds ? true : master.autoBounds;
+  const unchanged = Math.abs(nextOx - curOx) <= 1e-9
     && Math.abs(nextOy - curOy) <= 1e-9
     && Math.abs(nextW - master.width) <= 1e-9
     && Math.abs(nextH - master.height) <= 1e-9
-  ) {
+    && Boolean(nextAutoBounds) === Boolean(master.autoBounds);
+  if (unchanged) {
     return null;
   }
 
@@ -758,16 +823,34 @@ const syncMasterBoundsForActiveCell = (
     ...master,
     width: nextW,
     height: nextH,
+    ...(nextAutoBounds ? { autoBounds: true } : {}),
     ...(Math.abs(nextOx) > 1e-9 ? { originX: nextOx } : { originX: undefined }),
     ...(Math.abs(nextOy) > 1e-9 ? { originY: nextOy } : { originY: undefined }),
   };
   if (nextMaster.originX === undefined) delete nextMaster.originX;
   if (nextMaster.originY === undefined) delete nextMaster.originY;
 
-  return {
+  const updatedViews = mergeActiveViewIntoCellViews({
+    activeCellId: state.activeCellId,
     masterCells: { ...state.masterCells, [state.activeCellId]: nextMaster },
-    topWidth: nextW,
-    topHeight: nextH,
+    cellViews: state.cellViews,
+    instances: [...nextInstances],
+    rulers: state.rulers,
+    shapes: [...nextShapes],
+    activeCoordinateMode: state.activeCoordinateMode,
+    pixelArray: nextPixelArray,
+    padInset: state.padInset,
+  });
+  const propagatedMasterCells = propagateAutoBounds(
+    { ...state.masterCells, [state.activeCellId]: nextMaster },
+    updatedViews,
+  );
+  const finalActive = propagatedMasterCells[state.activeCellId] ?? nextMaster;
+
+  return {
+    masterCells: propagatedMasterCells,
+    topWidth: finalActive.width,
+    topHeight: finalActive.height,
   };
 };
 
@@ -1691,10 +1774,20 @@ export const useStore = create<ProjectState>((set) => ({
   setLeftSidebarPinned: (pinned) => set({ leftSidebarPinned: pinned }),
   setRightSidebarPinned: (pinned) => set({ rightSidebarPinned: pinned }),
   setPlacement: (masterId, orientation = 'R0', arrayConfig = null) => set((state) => {
-    if (masterId && state.activeCellId) {
-      const mergedViews = mergeActiveViewIntoCellViews(state);
-      if (wouldCreateHierarchyCycle(state.activeCellId, masterId, mergedViews)) {
-        throw new Error('Cannot instantiate this cell here because it would create a recursive hierarchy cycle.');
+    if (masterId) {
+      const master = state.masterCells[masterId];
+      if (!master) return state;
+      if (state.activeCellId === masterId) {
+        throw new Error(`Cannot instantiate ${master.libName}/${master.cellName} inside itself (recursive hierarchy cycle).`);
+      }
+      if (state.activeCellId) {
+        const mergedViews = mergeActiveViewIntoCellViews(state);
+        if (wouldCreateHierarchyCycle(state.activeCellId, masterId, mergedViews)) {
+          throw new Error(`Cannot instantiate ${master.libName}/${master.cellName} inside ${state.topLibName}/${state.topCellName} because it would create a recursive hierarchy cycle.`);
+        }
+      }
+      if (isCellEmpty(master)) {
+        throw new Error(`Cannot instantiate empty cell ${master.libName}/${master.cellName}: open it and draw a rectangle (e.g. text/drawing) or instantiate a sub-cell first.`);
       }
     }
     return {
@@ -1919,7 +2012,8 @@ export const useStore = create<ProjectState>((set) => ({
     if (libName === rootId.topLibName && cellName === rootId.topCellName) {
       throw new Error('The top cell cannot also be used as a master cell');
     }
-    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+    const isEmptyAutoCell = autoBounds && w === 0 && h === 0;
+    if (!isEmptyAutoCell && (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0)) {
       throw new RangeError('Master width and height must be positive finite numbers');
     }
     const existing = Object.values(state.masterCells).find(c => c.libName === libName && c.cellName === cellName);
@@ -1943,6 +2037,44 @@ export const useStore = create<ProjectState>((set) => ({
     };
   }),
 
+  createEmptyCell: (rawLibName, rawCellName, color = '#3b82f6', openAfterCreate = true) => set((state) => {
+    const rootId = getRootIdentity(state);
+    const libName = rawLibName.trim() || rootId.topLibName;
+    const cellName = rawCellName.trim();
+    if (!libName || !cellName) throw new Error('Library and cell name are required');
+    if (libName === rootId.topLibName && cellName === rootId.topCellName) {
+      throw new Error('The top cell cannot also be used as a master cell');
+    }
+    const existing = Object.values(state.masterCells).find(c => c.libName === libName && c.cellName === cellName);
+    if (existing) {
+      throw new Error(`Cell name ${cellName} is already used in ${libName}`);
+    }
+    const id = uuidv4();
+    const committed = commitProjectPatch(state, `Create ${libName}/${cellName}`, {
+      masterCells: {
+        ...state.masterCells,
+        [id]: {
+          id,
+          libName,
+          cellName,
+          width: 0,
+          height: 0,
+          color,
+          opacity: 0.5,
+          outlineStyle: 'solid',
+          autoBounds: true,
+        },
+      },
+    });
+    if (!openAfterCreate) return committed;
+    const switched = switchToCellView({ ...state, ...committed }, id, [id]);
+    return {
+      ...committed,
+      ...switched,
+      history: committed.history,
+    };
+  }),
+
   updateMasterCell: (id, rawLibName, rawCellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
     const existing = state.masterCells[id];
     if (!existing) return state;
@@ -1953,7 +2085,9 @@ export const useStore = create<ProjectState>((set) => ({
     if (libName === rootId.topLibName && cellName === rootId.topCellName) {
       throw new Error('The top cell cannot also be used as a master cell');
     }
-    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+    const nextW = existing.autoBounds ? existing.width : w;
+    const nextH = existing.autoBounds ? existing.height : h;
+    if (!existing.autoBounds && (!Number.isFinite(nextW) || !Number.isFinite(nextH) || nextW <= 0 || nextH <= 0)) {
       throw new RangeError('Master width and height must be positive finite numbers');
     }
     if (Object.values(state.masterCells).some(master => master.id !== id && master.libName === libName && master.cellName === cellName)) {
@@ -1962,20 +2096,20 @@ export const useStore = create<ProjectState>((set) => ({
     const appearance = normalizeCellAppearance(opacity, outlineStyle);
     const masterCells = {
       ...state.masterCells,
-      [id]: { ...existing, libName, cellName, width: w, height: h, color, ...appearance },
+      [id]: { ...existing, libName, cellName, width: nextW, height: nextH, color, ...appearance },
     };
 
     const editingActiveView = state.activeCellId === id;
     const activePadInset = editingActiveView
-      ? normalizePadInset(state.padInset, w, h, state.gridSize)
+      ? normalizePadInset(state.padInset, nextW, nextH, state.gridSize)
       : state.padInset;
     const instances = editingActiveView
-      ? clampInstancesToContainer(state.instances, masterCells, w, h, state.gridSize, activePadInset, undefined, true)
+      ? clampInstancesToContainer(state.instances, masterCells, nextW, nextH, state.gridSize, activePadInset, undefined, true)
       : clampInstancesToContainer(state.instances, masterCells, state.topWidth, state.topHeight, state.gridSize, state.padInset, id, Boolean(state.activeCellId));
-    const editingOriginX = state.activeCoordinateMode === 'origin' ? (existing.originX ?? 0) : -w / 2;
-    const editingOriginY = state.activeCoordinateMode === 'origin' ? (existing.originY ?? 0) : -h / 2;
+    const editingOriginX = state.activeCoordinateMode === 'origin' ? (existing.originX ?? 0) : -nextW / 2;
+    const editingOriginY = state.activeCoordinateMode === 'origin' ? (existing.originY ?? 0) : -nextH / 2;
     const pixelArray = editingActiveView && state.pixelArray
-      ? normalizePixelArray(state.pixelArray, w, h, state.gridSize, editingOriginX, editingOriginY)
+      ? normalizePixelArray(state.pixelArray, nextW, nextH, state.gridSize, editingOriginX, editingOriginY)
       : state.pixelArray;
     const rootView = state.rootView
       ? {
@@ -1989,14 +2123,14 @@ export const useStore = create<ProjectState>((set) => ({
       const container = masterCells[viewCellId];
       if (!container) continue;
       if (viewCellId === id) {
-        const viewInset = normalizePadInset(view.padInset ?? 0, w, h, state.gridSize);
+        const viewInset = normalizePadInset(view.padInset ?? 0, nextW, nextH, state.gridSize);
         const isOriginView = resolveStoredCoordinateMode(view) === 'origin';
-        const viewOriginX = isOriginView ? (existing.originX ?? 0) : -w / 2;
-        const viewOriginY = isOriginView ? (existing.originY ?? 0) : -h / 2;
+        const viewOriginX = isOriginView ? (existing.originX ?? 0) : -nextW / 2;
+        const viewOriginY = isOriginView ? (existing.originY ?? 0) : -nextH / 2;
         nextCellViews[viewCellId] = buildCellViewContent(
-          clampInstancesToContainer(view.instances, masterCells, w, h, state.gridSize, viewInset, undefined, isOriginView),
+          clampInstancesToContainer(view.instances, masterCells, nextW, nextH, state.gridSize, viewInset, undefined, isOriginView),
           view.rulers,
-          view.pixelArray ? normalizePixelArray(view.pixelArray, w, h, state.gridSize, viewOriginX, viewOriginY) : null,
+          view.pixelArray ? normalizePixelArray(view.pixelArray, nextW, nextH, state.gridSize, viewOriginX, viewOriginY) : null,
           viewInset,
           view.shapes ?? [],
           view.coordinateMode,
@@ -2010,7 +2144,7 @@ export const useStore = create<ProjectState>((set) => ({
       }
     }
 
-    if (Math.abs(w - existing.width) > 1e-9 || Math.abs(h - existing.height) > 1e-9) {
+    if (Math.abs(nextW - existing.width) > 1e-9 || Math.abs(nextH - existing.height) > 1e-9) {
       const affectedActive = new Set(instances.filter(i => editingActiveView || i.cellId === id).map(i => i.id));
       if (affectedActive.size > 0) {
         assertMovedInstancesDoNotOverlap(instances, masterCells, affectedActive, `resize ${cellName}`);
@@ -2034,7 +2168,7 @@ export const useStore = create<ProjectState>((set) => ({
       instances,
       pixelArray,
       padInset: activePadInset,
-      ...(editingActiveView ? { topLibName: libName, topCellName: cellName, topWidth: w, topHeight: h } : {}),
+      ...(editingActiveView ? { topLibName: libName, topCellName: cellName, topWidth: nextW, topHeight: nextH } : {}),
       ...(rootView !== state.rootView ? { rootView } : {}),
       cellViews: nextCellViews,
     });
@@ -2064,12 +2198,13 @@ export const useStore = create<ProjectState>((set) => ({
       }
     }
 
+    const propagatedMasterCells = propagateAutoBounds(newMasterCells, cleanedCellViews);
     const clearingPlacement = state.placementMasterId === id || state.pendingManualPadGroup?.masterId === id;
     const deletingOpenPath = state.activeCellId === id || state.viewBreadcrumb.includes(id);
     const cleanedOpenViewIds = ensureOpenViewTab(
       state.openViewIds.filter(tabId => tabId !== id),
       deletingOpenPath ? null : state.activeCellId,
-      newMasterCells,
+      propagatedMasterCells,
     );
 
     if (deletingOpenPath && state.rootView) {
@@ -2086,7 +2221,7 @@ export const useStore = create<ProjectState>((set) => ({
           shapes: state.rootView.shapes,
           activeCoordinateMode: 'origin',
           pixelArray: state.rootView.pixelArray,
-          masterCells: newMasterCells,
+          masterCells: propagatedMasterCells,
           cellViews: cleanedCellViews,
           activeCellId: null,
           openViewIds: cleanedOpenViewIds,
@@ -2110,12 +2245,14 @@ export const useStore = create<ProjectState>((set) => ({
     const nextRootView = state.rootView
       ? { ...state.rootView, instances: state.rootView.instances.filter(inst => inst.cellId !== id) }
       : state.rootView;
+    const updatedActiveMaster = state.activeCellId ? propagatedMasterCells[state.activeCellId] : null;
     return {
       ...commitProjectPatch(state, `Delete ${deleted.cellName}`, {
-        masterCells: newMasterCells,
+        masterCells: propagatedMasterCells,
         instances: newInstances,
         cellViews: cleanedCellViews,
         openViewIds: cleanedOpenViewIds,
+        ...(updatedActiveMaster ? { topWidth: updatedActiveMaster.width, topHeight: updatedActiveMaster.height } : {}),
         ...(nextRootView !== state.rootView ? { rootView: nextRootView } : {}),
       }),
       ...selectionAfterInstancesChange(state, newInstances),
@@ -2179,7 +2316,7 @@ export const useStore = create<ProjectState>((set) => ({
         ...(rawShape.locked ? { locked: true } : {}),
       };
       const shapes = [...state.shapes, shape];
-      const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+      const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
       return {
         ...commitProjectPatch(state, `Draw ${layer}/${purpose} rect`, {
           shapes,
@@ -2326,11 +2463,17 @@ export const useStore = create<ProjectState>((set) => ({
   placeInstance: (cellId, targetX = 0, targetY = 0, orientation = 'R0', customName) => set((state) => {
     const master = state.masterCells[cellId];
     if (!master) return state;
+    if (state.activeCellId === cellId) {
+      throw new Error(`Cannot instantiate ${master.libName}/${master.cellName} inside itself (recursive hierarchy cycle).`);
+    }
     if (state.activeCellId) {
       const mergedViews = mergeActiveViewIntoCellViews(state);
       if (wouldCreateHierarchyCycle(state.activeCellId, cellId, mergedViews)) {
-        throw new Error(`Cannot instantiate ${master.cellName} inside ${state.topCellName} because it creates a hierarchy cycle.`);
+        throw new Error(`Cannot instantiate ${master.libName}/${master.cellName} inside ${state.topLibName}/${state.topCellName} because it creates a hierarchy cycle.`);
       }
+    }
+    if (isCellEmpty(master)) {
+      throw new Error(`Cannot instantiate empty cell ${master.libName}/${master.cellName}: open it and draw a rectangle (e.g. text/drawing) or instantiate a sub-cell first.`);
     }
 
     const effectiveOrientation = orientation;
@@ -2397,11 +2540,17 @@ export const useStore = create<ProjectState>((set) => ({
   placeInstanceMosaic: (cellId, originX, originY, orientation, config) => set((state) => {
     const master = state.masterCells[cellId];
     if (!master) return state;
+    if (state.activeCellId === cellId) {
+      throw new Error(`Cannot instantiate ${master.libName}/${master.cellName} inside itself (recursive hierarchy cycle).`);
+    }
     if (state.activeCellId) {
       const mergedViews = mergeActiveViewIntoCellViews(state);
       if (wouldCreateHierarchyCycle(state.activeCellId, cellId, mergedViews)) {
-        throw new Error(`Cannot instantiate ${master.cellName} inside ${state.topCellName} because it creates a hierarchy cycle.`);
+        throw new Error(`Cannot instantiate ${master.libName}/${master.cellName} inside ${state.topLibName}/${state.topCellName} because it creates a hierarchy cycle.`);
       }
+    }
+    if (isCellEmpty(master)) {
+      throw new Error(`Cannot instantiate empty cell ${master.libName}/${master.cellName}: open it and draw a rectangle (e.g. text/drawing) or instantiate a sub-cell first.`);
     }
     const rows = Math.max(1, Math.floor(config.rows));
     const cols = Math.max(1, Math.floor(config.cols));
@@ -3178,7 +3327,10 @@ export const useStore = create<ProjectState>((set) => ({
       const master = state.masterCells[item.cellId];
       if (!master) continue; // master deleted
       if (state.activeCellId && wouldCreateHierarchyCycle(state.activeCellId, item.cellId, mergedViews)) {
-        continue; // prevent pasting a recursive hierarchy cycle
+        continue; // prevent pasting a recursive hierarchy cycle or self-instance
+      }
+      if (isCellEmpty(master)) {
+        continue; // prevent pasting an empty cellview
       }
       
       const newInst = {

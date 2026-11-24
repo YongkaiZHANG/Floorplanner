@@ -500,14 +500,30 @@ export const Topbar: React.FC = () => {
 
           <div className="vertical-divider" />
 
-          <button
-            className="btn config-btn"
-            onClick={openConfigModal}
-            title={`Configure Top Cell: ${topLibName}/${topCellName} (${topWidth} × ${topHeight} µm)`}
-          >
-            <FiSettings />
-            <span className="config-btn__text">{topWidth}×{topHeight}</span>
-          </button>
+          {activeCellId === null ? (
+            <button
+              className="btn config-btn"
+              onClick={openConfigModal}
+              title={`Configure Top Cell: ${topLibName}/${topCellName} (${topWidth} × ${topHeight} µm)`}
+            >
+              <FiSettings />
+              <span className="config-btn__text">{topWidth}×{topHeight}</span>
+            </button>
+          ) : (
+            <span
+              className="btn config-btn"
+              style={{ cursor: 'default', opacity: 0.85 }}
+              title={
+                topWidth <= 0 || topHeight <= 0
+                  ? `${topLibName}/${topCellName} is empty — draw shapes (e.g. text/drawing) or instantiate sub-cells to define its size`
+                  : `${topLibName}/${topCellName} bounding box (${topWidth} × ${topHeight} µm) is derived automatically from its contents`
+              }
+            >
+              <span className="config-btn__text">
+                {topWidth <= 0 || topHeight <= 0 ? 'Empty cell' : `${formatGridValue(topWidth, gridSize)}×${formatGridValue(topHeight, gridSize)}`}
+              </span>
+            </span>
+          )}
           <div className="grid-settings">
             <label>Grid:</label>
             <input 

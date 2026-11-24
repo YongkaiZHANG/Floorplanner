@@ -12,7 +12,6 @@ import {
   FiCornerDownRight,
   FiLayers,
   FiMaximize2,
-  FiMinimize,
   FiPlus,
   FiSearch,
   FiX,
@@ -48,7 +47,6 @@ export const VirtuosoCellViewBar: React.FC = () => {
     libraries,
     masterCells,
     instances,
-    shapes,
     activeCellId,
     openViewIds,
     windowLayoutMode,
@@ -62,7 +60,6 @@ export const VirtuosoCellViewBar: React.FC = () => {
     descendIntoInstance,
     ascendToParent,
     navigateBreadcrumb,
-    fitActiveCellBoundsToContents,
   } = useStore();
 
   const [openPickerVisible, setOpenPickerVisible] = useState(false);
@@ -316,7 +313,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
                               {cell.cellName}
                               {openViewIds.includes(cell.id) && <em className="virtuoso-open-dot" title="Already open" />}
                             </span>
-                            <small>{cell.width}×{cell.height}</small>
+                            <small>{cell.width > 0 && cell.height > 0 ? `${cell.width}×${cell.height}` : 'empty'}</small>
                           </button>
                           <button
                             type="button"
@@ -370,16 +367,6 @@ export const VirtuosoCellViewBar: React.FC = () => {
               );
             })}
           </nav>
-        )}
-        {activeCellId !== null && (shapes.length > 0 || instances.length > 0) && (
-          <button
-            type="button"
-            className="virtuoso-ctrl-btn"
-            onClick={fitActiveCellBoundsToContents}
-            title={`Fit ${topCellName} boundary tightly around its drawn shapes and sub-instances`}
-          >
-            <FiMinimize /> <span className="virtuoso-ctrl-label">Fit Bounds</span>
-          </button>
         )}
         <button
           type="button"
@@ -451,16 +438,23 @@ const CompanionCellViewWindow: React.FC<{
   onActivate,
   onClose,
 }) => {
-  const pad = Math.max(view.width, view.height) * 0.14;
-  const boundLeft = view.isRoot || view.coordinateMode === 'centered' ? -view.width / 2 : view.originX;
-  const boundBottom = view.isRoot || view.coordinateMode === 'centered' ? -view.height / 2 : view.originY;
+  const isViewEmpty = !view.isRoot && (view.width <= 0 || view.height <= 0);
+  const effW = isViewEmpty ? 400 : view.width;
+  const effH = isViewEmpty ? 300 : view.height;
+  const pad = Math.max(effW, effH) * 0.14;
+  const boundLeft = isViewEmpty
+    ? -effW / 2
+    : (view.isRoot || view.coordinateMode === 'centered' ? -view.width / 2 : view.originX);
+  const boundBottom = isViewEmpty
+    ? -effH / 2
+    : (view.isRoot || view.coordinateMode === 'centered' ? -view.height / 2 : view.originY);
   const vbX = Math.min(boundLeft, 0) - pad;
   const vbY = Math.min(boundBottom, 0) - pad;
-  const vbMaxX = Math.max(boundLeft + view.width, 0) + pad;
-  const vbMaxY = Math.max(boundBottom + view.height, 0) + pad;
+  const vbMaxX = Math.max(boundLeft + effW, 0) + pad;
+  const vbMaxY = Math.max(boundBottom + effH, 0) + pad;
   const vbW = vbMaxX - vbX;
   const vbH = vbMaxY - vbY;
-  const labelSize = Math.max(view.width, view.height) * 0.022;
+  const labelSize = Math.max(effW, effH) * 0.022;
 
   const sortedInstances = useMemo(
     () =>
@@ -512,7 +506,7 @@ const CompanionCellViewWindow: React.FC<{
             </>
           )}
           <span className="virtuoso-window__dims">
-            {view.width.toFixed(1)} × {view.height.toFixed(1)} µm
+            {isViewEmpty ? 'empty' : `${view.width.toFixed(1)} × ${view.height.toFixed(1)} µm`}
           </span>
         </div>
         <div className="virtuoso-window__actions">
@@ -565,17 +559,32 @@ const CompanionCellViewWindow: React.FC<{
               strokeWidth={1}
               vectorEffect="non-scaling-stroke"
             />
-            <rect
-              x={boundLeft}
-              y={boundBottom}
-              width={view.width}
-              height={view.height}
-              fill="#ffffff"
-              stroke="#475569"
-              strokeWidth={1.75}
-              strokeDasharray="8,6"
-              vectorEffect="non-scaling-stroke"
-            />
+            {view.isRoot && (
+              <rect
+                x={boundLeft}
+                y={boundBottom}
+                width={view.width}
+                height={view.height}
+                fill="#ffffff"
+                stroke="#475569"
+                strokeWidth={1.75}
+                strokeDasharray="8,6"
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+            {isViewEmpty && (
+              <text
+                x={0}
+                y={-labelSize * 1.4}
+                fill="#94a3b8"
+                fontSize={labelSize * 1.4}
+                fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+                textAnchor="middle"
+                transform="scale(1, -1)"
+              >
+                Empty cellview
+              </text>
+            )}
             {view.shapes.map(shape => {
               const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
               return (
@@ -631,29 +640,32 @@ const CompanionCellViewWindow: React.FC<{
               const ox = master.originX ?? 0;
               const oy = master.originY ?? 0;
               const childShapes = inst.cellId === activeCellId ? activeShapes : (cellViews[inst.cellId]?.shapes ?? []);
+              const childHasContent = childShapes.length > 0 || subInstances.length > 0;
               return (
                 <g
                   key={inst.id}
                   transform={`translate(${inst.x} ${inst.y}) rotate(${t.rotation}) scale(${t.scaleX} ${t.scaleY})`}
                 >
-                  <rect
-                    x={ox}
-                    y={oy}
-                    width={master.width}
-                    height={master.height}
-                    fill={master.color}
-                    fillOpacity={childShapes.length > 0 && master.autoBounds ? 0.08 : (master.opacity ?? 0.5)}
-                    stroke={master.outlineStyle === 'none' ? 'none' : '#1e293b'}
-                    strokeWidth={1.25}
-                    strokeDasharray={
-                      master.outlineStyle === 'dashed'
-                        ? '6,4'
-                        : master.outlineStyle === 'dotted'
-                          ? '2,3'
-                          : undefined
-                    }
-                    vectorEffect="non-scaling-stroke"
-                  />
+                  {!childHasContent && master.width > 0 && master.height > 0 && (
+                    <rect
+                      x={ox}
+                      y={oy}
+                      width={master.width}
+                      height={master.height}
+                      fill={master.color}
+                      fillOpacity={master.opacity ?? 0.5}
+                      stroke={master.outlineStyle === 'none' ? 'none' : '#1e293b'}
+                      strokeWidth={1.25}
+                      strokeDasharray={
+                        master.outlineStyle === 'dashed'
+                          ? '6,4'
+                          : master.outlineStyle === 'dotted'
+                            ? '2,3'
+                            : undefined
+                      }
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  )}
                   {(() => {
                     const childCoordMode = inst.cellId === activeCellId
                       ? activeCoordinateMode

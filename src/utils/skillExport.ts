@@ -132,8 +132,12 @@ const validateInstancesList = (
 ) => {
   const instanceNames = new Set<string>();
   instances.forEach(instance => {
-    if (!masterCells[instance.cellId]) {
+    const master = masterCells[instance.cellId];
+    if (!master) {
       throw new Error(`Instance ${instance.name} in ${scopeLabel} references a missing master cell.`);
+    }
+    if (master.width <= 0 || master.height <= 0) {
+      throw new Error(`Instance ${instance.name} in ${scopeLabel} references empty cell ${master.libName}/${master.cellName}. Draw a shape or place a sub-cell inside it before exporting SKILL.`);
     }
     if (!instance.name.trim()) throw new Error(`Every instance in ${scopeLabel} requires a name.`);
     if (instanceNames.has(instance.name)) {
@@ -224,7 +228,8 @@ const validateFloorplan = (
   const masterNames = new Set<string>();
   Object.values(masterCells).forEach(cell => {
     if (!cell.libName.trim() || !cell.cellName.trim()) throw new Error('Every master requires a library and cell name.');
-    if (!Number.isFinite(cell.width) || !Number.isFinite(cell.height) || cell.width <= 0 || cell.height <= 0) {
+    const isEmptyAutoCell = Boolean(cell.autoBounds) && cell.width === 0 && cell.height === 0;
+    if (!isEmptyAutoCell && (!Number.isFinite(cell.width) || !Number.isFinite(cell.height) || cell.width <= 0 || cell.height <= 0)) {
       throw new Error(`Master ${cell.cellName} has invalid dimensions.`);
     }
     const qualifiedName = `${cell.libName}\u0000${cell.cellName}`;
@@ -422,6 +427,25 @@ export const generateSkillCode = (
     const lib = skillString(cell.libName);
     const cellName = skillString(cell.cellName);
     const indent = preserveExistingMasters ? '      ' : '    ';
+
+    const isEmptyCell = cell.width <= 0 || cell.height <= 0;
+    if (isEmptyCell) {
+      code += `\n    ; --- ${skillComment(cell.libName)}/${skillComment(cell.cellName)} (empty Virtuoso cellview) ---\n`;
+      if (preserveExistingMasters) {
+        code += `    if(ddGetObj(${lib} ${cellName} "layout") then\n`;
+        code += `      printf("Preserving existing master: %s/%s/layout\\n" ${lib} ${cellName})\n`;
+        code += `    else\n`;
+      }
+      code += `${indent}printf("Creating empty cellview: %s/%s\\n" ${lib} ${cellName})\n`;
+      code += `${indent}cv = dbOpenCellViewByType(${lib} ${cellName} "layout" "maskLayout" "w")\n`;
+      code += `${indent}unless(cv error("Floorplanner: cannot create master %s/%s/layout.\\n" ${lib} ${cellName}))\n`;
+      code += `${indent}dbSave(cv)\n`;
+      code += `${indent}dbClose(cv)\n`;
+      if (preserveExistingMasters) {
+        code += `    )\n`;
+      }
+      return;
+    }
 
     code += `\n    ; --- ${skillComment(cell.libName)}/${skillComment(cell.cellName)} (${exactW} x ${exactH} um)`;
     if (anchoredTransform) {

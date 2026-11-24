@@ -119,7 +119,7 @@ const assertPixelArray = (
 };
 
 const assertPadInset = (raw: unknown, containerWidth: number, containerHeight: number): number => {
-  if (!finite(raw) || raw < 0 || raw * 2 >= containerWidth || raw * 2 >= containerHeight) {
+  if (!finite(raw) || raw < 0 || (raw > 0 && (raw * 2 >= containerWidth || raw * 2 >= containerHeight))) {
     throw new Error('Invalid pad inset.');
   }
   return raw;
@@ -138,9 +138,10 @@ const assertProject = (value: unknown): ProjectSnapshot => {
 
   const masterCells: Record<string, Cell> = {};
   for (const [key, raw] of Object.entries(value.masterCells)) {
+    const isEmptyAutoCell = isRecord(raw) && raw.autoBounds === true && raw.width === 0 && raw.height === 0;
     if (!isRecord(raw) || raw.id !== key || !nonEmptyString(raw.libName) ||
-        !nonEmptyString(raw.cellName) || !finite(raw.width) || raw.width <= 0 ||
-        !finite(raw.height) || raw.height <= 0 || !nonEmptyString(raw.color) ||
+        !nonEmptyString(raw.cellName) || !finite(raw.width) || (!isEmptyAutoCell && raw.width <= 0) ||
+        !finite(raw.height) || (!isEmptyAutoCell && raw.height <= 0) || !nonEmptyString(raw.color) ||
         (raw.originX !== undefined && !finite(raw.originX)) ||
         (raw.originY !== undefined && !finite(raw.originY)) ||
         (raw.autoBounds !== undefined && typeof raw.autoBounds !== 'boolean') ||

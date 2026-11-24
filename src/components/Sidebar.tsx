@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
+import { isCellEmpty, rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
 import type { Cell, PadSide, PendingInstanceArray } from '../store/useStore';
 import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiExternalLink, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight, FiArrowDownCircle, FiSquare } from 'react-icons/fi';
 import './Sidebar.css';
@@ -33,7 +33,7 @@ export const Sidebar: React.FC = () => {
     selectedInstanceIds, setSelectedInstance,
     selectedShapeId, setSelectedShape,
     setAppMode,
-    addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, placeInstanceMosaic, createPadRow, prepareManualPadPlacement,
+    createEmptyCell, updateMasterCell, deleteMasterCell, placeInstance, placeInstanceMosaic, createPadRow, prepareManualPadPlacement,
     pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
@@ -67,7 +67,6 @@ export const Sidebar: React.FC = () => {
   const [newColor, setNewColor] = useState(PRESET_COLORS[0]);
   const [newOpacity, setNewOpacity] = useState('50');
   const [newOutlineStyle, setNewOutlineStyle] = useState<NonNullable<Cell['outlineStyle']>>('solid');
-  const [newCellCreationMode, setNewCellCreationMode] = useState<'canvas' | 'fixed'>('canvas');
   const [openCellAfterCreate, setOpenCellAfterCreate] = useState(true);
 
   const [showEditTopModal, setShowEditTopModal] = useState(false);
@@ -127,10 +126,17 @@ export const Sidebar: React.FC = () => {
 
   const eligibleInstantiateCells = useMemo(() => (
     Object.values(masterCells)
+      .filter(cell => !isCellEmpty(cell))
       .filter(cell => !wouldCreateHierarchyCycle(activeCellId, cell.id, effectiveCellViews))
       .filter(cell => instLibFilter === 'ALL' || cell.libName === instLibFilter)
       .sort((a, b) => a.libName.localeCompare(b.libName) || a.cellName.localeCompare(b.cellName))
   ), [masterCells, activeCellId, effectiveCellViews, instLibFilter]);
+
+  const hiddenEmptyCells = useMemo(() => (
+    Object.values(masterCells)
+      .filter(cell => isCellEmpty(cell) && cell.id !== activeCellId)
+      .filter(cell => instLibFilter === 'ALL' || cell.libName === instLibFilter)
+  ), [masterCells, activeCellId, instLibFilter]);
 
   const cellsByLibrary = useMemo(() => {
     const grouped = new Map<string, Cell[]>();
@@ -217,30 +223,25 @@ export const Sidebar: React.FC = () => {
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const isCanvasCell = !editingCellId && newCellCreationMode === 'canvas';
-    const width = isCanvasCell ? Math.max(gridSize * 20, 100) : Number.parseFloat(newWidth);
-    const height = isCanvasCell ? Math.max(gridSize * 20, 100) : Number.parseFloat(newHeight);
     const resolvedLib = newLibName.trim() || topLibName;
-    if (!resolvedLib || !newCellName.trim() || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-      alert('Enter a valid library name, cell name, and positive width and height.');
+    if (!resolvedLib || !newCellName.trim()) {
+      alert('Enter a valid library name and cell name.');
       return;
     }
     try {
       if (editingCellId) {
+        const existingCell = masterCells[editingCellId];
+        const isAutoCell = Boolean(existingCell?.autoBounds);
+        const width = isAutoCell ? (existingCell?.width ?? 0) : Number.parseFloat(newWidth);
+        const height = isAutoCell ? (existingCell?.height ?? 0) : Number.parseFloat(newHeight);
+        if (!isAutoCell && (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0)) {
+          alert('Enter valid positive width and height.');
+          return;
+        }
         updateMasterCell(editingCellId, resolvedLib, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle);
         setEditingCellId(null);
       } else {
-        addMasterCell(
-          resolvedLib,
-          newCellName,
-          width,
-          height,
-          newColor,
-          Number(newOpacity) / 100,
-          newOutlineStyle,
-          isCanvasCell ? true : openCellAfterCreate,
-          isCanvasCell,
-        );
+        createEmptyCell(resolvedLib, newCellName, newColor, openCellAfterCreate);
         setCollapsedLibs(prev => ({ ...prev, [resolvedLib]: false }));
       }
       setShowCreateModal(false);
@@ -315,7 +316,6 @@ export const Sidebar: React.FC = () => {
     setNewCellName('');
     setNewOpacity('50');
     setNewOutlineStyle('solid');
-    setNewCellCreationMode('canvas');
     setOpenCellAfterCreate(true);
     setShowCreateModal(true);
   };
@@ -329,7 +329,6 @@ export const Sidebar: React.FC = () => {
     setNewColor(cell.color);
     setNewOpacity(String(Math.round((cell.opacity ?? 0.5) * 100)));
     setNewOutlineStyle(cell.outlineStyle ?? 'solid');
-    setNewCellCreationMode('fixed');
     setOpenCellAfterCreate(false);
     setShowCreateModal(true);
   };
@@ -434,7 +433,6 @@ export const Sidebar: React.FC = () => {
   useEffect(() => {
     if (showCreateModal && !editingCellId) {
       setNewLibName(prev => (prev.trim() ? prev : topLibName));
-      setNewCellCreationMode('canvas');
       setOpenCellAfterCreate(true);
     }
   }, [showCreateModal, editingCellId, topLibName]);
@@ -658,6 +656,7 @@ export const Sidebar: React.FC = () => {
                       )}
                       {libCells.map(cell => {
                         const isOpenView = activeCellId === cell.id;
+                        const cellIsEmpty = isCellEmpty(cell);
                         const subCount = isOpenView
                           ? instances.length
                           : (cellViews[cell.id]?.instances.length ?? 0);
@@ -665,6 +664,14 @@ export const Sidebar: React.FC = () => {
                           ? shapes.length
                           : (cellViews[cell.id]?.shapes?.length ?? 0);
                         const blocksCycle = wouldCreateHierarchyCycle(activeCellId, cell.id, effectiveCellViews);
+                        const cantInstantiate = blocksCycle || cellIsEmpty;
+                        const instantiateTitle = isOpenView
+                          ? `Cannot instantiate ${cell.cellName} inside itself`
+                          : blocksCycle
+                            ? `Cannot instantiate ${cell.cellName} (would create a hierarchy cycle)`
+                            : cellIsEmpty
+                              ? `${cell.cellName} is empty — open it and draw a rectangle (R) or instantiate a sub-cell first`
+                              : `Instantiate ${cell.cellName} in ${topCellName}`;
                         return (
                           <li
                             key={cell.id}
@@ -703,7 +710,9 @@ export const Sidebar: React.FC = () => {
                                   )}
                                 </div>
                                 <div className="cell-item__meta">
-                                  <span className="size-badge">{cell.width.toFixed(1)}×{cell.height.toFixed(1)} µm</span>
+                                  <span className="size-badge">
+                                    {cellIsEmpty ? 'empty' : `${cell.width.toFixed(1)}×${cell.height.toFixed(1)} µm`}
+                                  </span>
                                 </div>
                               </div>
                             </div>
@@ -720,10 +729,10 @@ export const Sidebar: React.FC = () => {
                               </button>
                               <button
                                 className="icon-btn"
-                                style={{ color: blocksCycle ? 'var(--text-tertiary)' : '#2997ff', opacity: blocksCycle ? 0.35 : 1 }}
-                                disabled={blocksCycle}
+                                style={{ color: cantInstantiate ? 'var(--text-tertiary)' : '#2997ff', opacity: cantInstantiate ? 0.35 : 1 }}
+                                disabled={cantInstantiate}
                                 onClick={() => handleStartPlacement(cell.id)}
-                                title={blocksCycle ? 'Cannot instantiate inside itself (would create a hierarchy cycle)' : `Instantiate ${cell.cellName} in ${topCellName}`}
+                                title={instantiateTitle}
                               >
                                 <FiCrosshair />
                               </button>
@@ -745,18 +754,20 @@ export const Sidebar: React.FC = () => {
         <div className="sidebar-section">
           <div className="section-header">
             <h3 className="section-title"><FiLayers /> Active View Tools</h3>
-            <div className="section-actions">
-              <button className="icon-btn" onClick={() => {
-                setEditTopLibName(topLibName);
-                setEditTopCellName(topCellName);
-                setEditTopWidth(topWidth.toString());
-                setEditTopHeight(topHeight.toString());
-                setEditPadInset(padInset.toString());
-                setShowEditTopModal(true);
-              }} title="Edit Active Cell View Properties">
-                <FiSettings />
-              </button>
-            </div>
+            {!activeCellId && (
+              <div className="section-actions">
+                <button className="icon-btn" onClick={() => {
+                  setEditTopLibName(topLibName);
+                  setEditTopCellName(topCellName);
+                  setEditTopWidth(topWidth.toString());
+                  setEditTopHeight(topHeight.toString());
+                  setEditPadInset(padInset.toString());
+                  setShowEditTopModal(true);
+                }} title="Edit Top Cell Properties">
+                  <FiSettings />
+                </button>
+              </div>
+            )}
           </div>
           <div className={`top-cell-card${activeCellId ? ' top-cell-card--subcell' : ''}`}>
             <div className="top-cell-card__row">
@@ -765,9 +776,11 @@ export const Sidebar: React.FC = () => {
             </div>
             <div className="top-cell-card__row">
               <div className="size-badge">
-                {topWidth.toFixed(1)} × {topHeight.toFixed(1)} µm
+                {activeCellId && (topWidth <= 0 || topHeight <= 0)
+                  ? 'empty cellview'
+                  : `${topWidth.toFixed(1)} × ${topHeight.toFixed(1)} µm`}
               </div>
-              {padInset > 0 && (
+              {!activeCellId && padInset > 0 && (
                 <div className="lib-badge" title="Seal-ring / pad inset margin">
                   Inset {formatGridValue(padInset, gridSize)} µm
                 </div>
@@ -788,14 +801,16 @@ export const Sidebar: React.FC = () => {
             <FiSquare />
             <span><strong>Draw Rectangle (LPP)</strong><small>Draw on text/drawing, M1, prBoundary… (R/D)</small></span>
           </button>
-          <button className="edge-pad-action" type="button" onClick={() => {
-            setPadLibName(topLibName);
-            setPadInsetDraft(padInset.toString());
-            setShowPadModal(true);
-          }}>
-            <FiGrid />
-            <span><strong>Place edge pads</strong><small>Rows or flexible groups with rotation</small></span>
-          </button>
+          {!activeCellId && (
+            <button className="edge-pad-action" type="button" onClick={() => {
+              setPadLibName(topLibName);
+              setPadInsetDraft(padInset.toString());
+              setShowPadModal(true);
+            }}>
+              <FiGrid />
+              <span><strong>Place edge pads</strong><small>Rows or flexible groups with rotation</small></span>
+            </button>
+          )}
           <div className={`pixel-array-card${pixelArray?.visible ? ' active' : ''}`}>
             <button
               className="pixel-array-toggle"
@@ -1059,131 +1074,116 @@ export const Sidebar: React.FC = () => {
                     <input className="input-field locked-library" value="layout" readOnly aria-label="Cell view type" />
                   </div>
                 </div>
-                {!editingCellId && (
-                  <div className="pad-placement-mode" role="group" aria-label="Cell creation mode" style={{ marginBottom: '12px' }}>
-                    <button
-                      type="button"
-                      className={newCellCreationMode === 'canvas' ? 'active' : ''}
-                      onClick={() => {
-                        setNewCellCreationMode('canvas');
-                        setOpenCellAfterCreate(true);
-                      }}
-                      aria-pressed={newCellCreationMode === 'canvas'}
-                    >
-                      <FiSquare />
-                      <span>
-                        <strong>Layout Canvas (0,0)</strong>
-                        <small>Draw rectangles &amp; sub-cells freely</small>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className={newCellCreationMode === 'fixed' ? 'active' : ''}
-                      onClick={() => setNewCellCreationMode('fixed')}
-                      aria-pressed={newCellCreationMode === 'fixed'}
-                    >
-                      <FiBox />
-                      <span>
-                        <strong>Fixed Block (W × H)</strong>
-                        <small>Pre-sized floorplan macro</small>
-                      </span>
-                    </button>
-                  </div>
-                )}
-                {(editingCellId || newCellCreationMode === 'fixed') ? (
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label className="label">Width (um)</label>
-                      <input type="number" step="any" className="input-field" value={newWidth} onChange={e => setNewWidth(e.target.value)} required />
-                    </div>
-                    <div className="form-group">
-                      <label className="label">Height (um)</label>
-                      <input type="number" step="any" className="input-field" value={newHeight} onChange={e => setNewHeight(e.target.value)} required />
-                    </div>
-                  </div>
-                ) : (
-                  <small className="field-help" style={{ display: 'block', marginBottom: '12px' }}>
-                    Opens a blank Virtuoso canvas centered at <strong>(0, 0)</strong> with a Top-Cell reference frame. Draw rectangles (e.g. <code>text/drawing</code>) or instantiate cells, then instantiate this cell at <strong>(0, 0)</strong> in upper-level cells.
-                  </small>
-                )}
-                <div className="form-group">
-                  <label className="label">IP Color</label>
-                  <div className="color-swatch-grid">
-                    {PRESET_COLORS.map(c => (
-                      <button
-                        key={c}
-                        type="button"
-                        className={`color-swatch-btn${newColor === c ? ' active' : ''}`}
-                        onClick={() => setNewColor(c)}
-                        style={{ backgroundColor: c }}
-                        aria-label={`Select color ${c}`}
-                        aria-pressed={newColor === c}
-                      />
-                    ))}
-                  </div>
-                  <label className="custom-color-picker">
-                    <input
-                      type="color"
-                      value={newColor}
-                      onChange={event => setNewColor(event.target.value)}
-                      aria-label="Choose a custom IP color"
-                    />
-                    <span>Custom color</span>
-                    <code>{newColor.toUpperCase()}</code>
-                  </label>
-                </div>
-                <div className="appearance-editor">
-                  <div className="appearance-preview-wrap">
-                    <span className="label">Canvas preview</span>
-                    <div
-                      className={`appearance-preview appearance-preview--${newOutlineStyle}`}
-                      aria-label={`${newOpacity}% opacity with ${newOutlineStyle} outline`}
-                    >
-                      <i style={{ backgroundColor: newColor, opacity: Number(newOpacity) / 100 }} />
-                    </div>
-                  </div>
-                  <div className="appearance-controls">
-                    <div className="appearance-heading">
-                      <label className="label" htmlFor="ip-opacity">Fill transparency</label>
-                      <strong>{newOpacity}% visible</strong>
-                    </div>
-                    <input
-                      id="ip-opacity"
-                      className="opacity-slider"
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="5"
-                      value={newOpacity}
-                      onChange={event => setNewOpacity(event.target.value)}
-                    />
-                    <label className="label">Outline style</label>
-                    <div className="outline-options" role="group" aria-label="IP outline style">
-                      {OUTLINE_STYLES.map(option => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`outline-option${newOutlineStyle === option.value ? ' active' : ''}`}
-                          onClick={() => setNewOutlineStyle(option.value)}
-                          aria-pressed={newOutlineStyle === option.value}
-                        >
-                          <i className={`outline-sample outline-sample--${option.value}`} />
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-                {!editingCellId && newCellCreationMode === 'fixed' && (
-                  <label className="checkbox-label" style={{ marginTop: '12px' }}>
-                    <input
-                      type="checkbox"
-                      checked={openCellAfterCreate}
-                      onChange={event => setOpenCellAfterCreate(event.target.checked)}
-                    />
-                    Open layout view in editor immediately after creating
-                  </label>
-                )}
+                {(() => {
+                  const editingCell = editingCellId ? masterCells[editingCellId] : null;
+                  const showLegacySizeControls = Boolean(editingCell && !editingCell.autoBounds);
+                  return (
+                    <>
+                      {showLegacySizeControls ? (
+                        <div className="form-row">
+                          <div className="form-group">
+                            <label className="label">Width (um)</label>
+                            <input type="number" step="any" className="input-field" value={newWidth} onChange={e => setNewWidth(e.target.value)} required />
+                          </div>
+                          <div className="form-group">
+                            <label className="label">Height (um)</label>
+                            <input type="number" step="any" className="input-field" value={newHeight} onChange={e => setNewHeight(e.target.value)} required />
+                          </div>
+                        </div>
+                      ) : editingCell ? (
+                        <small className="field-help" style={{ display: 'block', marginBottom: '12px' }}>
+                          {isCellEmpty(editingCell)
+                            ? <>Cellview is currently <strong>empty</strong>. Draw shapes (e.g. <code>text/drawing</code>) or instantiate sub-cells inside it — size is determined automatically from its contents.</>
+                            : <>Auto-computed from contents: <strong>{formatGridValue(editingCell.width, gridSize)} × {formatGridValue(editingCell.height, gridSize)} µm</strong> (origin {formatGridValue(editingCell.originX ?? 0, gridSize)}, {formatGridValue(editingCell.originY ?? 0, gridSize)}).</>}
+                        </small>
+                      ) : (
+                        <small className="field-help" style={{ display: 'block', marginBottom: '12px' }}>
+                          Creates an <strong>empty</strong> Cadence-style layout cellview with no fixed boundary. Draw rectangles (e.g. <code>text/drawing</code>) or instantiate other cells inside it — its size is decided automatically by its contents.
+                        </small>
+                      )}
+                      <div className="form-group">
+                        <label className="label">Cell Color</label>
+                        <div className="color-swatch-grid">
+                          {PRESET_COLORS.map(c => (
+                            <button
+                              key={c}
+                              type="button"
+                              className={`color-swatch-btn${newColor === c ? ' active' : ''}`}
+                              onClick={() => setNewColor(c)}
+                              style={{ backgroundColor: c }}
+                              aria-label={`Select color ${c}`}
+                              aria-pressed={newColor === c}
+                            />
+                          ))}
+                        </div>
+                        <label className="custom-color-picker">
+                          <input
+                            type="color"
+                            value={newColor}
+                            onChange={event => setNewColor(event.target.value)}
+                            aria-label="Choose a custom cell color"
+                          />
+                          <span>Custom color</span>
+                          <code>{newColor.toUpperCase()}</code>
+                        </label>
+                      </div>
+                      {showLegacySizeControls && (
+                        <div className="appearance-editor">
+                          <div className="appearance-preview-wrap">
+                            <span className="label">Canvas preview</span>
+                            <div
+                              className={`appearance-preview appearance-preview--${newOutlineStyle}`}
+                              aria-label={`${newOpacity}% opacity with ${newOutlineStyle} outline`}
+                            >
+                              <i style={{ backgroundColor: newColor, opacity: Number(newOpacity) / 100 }} />
+                            </div>
+                          </div>
+                          <div className="appearance-controls">
+                            <div className="appearance-heading">
+                              <label className="label" htmlFor="ip-opacity">Fill transparency</label>
+                              <strong>{newOpacity}% visible</strong>
+                            </div>
+                            <input
+                              id="ip-opacity"
+                              className="opacity-slider"
+                              type="range"
+                              min="0"
+                              max="100"
+                              step="5"
+                              value={newOpacity}
+                              onChange={event => setNewOpacity(event.target.value)}
+                            />
+                            <label className="label">Outline style</label>
+                            <div className="outline-options" role="group" aria-label="IP outline style">
+                              {OUTLINE_STYLES.map(option => (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={`outline-option${newOutlineStyle === option.value ? ' active' : ''}`}
+                                  onClick={() => setNewOutlineStyle(option.value)}
+                                  aria-pressed={newOutlineStyle === option.value}
+                                >
+                                  <i className={`outline-sample outline-sample--${option.value}`} />
+                                  {option.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {!editingCellId && (
+                        <label className="checkbox-label" style={{ marginTop: '12px' }}>
+                          <input
+                            type="checkbox"
+                            checked={openCellAfterCreate}
+                            onChange={event => setOpenCellAfterCreate(event.target.checked)}
+                          />
+                          Open layout view in editor immediately after creating
+                        </label>
+                      )}
+                    </>
+                  );
+                })()}
                 <div className="modal-actions">
                   <button type="button" className="btn" onClick={() => { setShowCreateModal(false); setEditingCellId(null); }}>Cancel</button>
                   <button type="submit" className="btn btn-primary">{editingCellId ? 'Save Changes' : 'Create Cell View'}</button>
@@ -1216,6 +1216,7 @@ export const Sidebar: React.FC = () => {
                         const nextLib = e.target.value;
                         setInstLibFilter(nextLib);
                         const nextList = Object.values(masterCells)
+                          .filter(c => !isCellEmpty(c))
                           .filter(c => !wouldCreateHierarchyCycle(activeCellId, c.id, effectiveCellViews))
                           .filter(c => nextLib === 'ALL' || c.libName === nextLib);
                         if (nextList[0]) {
@@ -1253,13 +1254,21 @@ export const Sidebar: React.FC = () => {
                       }
                     }}
                   >
-                    {eligibleInstantiateCells.length === 0 && <option value="" disabled>No eligible cells in this library</option>}
+                    {eligibleInstantiateCells.length === 0 && <option value="" disabled>No non-empty eligible cells in this library</option>}
                     {eligibleInstantiateCells.map(cell => (
                       <option key={cell.id} value={cell.id}>
                         {cell.libName} / {cell.cellName} ({cell.width} × {cell.height} µm)
                       </option>
                     ))}
                   </select>
+                  {(hiddenEmptyCells.length > 0 || activeCellId) && (
+                    <small className="field-help" style={{ display: 'block', marginTop: '6px' }}>
+                      {activeCellId && <>Cell <strong>{topCellName}</strong> cannot be instantiated inside itself. </>}
+                      {hiddenEmptyCells.length > 0 && (
+                        <>Empty cell{hiddenEmptyCells.length === 1 ? '' : 's'} ({hiddenEmptyCells.map(c => c.cellName).join(', ')}) must have drawn shapes or sub-cells before being instantiated.</>
+                      )}
+                    </small>
+                  )}
                 </div>
                 <div className="form-row">
                   <div className="form-group">

@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, clampInstancePosition, computePadGroupPositions, findOverlappingInstance, getTransformProps, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
+import { useStore, clampInstancePosition, computePadGroupPositions, findOverlappingInstance, getTransformProps, isCellEmpty, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
 import type { Instance } from '../store/useStore';
 import { getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
@@ -85,7 +85,6 @@ export const FloorplanCanvas: React.FC = () => {
     activeCoordinateMode,
     cellViews,
     activeCellId,
-    rootView,
     windowLayoutMode,
     openViewIds,
     descendIntoInstance,
@@ -150,32 +149,34 @@ export const FloorplanCanvas: React.FC = () => {
     return { minX: -topWidth / 2, minY: -topHeight / 2, maxX: topWidth / 2, maxY: topHeight / 2 };
   }, [isOriginSubCell, activeMasterCell, topWidth, topHeight]);
 
+  const isSubCellEmpty = isSubCellCanvas && shapes.length === 0 && instances.length === 0 && !pixelArray;
   const gridExtentUm = useMemo(() => {
     if (!isSubCellCanvas) {
       return { minX: -topWidth / 2, maxX: topWidth / 2, minY: -topHeight / 2, maxY: topHeight / 2 };
     }
-    let minX = Math.min(activeBoundaryBox.minX, 0);
-    let maxX = Math.max(activeBoundaryBox.maxX, 0);
-    let minY = Math.min(activeBoundaryBox.minY, 0);
-    let maxY = Math.max(activeBoundaryBox.maxY, 0);
-    if (rootView) {
-      minX = Math.min(minX, -rootView.topWidth / 2);
-      maxX = Math.max(maxX, rootView.topWidth / 2);
-      minY = Math.min(minY, -rootView.topHeight / 2);
-      maxY = Math.max(maxY, rootView.topHeight / 2);
+    if (isSubCellEmpty || topWidth <= 0 || topHeight <= 0) {
+      const halfSpan = Math.max(gridSize * 200, 200);
+      return { minX: -halfSpan, maxX: halfSpan, minY: -halfSpan * 0.75, maxY: halfSpan * 0.75 };
     }
-    return { minX, maxX, minY, maxY };
-  }, [isSubCellCanvas, topWidth, topHeight, activeBoundaryBox, rootView]);
+    return {
+      minX: Math.min(activeBoundaryBox.minX, 0),
+      maxX: Math.max(activeBoundaryBox.maxX, 0),
+      minY: Math.min(activeBoundaryBox.minY, 0),
+      maxY: Math.max(activeBoundaryBox.maxY, 0),
+    };
+  }, [isSubCellCanvas, isSubCellEmpty, topWidth, topHeight, activeBoundaryBox, gridSize]);
 
   const displayGrid = useMemo(
-    () => computeDisplayGridStep(
-      gridSize,
-      stageScale,
-      SCALE_FACTOR,
-      Math.max(1, gridExtentUm.maxX - gridExtentUm.minX),
-      Math.max(1, gridExtentUm.maxY - gridExtentUm.minY),
-    ),
-    [gridSize, stageScale, gridExtentUm],
+    () => {
+      const spanX = isSubCellCanvas && stageScale > 0 && dimensions.width > 1
+        ? dimensions.width / (stageScale * SCALE_FACTOR)
+        : Math.max(1, gridExtentUm.maxX - gridExtentUm.minX);
+      const spanY = isSubCellCanvas && stageScale > 0 && dimensions.height > 1
+        ? dimensions.height / (stageScale * SCALE_FACTOR)
+        : Math.max(1, gridExtentUm.maxY - gridExtentUm.minY);
+      return computeDisplayGridStep(gridSize, stageScale, SCALE_FACTOR, Math.max(1, spanX), Math.max(1, spanY));
+    },
+    [gridSize, stageScale, gridExtentUm, isSubCellCanvas, dimensions.width, dimensions.height],
   );
   const activeSnapStep = resolveActiveSnapStep(gridSize, displayGrid.minorStep, snapToVisibleGrid);
   const activeSnapStepRef = useRef(activeSnapStep);
@@ -217,12 +218,13 @@ export const FloorplanCanvas: React.FC = () => {
       let maxY = activeBoundaryBox.maxY;
 
       if (isSubCellCanvas) {
-        const isBlankAutoCell = Boolean(activeMasterCell?.autoBounds) && shapes.length === 0 && instances.length === 0;
-        if (isBlankAutoCell && rootView) {
-          minX = -rootView.topWidth / 2;
-          maxX = rootView.topWidth / 2;
-          minY = -rootView.topHeight / 2;
-          maxY = rootView.topHeight / 2;
+        if (isSubCellEmpty || topWidth <= 0 || topHeight <= 0) {
+          const halfW = Math.max(gridSize * 200, 200);
+          const halfH = Math.max(gridSize * 150, 150);
+          minX = -halfW;
+          maxX = halfW;
+          minY = -halfH;
+          maxY = halfH;
         } else {
           minX = Math.min(minX, 0);
           maxX = Math.max(maxX, 0);
@@ -250,7 +252,7 @@ export const FloorplanCanvas: React.FC = () => {
         y: offsetHeight / 2 + centerY * initialScale, 
       }); 
     }
-  }, [activeBoundaryBox, isSubCellCanvas, activeMasterCell, shapes.length, instances.length, rootView, gridSize]);
+  }, [activeBoundaryBox, isSubCellCanvas, isSubCellEmpty, topWidth, topHeight, gridSize]);
 
   const fitViewRef = useRef(fitView);
   useEffect(() => {
@@ -1471,7 +1473,7 @@ export const FloorplanCanvas: React.FC = () => {
               if (candidate.occludes) covered = addCoveredInterval(covered, candidate.overlap);
             });
 
-            if (!hasVisibleNeighbor) {
+            if (!hasVisibleNeighbor && !isSubCellCanvas) {
               const projectionCenter = (projectionStart + projectionEnd) / 2;
               if (direction === 'right') {
                 const gap = topBox.maxX - selBox.maxX;
@@ -1819,7 +1821,15 @@ export const FloorplanCanvas: React.FC = () => {
     }
     const { minorStep, majorStep, showFineDots } = displayGrid;
     const lines: Array<{ key: string; points: number[]; major: boolean }> = [];
-    const { minX: gxMin, maxX: gxMax, minY: gyMin, maxY: gyMax } = gridExtentUm;
+    const hasViewport = dimensions.width > 1 && dimensions.height > 1;
+    const viewLeftUm = hasViewport ? (-stagePos.x / stageScale) / SCALE_FACTOR : gridExtentUm.minX;
+    const viewRightUm = hasViewport ? ((dimensions.width - stagePos.x) / stageScale) / SCALE_FACTOR : gridExtentUm.maxX;
+    const viewTopUm = hasViewport ? (stagePos.y / stageScale) / SCALE_FACTOR : gridExtentUm.maxY;
+    const viewBottomUm = hasViewport ? ((stagePos.y - dimensions.height) / stageScale) / SCALE_FACTOR : gridExtentUm.minY;
+    const gxMin = isSubCellCanvas ? viewLeftUm : gridExtentUm.minX;
+    const gxMax = isSubCellCanvas ? viewRightUm : gridExtentUm.maxX;
+    const gyMin = isSubCellCanvas ? viewBottomUm : gridExtentUm.minY;
+    const gyMax = isSubCellCanvas ? viewTopUm : gridExtentUm.maxY;
     const gxMinPx = gxMin * SCALE_FACTOR;
     const gxMaxPx = gxMax * SCALE_FACTOR;
     const gyMinPx = gyMin * SCALE_FACTOR;
@@ -1828,28 +1838,28 @@ export const FloorplanCanvas: React.FC = () => {
 
     const startXIndex = Math.ceil((gxMin + 1e-9) / minorStep);
     const endXIndex = Math.floor((gxMax - 1e-9) / minorStep);
-    for (let idx = startXIndex; idx <= endXIndex; idx += 1) {
-      if (idx === 0) continue;
-      const x = snapToGrid(idx * minorStep, gridSize);
-      const px = x * SCALE_FACTOR;
-      lines.push({ key: `gx-${idx}`, points: [px, gyMinPx, px, gyMaxPx], major: isMajor(x) });
+    if (endXIndex - startXIndex <= 400) {
+      for (let idx = startXIndex; idx <= endXIndex; idx += 1) {
+        if (idx === 0) continue;
+        const x = snapToGrid(idx * minorStep, gridSize);
+        const px = x * SCALE_FACTOR;
+        lines.push({ key: `gx-${idx}`, points: [px, gyMinPx, px, gyMaxPx], major: isMajor(x) });
+      }
     }
     const startYIndex = Math.ceil((gyMin + 1e-9) / minorStep);
     const endYIndex = Math.floor((gyMax - 1e-9) / minorStep);
-    for (let idx = startYIndex; idx <= endYIndex; idx += 1) {
-      if (idx === 0) continue;
-      const y = snapToGrid(idx * minorStep, gridSize);
-      const py = y * SCALE_FACTOR;
-      lines.push({ key: `gy-${idx}`, points: [gxMinPx, py, gxMaxPx, py], major: isMajor(y) });
+    if (endYIndex - startYIndex <= 400) {
+      for (let idx = startYIndex; idx <= endYIndex; idx += 1) {
+        if (idx === 0) continue;
+        const y = snapToGrid(idx * minorStep, gridSize);
+        const py = y * SCALE_FACTOR;
+        lines.push({ key: `gy-${idx}`, points: [gxMinPx, py, gxMaxPx, py], major: isMajor(y) });
+      }
     }
 
     // When zoomed closely onto the defined gridSize, show crisp Virtuoso grid intersection dots inside the visible viewport.
     const dots: Array<{ key: string; x: number; y: number }> = [];
-    if (showFineDots && dimensions.width > 1 && dimensions.height > 1) {
-      const viewLeftUm = (-stagePos.x / stageScale) / SCALE_FACTOR;
-      const viewRightUm = ((dimensions.width - stagePos.x) / stageScale) / SCALE_FACTOR;
-      const viewTopUm = (stagePos.y / stageScale) / SCALE_FACTOR;
-      const viewBottomUm = ((stagePos.y - dimensions.height) / stageScale) / SCALE_FACTOR;
+    if (showFineDots && hasViewport) {
       const minX = Math.max(gxMin, viewLeftUm);
       const maxX = Math.min(gxMax, viewRightUm);
       const minY = Math.max(gyMin, viewBottomUm);
@@ -1872,7 +1882,7 @@ export const FloorplanCanvas: React.FC = () => {
     }
 
     return { lines, dots };
-  }, [showGrid, stageScale, displayGrid, gridSize, gridExtentUm, stagePos.x, stagePos.y, dimensions.width, dimensions.height]);
+  }, [showGrid, stageScale, displayGrid, gridSize, gridExtentUm, isSubCellCanvas, stagePos.x, stagePos.y, dimensions.width, dimensions.height]);
 
   /** Recursively renders drawn LPP shapes and sub-instances inside an instantiated cellview. */
   const renderCellViewContents = (
@@ -1943,7 +1953,8 @@ export const FloorplanCanvas: React.FC = () => {
           const subOy = (subMaster.originY ?? 0) * SCALE_FACTOR;
           const subW = subMaster.width * SCALE_FACTOR;
           const subH = subMaster.height * SCALE_FACTOR;
-          const childHasShapes = (cellViews[subInst.cellId]?.shapes?.length ?? 0) > 0;
+          const subViewContent = cellViews[subInst.cellId];
+          const childHasContent = (subViewContent?.shapes?.length ?? 0) > 0 || (subViewContent?.instances?.length ?? 0) > 0;
           return (
             <Group
               key={subInst.id}
@@ -1953,16 +1964,18 @@ export const FloorplanCanvas: React.FC = () => {
               scaleX={st.scaleX}
               scaleY={st.scaleY}
             >
-              <Rect
-                x={subOx}
-                y={subOy}
-                width={subW}
-                height={subH}
-                fill={subMaster.color}
-                opacity={childHasShapes && subMaster.autoBounds ? 0.08 : Math.min(0.65, (subMaster.opacity ?? 0.5) * 0.8)}
-                stroke="rgba(15, 23, 42, 0.55)"
-                strokeWidth={0.8 / stageScale}
-              />
+              {!childHasContent && subW > 0 && subH > 0 && (
+                <Rect
+                  x={subOx}
+                  y={subOy}
+                  width={subW}
+                  height={subH}
+                  fill={subMaster.color}
+                  opacity={Math.min(0.65, (subMaster.opacity ?? 0.5) * 0.8)}
+                  stroke="rgba(15, 23, 42, 0.55)"
+                  strokeWidth={0.8 / stageScale}
+                />
+              )}
               {renderCellViewContents(subInst.cellId, subW, subH, depth + 1, nextVisited)}
             </Group>
           );
@@ -2092,57 +2105,33 @@ export const FloorplanCanvas: React.FC = () => {
         }}
       >
         <Layer>
-          {/* Infinite Background for panning */}
+          {/* Infinite Background for panning (clean white drafting field for boundary-free Virtuoso IP cellviews) */}
           <Rect 
             name="bg"
             x={-bgExtent} 
             y={-bgExtent} 
             width={bgExtent * 2} 
             height={bgExtent * 2} 
-            fill="transparent" 
+            fill={isSubCellCanvas ? '#ffffff' : 'transparent'} 
           />
 
-          {/* Optional Top-Cell Reference Frame when editing an IP cellview in native (0,0) coordinates */}
-          {isSubCellCanvas && rootView && (
-            <Group listening={false}>
-              <Rect
-                x={(-rootView.topWidth / 2) * SCALE_FACTOR}
-                y={(-rootView.topHeight / 2) * SCALE_FACTOR}
-                width={rootView.topWidth * SCALE_FACTOR}
-                height={rootView.topHeight * SCALE_FACTOR}
-                fill="#ffffff"
-                opacity={0.78}
-                stroke="#94a3b8"
-                strokeWidth={1.25 / stageScale}
-                dash={[12 / stageScale, 8 / stageScale]}
-              />
-              <Text
-                text={`Top Ref: ${rootView.topCellName} (${rootView.topWidth} × ${rootView.topHeight} µm)`}
-                x={(-rootView.topWidth / 2) * SCALE_FACTOR}
-                y={(rootView.topHeight / 2) * SCALE_FACTOR + 18 / stageScale}
-                fill="#94a3b8"
-                fontSize={11.5 / stageScale}
-                fontFamily={CANVAS_FONT_SANS}
-                scaleY={-1}
-              />
-            </Group>
+          {/* Top-cell chip die boundary (only rendered in root top cell; IP cellviews are open Virtuoso canvases without fixed boundary boxes) */}
+          {!isSubCellCanvas && (
+            <Rect 
+              name="bg"
+              x={boundaryX} 
+              y={boundaryY} 
+              width={tw} 
+              height={th} 
+              fill="#ffffff"
+              stroke="#64748b" 
+              strokeWidth={1.75 / stageScale}
+              dash={[10 / stageScale, 8 / stageScale]}
+              shadowColor="rgba(15, 23, 42, 0.1)"
+              shadowBlur={24 / stageScale}
+              shadowOffsetY={-4 / stageScale}
+            />
           )}
-
-          {/* Active cell boundary (prBoundary / bounding box) */}
-          <Rect 
-            name="bg"
-            x={boundaryX} 
-            y={boundaryY} 
-            width={tw} 
-            height={th} 
-            fill={isSubCellCanvas && activeMasterCell?.autoBounds ? 'rgba(255, 255, 255, 0.35)' : '#ffffff'}
-            stroke={isSubCellCanvas ? '#3b82f6' : '#64748b'} 
-            strokeWidth={(isSubCellCanvas ? 1.5 : 1.75) / stageScale}
-            dash={[10 / stageScale, 8 / stageScale]}
-            shadowColor={isSubCellCanvas ? undefined : 'rgba(15, 23, 42, 0.1)'}
-            shadowBlur={isSubCellCanvas ? 0 : 24 / stageScale}
-            shadowOffsetY={isSubCellCanvas ? 0 : -4 / stageScale}
-          />
 
           {/* Virtuoso Minor & Major Drafting Grid (exact integer multiples of gridSize) */}
           {gridGeometry.lines.map(line => (
@@ -2293,40 +2282,44 @@ export const FloorplanCanvas: React.FC = () => {
               scaleY={-1}
             />
           </Group>
-          <Text
-            text={`${topCellName} (${formatGridValue(topWidth, gridSize)}um x ${formatGridValue(topHeight, gridSize)}um)`}
-            x={boundaryX}
-            y={boundaryY + th + 25 / stageScale}
-            fill={isSubCellCanvas ? '#2563eb' : '#94a3b8'}
-            fontSize={15 / stageScale}
-            fontFamily={CANVAS_FONT_SANS}
-            scaleY={-1}
-            listening={false}
-          />
-          {/* Top Right Coordinate */}
-          <Text
-            text={`(${formatGridValue(activeBoundaryBox.maxX, gridSize)}, ${formatGridValue(activeBoundaryBox.maxY, gridSize)})`}
-            x={boundaryX + tw - 200 / stageScale}
-            y={boundaryY + th + 25 / stageScale}
-            width={200 / stageScale}
-            align="right"
-            fill="#94a3b8"
-            fontSize={12 / stageScale}
-            fontFamily={CANVAS_FONT_SANS}
-            scaleY={-1}
-            listening={false}
-          />
-          {/* Bottom Left Coordinate */}
-          <Text
-            text={`(${formatGridValue(activeBoundaryBox.minX, gridSize)}, ${formatGridValue(activeBoundaryBox.minY, gridSize)})`}
-            x={boundaryX}
-            y={boundaryY - 10 / stageScale}
-            fill="#94a3b8"
-            fontSize={12 / stageScale}
-            fontFamily={CANVAS_FONT_SANS}
-            scaleY={-1}
-            listening={false}
-          />
+          {!isSubCellCanvas && (
+            <>
+              <Text
+                text={`${topCellName} (${formatGridValue(topWidth, gridSize)}um x ${formatGridValue(topHeight, gridSize)}um)`}
+                x={boundaryX}
+                y={boundaryY + th + 25 / stageScale}
+                fill="#94a3b8"
+                fontSize={15 / stageScale}
+                fontFamily={CANVAS_FONT_SANS}
+                scaleY={-1}
+                listening={false}
+              />
+              {/* Top Right Coordinate */}
+              <Text
+                text={`(${formatGridValue(activeBoundaryBox.maxX, gridSize)}, ${formatGridValue(activeBoundaryBox.maxY, gridSize)})`}
+                x={boundaryX + tw - 200 / stageScale}
+                y={boundaryY + th + 25 / stageScale}
+                width={200 / stageScale}
+                align="right"
+                fill="#94a3b8"
+                fontSize={12 / stageScale}
+                fontFamily={CANVAS_FONT_SANS}
+                scaleY={-1}
+                listening={false}
+              />
+              {/* Bottom Left Coordinate */}
+              <Text
+                text={`(${formatGridValue(activeBoundaryBox.minX, gridSize)}, ${formatGridValue(activeBoundaryBox.minY, gridSize)})`}
+                x={boundaryX}
+                y={boundaryY - 10 / stageScale}
+                fill="#94a3b8"
+                fontSize={12 / stageScale}
+                fontFamily={CANVAS_FONT_SANS}
+                scaleY={-1}
+                listening={false}
+              />
+            </>
+          )}
         </Layer>
         
         <Layer>
@@ -2339,7 +2332,12 @@ export const FloorplanCanvas: React.FC = () => {
             const h = masterCell.height * SCALE_FACTOR;
             const isSelected = selectedInstanceIds.includes(inst.id);
             const isPrimarySelection = selectedInstanceId === inst.id;
-            const hasDrawnChildShapes = (cellViews[inst.cellId]?.shapes?.length ?? 0) > 0;
+            const childView = cellViews[inst.cellId];
+            const childShapes = childView?.shapes ?? [];
+            const childSubInstances = childView?.instances ?? [];
+            const childHasContent = childShapes.length > 0 || childSubInstances.length > 0;
+            const childIsEmpty = isCellEmpty(masterCell);
+            const childHasShapeLabel = childShapes.some(s => Boolean(s.label?.trim()));
 
             const t = getTransformProps(inst.orientation);
             const outlineStyle = masterCell.outlineStyle ?? 'solid';
@@ -2400,30 +2398,62 @@ export const FloorplanCanvas: React.FC = () => {
                   }
                 }}
               >
-                <Rect
-                  x={ox}
-                  y={oy}
-                  width={w}
-                  height={h}
-                  fill={masterCell.color}
-                  opacity={hasDrawnChildShapes && masterCell.autoBounds ? 0.08 : (masterCell.opacity ?? 0.5)}
-                />
-                {/* Live recursive sub-hierarchy & drawn LPP shape preview */}
-                {renderCellViewContents(inst.cellId, w, h)}
-                {outlineStyle !== 'none' && (
-                  <Rect
-                    x={ox}
-                    y={oy}
-                    width={w}
-                    height={h}
-                    fillEnabled={false}
-                    stroke="#334155"
-                    strokeWidth={1 / stageScale}
-                    dash={hasDrawnChildShapes && masterCell.autoBounds ? [6 / stageScale, 4 / stageScale] : outlineDash}
-                    listening={false}
-                  />
+                {childIsEmpty ? (
+                  <Group x={0} y={0}>
+                    <Circle radius={10 / stageScale} fill="transparent" />
+                    <Line points={[-7 / stageScale, 0, 7 / stageScale, 0]} stroke={isSelected ? '#f59e0b' : '#64748b'} strokeWidth={1.6 / stageScale} />
+                    <Line points={[0, -7 / stageScale, 0, 7 / stageScale]} stroke={isSelected ? '#f59e0b' : '#64748b'} strokeWidth={1.6 / stageScale} />
+                    <Circle radius={3 / stageScale} fill="#ffffff" stroke={isSelected ? '#f59e0b' : '#64748b'} strokeWidth={1.4 / stageScale} />
+                    <Text
+                      text={`${inst.name} · ${masterCell.cellName} (empty)`}
+                      x={8 / stageScale}
+                      y={6 / stageScale}
+                      fill="#64748b"
+                      fontSize={10 / stageScale}
+                      fontFamily={CANVAS_FONT_MONO}
+                      scaleY={-1}
+                      listening={false}
+                    />
+                  </Group>
+                ) : childHasContent ? (
+                  <>
+                    {/* Transparent hit region so clicking/dragging works across the cell's full bounding box without drawing an artificial wrapper box */}
+                    <Rect
+                      x={ox}
+                      y={oy}
+                      width={w}
+                      height={h}
+                      fill="transparent"
+                    />
+                    {/* Live recursive sub-hierarchy & drawn LPP shapes (pure Virtuoso content, no artificial boundary box) */}
+                    {renderCellViewContents(inst.cellId, w, h)}
+                  </>
+                ) : (
+                  <>
+                    <Rect
+                      x={ox}
+                      y={oy}
+                      width={w}
+                      height={h}
+                      fill={masterCell.color}
+                      opacity={masterCell.opacity ?? 0.5}
+                    />
+                    {outlineStyle !== 'none' && (
+                      <Rect
+                        x={ox}
+                        y={oy}
+                        width={w}
+                        height={h}
+                        fillEnabled={false}
+                        stroke="#334155"
+                        strokeWidth={1 / stageScale}
+                        dash={outlineDash}
+                        listening={false}
+                      />
+                    )}
+                  </>
                 )}
-                {isSelected && (
+                {isSelected && !childIsEmpty && (
                   <>
                     <Rect
                       x={ox}
@@ -2443,7 +2473,7 @@ export const FloorplanCanvas: React.FC = () => {
                     </Group>
                   </>
                 )}
-                {inst.locked && (
+                {inst.locked && !childIsEmpty && (
                   <Rect
                     x={ox}
                     y={oy}
@@ -2457,13 +2487,35 @@ export const FloorplanCanvas: React.FC = () => {
                   />
                 )}
                 
-                {(() => {
+                {!childIsEmpty && (() => {
                   const shortSide = Math.min(w, h);
                   const longSide = Math.max(w, h);
                   const fontSizeWorld = Math.min(shortSide * 0.18, longSide * 0.1);
                   const screenH = h * stageScale;
                   const screenW = w * stageScale;
                   if (screenH < 24 || screenW < 30) return null;
+
+                  // For content-driven Virtuoso cells (drawn LPP shapes / sub-instances), show a compact non-obtrusive instance tag.
+                  if (childHasContent) {
+                    const compactFS = Math.min(11 / stageScale, Math.max(8 / stageScale, shortSide * 0.14));
+                    return (
+                      <Group x={ox} y={oy + h} scaleY={-1} listening={false}>
+                        <Text
+                          text={childHasShapeLabel ? `${inst.name} (${masterCell.cellName})` : `${inst.name} · ${masterCell.cellName}`}
+                          x={4 / stageScale}
+                          y={3 / stageScale}
+                          width={Math.max(1, w - 8 / stageScale)}
+                          align="left"
+                          fill="rgba(15, 23, 42, 0.72)"
+                          fontSize={compactFS}
+                          fontFamily={CANVAS_FONT_MONO}
+                          fontStyle="bold"
+                          ellipsis={true}
+                          wrap="none"
+                        />
+                      </Group>
+                    );
+                  }
 
                   const nameFS = fontSizeWorld;
                   const subFS = fontSizeWorld * 0.65;
@@ -2866,7 +2918,7 @@ export const FloorplanCanvas: React.FC = () => {
               });
             })() : [];
 
-            if (!sourceAxis) return [...ipEdges, ...pixelArrayEdges];
+            if (!sourceAxis || isSubCellCanvas) return [...ipEdges, ...pixelArrayEdges];
             const boundaryEdges: AlignmentEdge[] = sourceAxis === 'horizontal'
               ? ['left', 'right']
               : ['bottom', 'top'];
@@ -3102,6 +3154,7 @@ export const FloorplanCanvas: React.FC = () => {
               instances,
               masterCells,
             );
+            const ghostHasContent = (cellViews[m.id]?.shapes?.length ?? 0) > 0 || (cellViews[m.id]?.instances?.length ?? 0) > 0;
             return (
               <Group
                 x={ghostPosition.x * SCALE_FACTOR}
@@ -3109,20 +3162,22 @@ export const FloorplanCanvas: React.FC = () => {
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
-                opacity={ghostOverlap ? 0.72 : 0.58}
+                opacity={ghostOverlap ? 0.72 : 0.65}
                 listening={false}
               >
-                <Rect
-                  x={ghostOx}
-                  y={ghostOy}
-                  width={m.width * SCALE_FACTOR}
-                  height={m.height * SCALE_FACTOR}
-                  fill={ghostOverlap ? '#ef4444' : m.color}
-                  stroke={ghostOverlap ? '#dc2626' : '#f8fafc'}
-                  strokeWidth={(ghostOverlap ? 2.5 : 2) / stageScale}
-                  dash={[5 / stageScale, 5 / stageScale]}
-                  opacity={ghostOverlap ? 0.55 : ((cellViews[m.id]?.shapes?.length ?? 0) > 0 && m.autoBounds ? 0.12 : 0.5)}
-                />
+                {(!ghostHasContent || ghostOverlap) && (
+                  <Rect
+                    x={ghostOx}
+                    y={ghostOy}
+                    width={m.width * SCALE_FACTOR}
+                    height={m.height * SCALE_FACTOR}
+                    fill={ghostOverlap ? '#ef4444' : m.color}
+                    stroke={ghostOverlap ? '#dc2626' : '#f8fafc'}
+                    strokeWidth={(ghostOverlap ? 2.5 : 2) / stageScale}
+                    dash={[5 / stageScale, 5 / stageScale]}
+                    opacity={ghostOverlap ? 0.55 : 0.5}
+                  />
+                )}
                 {renderCellViewContents(m.id, m.width * SCALE_FACTOR, m.height * SCALE_FACTOR)}
                 {(() => {
                   const w = m.width * SCALE_FACTOR;
@@ -3244,6 +3299,11 @@ export const FloorplanCanvas: React.FC = () => {
       {appMode === 'pixel-array' && pendingPixelArraySize && (
         <div className="coordinate-overlay pixel-array-placement-hint">
           Pixel Array {formatGridValue(pendingPixelArraySize.width, gridSize)} × {formatGridValue(pendingPixelArraySize.height, gridSize)} um · Click inside {topCellName} to place · Esc cancels
+        </div>
+      )}
+      {isSubCellEmpty && appMode === 'select' && !edgeAlignmentSession && (
+        <div className="coordinate-overlay">
+          Empty Virtuoso cellview ({topCellName}) · Press R to draw a rectangle (e.g. text/drawing) or I to instantiate a cell
         </div>
       )}
       {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && (

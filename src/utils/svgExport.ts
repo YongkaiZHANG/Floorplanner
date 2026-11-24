@@ -176,15 +176,19 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     const y = inst.y * sf;
     const childView = state.cellViews?.[inst.cellId];
     const childShapes = childView?.shapes ?? [];
+    const childSubInstances = childView?.instances ?? [];
+    const childHasContent = childShapes.length > 0 || childSubInstances.length > 0;
     const outlineStyle = m.outlineStyle ?? 'solid';
     const outlineStroke = outlineStyle === 'none' ? 'none' : '#1e293b';
     const outlineDash = outlineStyle === 'dashed' ? ' stroke-dasharray="8,6"'
       : outlineStyle === 'dotted' ? ' stroke-dasharray="2,4"' : '';
-    const fillOpacity = childShapes.length > 0 && m.autoBounds ? 0.08 : (m.opacity ?? 0.5);
+    const fillOpacity = m.opacity ?? 0.5;
     
     const transform = `translate(${x} ${y}) rotate(${rot}) scale(${scaleX} ${scaleY})`;
     svg += `  <g transform="${transform}">\n`;
-    svg += `    <rect x="${ox}" y="${oy}" width="${w}" height="${h}" fill="${escapeXml(m.color)}" fill-opacity="${fillOpacity}" stroke="${outlineStroke}" stroke-width="1.5"${outlineDash} vector-effect="non-scaling-stroke" />\n`;
+    if (!childHasContent) {
+      svg += `    <rect x="${ox}" y="${oy}" width="${w}" height="${h}" fill="${escapeXml(m.color)}" fill-opacity="${fillOpacity}" stroke="${outlineStroke}" stroke-width="1.5"${outlineDash} vector-effect="non-scaling-stroke" />\n`;
+    }
     if (childShapes.length > 0) {
       const shapeOffsetX = childView?.coordinateMode === 'centered' ? w / 2 : 0;
       const shapeOffsetY = childView?.coordinateMode === 'centered' ? h / 2 : 0;
@@ -196,6 +200,17 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
         const sh = shape.height * sf;
         const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
         svg += `    <rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1.25"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
+      });
+    }
+    if (childSubInstances.length > 0) {
+      const subOffsetX = childView?.coordinateMode === 'centered' ? w / 2 : 0;
+      const subOffsetY = childView?.coordinateMode === 'centered' ? h / 2 : 0;
+      childSubInstances.forEach(sub => {
+        const sm = state.masterCells[sub.cellId];
+        if (!sm) return;
+        const smOx = (sm.originX ?? 0) * sf;
+        const smOy = (sm.originY ?? 0) * sf;
+        svg += `    <rect x="${sub.x * sf + subOffsetX + smOx}" y="${sub.y * sf + subOffsetY + smOy}" width="${sm.width * sf}" height="${sm.height * sf}" fill="${escapeXml(sm.color)}" fill-opacity="0.35" stroke="#1e293b" stroke-width="1" vector-effect="non-scaling-stroke" />\n`;
       });
     }
     

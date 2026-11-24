@@ -10,7 +10,7 @@ import {
 import { generateSkillCode } from '../src/utils/skillExport.ts';
 import { extractProjectFromSvg, generateSvgMarkup } from '../src/utils/svgExport.ts';
 import { parseProjectDocument, serializeProjectDocument } from '../src/store/projectDocument.ts';
-import { getProjectSnapshot, useStore } from '../src/store/useStore.ts';
+import { getProjectSnapshot, isCellEmpty, useStore } from '../src/store/useStore.ts';
 
 const baseProject = {
   gridSize: 1,
@@ -345,4 +345,113 @@ test('pixel array inside an origin-mode IP cellview with non-zero originX/origin
     { hierarchyMode: 'zero-origin-direct', cellViews: snapshot.cellViews },
   );
   assert.match(skill, /dbCreateRect\(cv list\("prBoundary" "drawing"\) list\(600:250 800:400\)\)/);
+});
+
+test('Virtuoso createEmptyCell starts empty with no size, blocks self/empty instantiation, auto-sizes from text/drawing, and round-trips cleanly', () => {
+  useStore.getState().loadProject(baseProject);
+
+  // Create a new IP cell with NO size input (Virtuoso File -> New -> Cell View)
+  useStore.getState().createEmptyCell('xxxL_TOP', 'MY_IP', '#06b6d4', true);
+  const myId = useStore.getState().activeCellId;
+  assert.ok(myId);
+  assert.equal(useStore.getState().topCellName, 'MY_IP');
+  assert.equal(useStore.getState().topWidth, 0);
+  assert.equal(useStore.getState().topHeight, 0);
+  assert.equal(isCellEmpty(useStore.getState().masterCells[myId]), true);
+
+  // Cannot instantiate a cell inside itself
+  assert.throws(() => useStore.getState().setPlacement(myId), /inside itself/);
+  assert.throws(() => useStore.getState().placeInstance(myId, 0, 0), /inside itself/);
+
+  // Cannot instantiate an empty cell inside top_asic before drawing or placing sub-cells
+  useStore.getState().openCellView(null);
+  assert.throws(() => useStore.getState().setPlacement(myId), /empty cell/i);
+  assert.throws(() => useStore.getState().placeInstance(myId, 0, 0), /empty cell/i);
+
+  // Uninstantiated empty cell survives serialization, grid changes, and SKILL export
+  useStore.getState().setGridSize(0.5);
+  const emptySnapshot = getProjectSnapshot(useStore.getState());
+  const reparsedEmpty = parseProjectDocument(serializeProjectDocument(emptySnapshot));
+  assert.equal(reparsedEmpty.masterCells[myId].width, 0);
+  assert.equal(reparsedEmpty.masterCells[myId].height, 0);
+  const emptySkill = generateSkillCode(
+    emptySnapshot.topLibName,
+    emptySnapshot.topCellName,
+    emptySnapshot.topWidth,
+    emptySnapshot.topHeight,
+    emptySnapshot.masterCells,
+    emptySnapshot.instances,
+    emptySnapshot.gridSize,
+    null,
+    { hierarchyMode: 'zero-origin-direct', cellViews: emptySnapshot.cellViews },
+  );
+  assert.match(emptySkill, /Creating empty cellview/);
+
+  // Draw a text/drawing rectangle inside MY_IP -> size is decided strictly by its contents
+  useStore.getState().openCellView(myId);
+  const shapeId = useStore.getState().addShape({
+    layer: 'text',
+    purpose: 'drawing',
+    x: -50,
+    y: 20,
+    width: 120,
+    height: 80,
+    label: 'MY_IP',
+  });
+  assert.equal(isCellEmpty(useStore.getState().masterCells[myId]), false);
+  assert.equal(useStore.getState().masterCells[myId].originX, -50);
+  assert.equal(useStore.getState().masterCells[myId].originY, 20);
+  assert.equal(useStore.getState().masterCells[myId].width, 120);
+  assert.equal(useStore.getState().masterCells[myId].height, 80);
+
+  // Still cannot instantiate MY_IP inside itself even once non-empty
+  assert.throws(() => useStore.getState().placeInstance(myId, 0, 0), /inside itself/);
+
+  // Deleting the last rectangle returns MY_IP back to empty (0x0)
+  useStore.getState().deleteShape(shapeId);
+  assert.equal(isCellEmpty(useStore.getState().masterCells[myId]), true);
+  assert.equal(useStore.getState().masterCells[myId].originX, undefined);
+  assert.equal(useStore.getState().masterCells[myId].originY, undefined);
+});
+
+test('hierarchical auto-bounds propagate bottom-up and drawing text/drawing inside a legacy cell shrinks its bounds to its drawn content', () => {
+  useStore.getState().loadProject(baseProject);
+
+  // Build two empty leaf Virtuoso cells with text/drawing rectangles
+  useStore.getState().createEmptyCell('xxxL_TOP', 'LEAF_A', '#06b6d4', true);
+  const leafAId = useStore.getState().activeCellId;
+  useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 0, y: 0, width: 100, height: 80 });
+
+  useStore.getState().createEmptyCell('xxxL_TOP', 'LEAF_B', '#22c55e', true);
+  const leafBId = useStore.getState().activeCellId;
+  const leafBShapeId = useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 150, y: 0, width: 100, height: 120 });
+
+  // Compose CLUSTER from LEAF_A and LEAF_B at (0, 0)
+  useStore.getState().createEmptyCell('xxxL_TOP', 'CLUSTER', '#3b82f6', true);
+  const clusterId = useStore.getState().activeCellId;
+  useStore.getState().placeInstance(leafAId, 0, 0, 'R0', 'I_A');
+  useStore.getState().placeInstance(leafBId, 0, 0, 'R0', 'I_B');
+  assert.equal(useStore.getState().masterCells[clusterId].width, 250);
+  assert.equal(useStore.getState().masterCells[clusterId].height, 120);
+
+  // Indirect recursion (instantiating CLUSTER inside LEAF_A) is rejected
+  useStore.getState().openCellView(leafAId);
+  assert.throws(() => useStore.getState().placeInstance(clusterId, 0, 0), /hierarchy cycle/);
+
+  // Resize LEAF_B's text/drawing rectangle -> CLUSTER auto-bounds propagate bottom-up immediately
+  useStore.getState().openCellView(leafBId);
+  useStore.getState().updateShape(leafBShapeId, { width: 200, height: 160 });
+  assert.equal(useStore.getState().masterCells[clusterId].width, 350);
+  assert.equal(useStore.getState().masterCells[clusterId].height, 160);
+
+  // Legacy fixed-size cell (e.g. OLD_PAD 100x81) opened and given a text/drawing rect shrinks tightly to the drawn rect
+  useStore.getState().openCellView(null);
+  useStore.getState().addMasterCell('xxxL_TOP', 'OLD_PAD', 100, 81, '#f59e0b', 0.5, 'solid', true, false);
+  const oldPadId = useStore.getState().activeCellId;
+  useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 10, y: 15, width: 40, height: 30 });
+  assert.equal(useStore.getState().masterCells[oldPadId].autoBounds, true);
+  assert.equal(useStore.getState().masterCells[oldPadId].originX, 10);
+  assert.equal(useStore.getState().masterCells[oldPadId].originY, 15);
+  assert.equal(useStore.getState().masterCells[oldPadId].width, 40);
+  assert.equal(useStore.getState().masterCells[oldPadId].height, 30);
 });
