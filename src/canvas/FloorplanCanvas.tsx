@@ -7,6 +7,7 @@ import type { AlignmentEdge } from '../utils/alignment';
 import { collapseCollinearPadCandidates, labelRectsOverlap } from '../utils/autoDim';
 import type { ScreenLabelRect } from '../utils/autoDim';
 import { SCALE_FACTOR } from '../utils/canvasConstants';
+import { computeDisplayGridStep, resolveActiveSnapStep, resolveCanvasCursor, snapPointToGrid } from '../utils/canvasCursor';
 import { findOverlapViolations } from '../utils/floorplanMetrics';
 import { formatGridValue, snapToGrid } from '../utils/grid';
 import { getIpPixelArrayEdgeMeasurements } from '../utils/pixelArrayDimensions';
@@ -16,7 +17,7 @@ import { panViewportByArrow } from '../utils/viewport';
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { FiGrid, FiMaximize2, FiMinus, FiPlus } from 'react-icons/fi';
+import { FiCrosshair, FiGrid, FiMaximize2, FiMinus, FiPlus } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
@@ -103,6 +104,8 @@ export const FloorplanCanvas: React.FC = () => {
     showOverlapDrc,
     showGrid,
     toggleGrid,
+    snapToVisibleGrid,
+    toggleSnapToVisibleGrid,
     edgeAlignmentSession,
     setEdgeAlignmentEdge,
     completeEdgeAlignment,
@@ -115,6 +118,30 @@ export const FloorplanCanvas: React.FC = () => {
     pixelArraySelected,
     setPixelArraySelected,
   } = useStore();
+
+  const displayGrid = useMemo(
+    () => computeDisplayGridStep(gridSize, stageScale, SCALE_FACTOR, topWidth, topHeight),
+    [gridSize, stageScale, topWidth, topHeight],
+  );
+  const activeSnapStep = resolveActiveSnapStep(gridSize, displayGrid.minorStep, snapToVisibleGrid);
+  const activeSnapStepRef = useRef(activeSnapStep);
+  useEffect(() => {
+    activeSnapStepRef.current = activeSnapStep;
+  }, [activeSnapStep]);
+
+  const snappedMousePos = useMemo(() => {
+    if (!mousePos) return null;
+    if (appMode === 'measure' && snapIndicator) return mousePos;
+    return snapPointToGrid(mousePos.x, mousePos.y, activeSnapStep);
+  }, [mousePos, appMode, snapIndicator, activeSnapStep]);
+
+  const clampWithSnapStep = (x: number, y: number, orientation: string, width: number, height: number) => {
+    try {
+      return clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, activeSnapStep);
+    } catch {
+      return clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, gridSize);
+    }
+  };
 
   const fitView = useCallback(() => {
     if (containerRef.current) {
@@ -191,7 +218,8 @@ export const FloorplanCanvas: React.FC = () => {
           const dx = key === 'arrowright' ? 1 : key === 'arrowleft' ? -1 : 0;
           const dy = key === 'arrowup' ? 1 : key === 'arrowdown' ? -1 : 0;
           const multiplier = e.shiftKey ? 10 : 1;
-          state.nudgeSelection(dx * multiplier * state.gridSize, dy * multiplier * state.gridSize);
+          const step = activeSnapStepRef.current;
+          state.nudgeSelection(dx * multiplier * step, dy * multiplier * step);
           return;
         }
         const panDistance = e.shiftKey ? 160 : 48;
@@ -306,7 +334,11 @@ export const FloorplanCanvas: React.FC = () => {
           break;
         case 'g':
           e.preventDefault();
-          state.toggleGrid();
+          if (e.shiftKey) {
+            state.toggleSnapToVisibleGrid();
+          } else {
+            state.toggleGrid();
+          }
           break;
         case 'l':
           e.preventDefault();
@@ -504,7 +536,18 @@ export const FloorplanCanvas: React.FC = () => {
         const closest = getClosestPointOnSegment({x: umX, y: umY}, seg.a, seg.b);
         if (closest.dist < snapRadiusUm) {
           if (!bestSnap || closest.dist < bestSnap.dist) {
-            bestSnap = { ...closest, snapEdgeAxis: seg.axis };
+            // Keep exact edge coordinate while locking the free axis along the edge onto the active grid.
+            const minX = Math.min(seg.a.x, seg.b.x);
+            const maxX = Math.max(seg.a.x, seg.b.x);
+            const minY = Math.min(seg.a.y, seg.b.y);
+            const maxY = Math.max(seg.a.y, seg.b.y);
+            const lockedX = seg.axis === 'vertical'
+              ? closest.x
+              : Math.max(minX, Math.min(maxX, snapToGrid(closest.x, activeSnapStep)));
+            const lockedY = seg.axis === 'horizontal'
+              ? closest.y
+              : Math.max(minY, Math.min(maxY, snapToGrid(closest.y, activeSnapStep)));
+            bestSnap = { x: lockedX, y: lockedY, dist: closest.dist, snapEdgeAxis: seg.axis };
           }
         }
       }
@@ -514,9 +557,8 @@ export const FloorplanCanvas: React.FC = () => {
       }
     }
 
-    umX = snapToGrid(umX, gridSize);
-    umY = snapToGrid(umY, gridSize);
-    return { umX, umY, isSnapped: false, snapEdgeAxis: undefined };
+    const snapped = snapPointToGrid(umX, umY, activeSnapStep);
+    return { umX: snapped.x, umY: snapped.y, isSnapped: false, snapEdgeAxis: undefined };
   };
 
   const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
@@ -531,9 +573,9 @@ export const FloorplanCanvas: React.FC = () => {
       if (pointer) {
         const worldX = (pointer.x - stagePos.x) / stageScale;
         const worldY = (pointer.y - stagePos.y) / -stageScale;
-        const umX = worldX / SCALE_FACTOR;
-        const umY = worldY / SCALE_FACTOR;
-        const nextSelectionBox = { startX: umX, startY: umY, currentX: umX, currentY: umY };
+        const snapped = snapPointToGrid(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR, activeSnapStep);
+        setMousePos(snapped);
+        const nextSelectionBox = { startX: snapped.x, startY: snapped.y, currentX: snapped.x, currentY: snapped.y };
         selectionBoxRef.current = nextSelectionBox;
         marqueeDraggedRef.current = false;
         setSelectionBox(nextSelectionBox);
@@ -556,13 +598,13 @@ export const FloorplanCanvas: React.FC = () => {
     if (selectionBoxRef.current) {
       const worldX = (pointer.x - stagePos.x) / stageScale;
       const worldY = (pointer.y - stagePos.y) / -stageScale;
-      const umX = worldX / SCALE_FACTOR;
-      const umY = worldY / SCALE_FACTOR;
-      const nextSelectionBox = { ...selectionBoxRef.current, currentX: umX, currentY: umY };
+      const snapped = snapPointToGrid(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR, activeSnapStep);
+      setMousePos(snapped);
+      const nextSelectionBox = { ...selectionBoxRef.current, currentX: snapped.x, currentY: snapped.y };
       selectionBoxRef.current = nextSelectionBox;
       marqueeDraggedRef.current ||= Math.hypot(
-        (umX - nextSelectionBox.startX) * SCALE_FACTOR * stageScale,
-        (umY - nextSelectionBox.startY) * SCALE_FACTOR * stageScale,
+        (snapped.x - nextSelectionBox.startX) * SCALE_FACTOR * stageScale,
+        (snapped.y - nextSelectionBox.startY) * SCALE_FACTOR * stageScale,
       ) >= MARQUEE_DRAG_THRESHOLD_PX;
       setSelectionBox(nextSelectionBox);
       return;
@@ -726,11 +768,17 @@ export const FloorplanCanvas: React.FC = () => {
     const groupDrag = multiDragBoundsRef.current;
     if (groupDrag && groupDrag.anchorId === instanceId) {
       const snapDelta = (raw: number, min: number, max: number) => {
-        const minStep = Math.ceil((min - 1e-9) / gridSize);
-        const maxStep = Math.floor((max + 1e-9) / gridSize);
-        if (minStep > maxStep) return 0;
-        const step = Math.max(minStep, Math.min(Math.round(raw / gridSize), maxStep));
-        return snapToGrid(step * gridSize, gridSize);
+        const minStep = Math.ceil((min - 1e-9) / activeSnapStep);
+        const maxStep = Math.floor((max + 1e-9) / activeSnapStep);
+        if (minStep > maxStep) {
+          const fineMin = Math.ceil((min - 1e-9) / gridSize);
+          const fineMax = Math.floor((max + 1e-9) / gridSize);
+          if (fineMin > fineMax) return 0;
+          const fineStep = Math.max(fineMin, Math.min(Math.round(raw / gridSize), fineMax));
+          return snapToGrid(fineStep * gridSize, gridSize);
+        }
+        const step = Math.max(minStep, Math.min(Math.round(raw / activeSnapStep), maxStep));
+        return snapToGrid(step * activeSnapStep, gridSize);
       };
       const dx = snapDelta(umX - groupDrag.startX, groupDrag.minDx, groupDrag.maxDx);
       const dy = snapDelta(umY - groupDrag.startY, groupDrag.minDy, groupDrag.maxDy);
@@ -753,15 +801,12 @@ export const FloorplanCanvas: React.FC = () => {
             orientation,
             padInset,
           )
-        : clampInstancePosition(
+        : clampWithSnapStep(
             umX,
             umY,
             orientation,
             master.width,
             master.height,
-            topWidth,
-            topHeight,
-            gridSize,
           );
       return {
         x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
@@ -791,15 +836,12 @@ export const FloorplanCanvas: React.FC = () => {
     const umX = worldX / SCALE_FACTOR;
     const umY = worldY / SCALE_FACTOR;
     try {
-      const snapped = clampInstancePosition(
+      const snapped = clampWithSnapStep(
         umX,
         umY,
         'R0',
         pixelArray.width,
         pixelArray.height,
-        topWidth,
-        topHeight,
-        gridSize,
       );
       return {
         x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
@@ -1503,38 +1545,73 @@ export const FloorplanCanvas: React.FC = () => {
   const axisExtent = Math.max(tw, th, 100000) * 2;
   const bgExtent = Math.max(tw, th, 100000) * 12;
 
-  const gridLines = useMemo(() => {
-    if (!showGrid || stageScale <= 0) return [];
-    const targetScreenSpacing = 44;
-    const rawStep = targetScreenSpacing / (SCALE_FACTOR * stageScale);
-    const mag = Math.pow(10, Math.floor(Math.log10(Math.max(rawStep, 1e-12))));
-    const norm = rawStep / mag;
-    let factor = 1;
-    if (norm > 7.5) factor = 10;
-    else if (norm > 3.5) factor = 5;
-    else if (norm > 1.5) factor = 2;
-    let stepUm = Math.max(gridSize, factor * mag);
-    const maxLinesPerAxis = 120;
-    if (topWidth / stepUm > maxLinesPerAxis) stepUm = topWidth / maxLinesPerAxis;
-    if (topHeight / stepUm > maxLinesPerAxis) stepUm = Math.max(stepUm, topHeight / maxLinesPerAxis);
-
-    const lines: Array<{ key: string; points: number[] }> = [];
+  const gridGeometry = useMemo(() => {
+    if (!showGrid || stageScale <= 0) {
+      return {
+        lines: [] as Array<{ key: string; points: number[]; major: boolean }>,
+        dots: [] as Array<{ key: string; x: number; y: number }>,
+      };
+    }
+    const { minorStep, majorStep, showFineDots } = displayGrid;
+    const lines: Array<{ key: string; points: number[]; major: boolean }> = [];
     const halfW = topWidth / 2;
     const halfH = topHeight / 2;
-    const startX = Math.ceil(-halfW / stepUm) * stepUm;
-    for (let x = startX; x < halfW - 1e-9; x += stepUm) {
-      if (Math.abs(x) <= 1e-9) continue;
+    const isMajor = (coord: number) => Math.abs(coord - Math.round(coord / majorStep) * majorStep) <= Math.max(1e-9, minorStep * 1e-6);
+
+    const startXIndex = Math.ceil((-halfW + 1e-9) / minorStep);
+    const endXIndex = Math.floor((halfW - 1e-9) / minorStep);
+    for (let idx = startXIndex; idx <= endXIndex; idx += 1) {
+      if (idx === 0) continue;
+      const x = snapToGrid(idx * minorStep, gridSize);
       const px = x * SCALE_FACTOR;
-      lines.push({ key: `gx-${x.toFixed(6)}`, points: [px, -th / 2, px, th / 2] });
+      lines.push({ key: `gx-${idx}`, points: [px, -th / 2, px, th / 2], major: isMajor(x) });
     }
-    const startY = Math.ceil(-halfH / stepUm) * stepUm;
-    for (let y = startY; y < halfH - 1e-9; y += stepUm) {
-      if (Math.abs(y) <= 1e-9) continue;
+    const startYIndex = Math.ceil((-halfH + 1e-9) / minorStep);
+    const endYIndex = Math.floor((halfH - 1e-9) / minorStep);
+    for (let idx = startYIndex; idx <= endYIndex; idx += 1) {
+      if (idx === 0) continue;
+      const y = snapToGrid(idx * minorStep, gridSize);
       const py = y * SCALE_FACTOR;
-      lines.push({ key: `gy-${y.toFixed(6)}`, points: [-tw / 2, py, tw / 2, py] });
+      lines.push({ key: `gy-${idx}`, points: [-tw / 2, py, tw / 2, py], major: isMajor(y) });
     }
-    return lines;
-  }, [showGrid, stageScale, gridSize, topWidth, topHeight, tw, th]);
+
+    // When zoomed closely onto the defined gridSize, show crisp Virtuoso grid intersection dots inside the visible viewport.
+    const dots: Array<{ key: string; x: number; y: number }> = [];
+    if (showFineDots && dimensions.width > 1 && dimensions.height > 1) {
+      const viewLeftUm = (-stagePos.x / stageScale) / SCALE_FACTOR;
+      const viewRightUm = ((dimensions.width - stagePos.x) / stageScale) / SCALE_FACTOR;
+      const viewTopUm = (stagePos.y / stageScale) / SCALE_FACTOR;
+      const viewBottomUm = ((stagePos.y - dimensions.height) / stageScale) / SCALE_FACTOR;
+      const minX = Math.max(-halfW, viewLeftUm);
+      const maxX = Math.min(halfW, viewRightUm);
+      const minY = Math.max(-halfH, viewBottomUm);
+      const maxY = Math.min(halfH, viewTopUm);
+      const ixStart = Math.ceil((minX - 1e-9) / minorStep);
+      const ixEnd = Math.floor((maxX + 1e-9) / minorStep);
+      const iyStart = Math.ceil((minY - 1e-9) / minorStep);
+      const iyEnd = Math.floor((maxY + 1e-9) / minorStep);
+      const countX = Math.max(0, ixEnd - ixStart + 1);
+      const countY = Math.max(0, iyEnd - iyStart + 1);
+      if (countX * countY <= 900) {
+        for (let ix = ixStart; ix <= ixEnd; ix += 1) {
+          const px = snapToGrid(ix * minorStep, gridSize) * SCALE_FACTOR;
+          for (let iy = iyStart; iy <= iyEnd; iy += 1) {
+            const py = snapToGrid(iy * minorStep, gridSize) * SCALE_FACTOR;
+            dots.push({ key: `gd-${ix}-${iy}`, x: px, y: py });
+          }
+        }
+      }
+    }
+
+    return { lines, dots };
+  }, [showGrid, stageScale, displayGrid, gridSize, topWidth, topHeight, tw, th, stagePos.x, stagePos.y, dimensions.width, dimensions.height]);
+
+  const canvasCursor = resolveCanvasCursor({
+    appMode,
+    edgeAlignmentActive: Boolean(edgeAlignmentSession),
+    isPanning,
+    isSpaceDown,
+  });
 
   const selectionHasLocked = useMemo(
     () => selectedInstanceIds.some(id => instances.find(item => item.id === id)?.locked),
@@ -1601,12 +1678,24 @@ export const FloorplanCanvas: React.FC = () => {
             }
           } else if (appMode === 'place' && placementMasterId && snapped) {
             try {
+              const placementMaster = masterCells[placementMasterId];
               if (pendingManualPadGroup) {
                 placeManualPadGroup(snapped.umX, snapped.umY);
-              } else if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
-                placeInstanceMosaic(placementMasterId, snapped.umX, snapped.umY, placementOrientation, pendingInstanceArray);
               } else {
-                placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation, pendingInstanceArray?.namePrefix);
+                const targetPos = placementMaster && placementMaster.kind !== 'pad'
+                  ? clampWithSnapStep(
+                      snapped.umX,
+                      snapped.umY,
+                      placementOrientation,
+                      placementMaster.width,
+                      placementMaster.height,
+                    )
+                  : { x: snapped.umX, y: snapped.umY };
+                if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
+                  placeInstanceMosaic(placementMasterId, targetPos.x, targetPos.y, placementOrientation, pendingInstanceArray);
+                } else {
+                  placeInstance(placementMasterId, targetPos.x, targetPos.y, placementOrientation, pendingInstanceArray?.namePrefix);
+                }
               }
             } catch (error) {
               alert(error instanceof Error ? error.message : 'Unable to place the selected cell.');
@@ -1628,8 +1717,8 @@ export const FloorplanCanvas: React.FC = () => {
           }
         }}
         ref={stageRef}
-        style={{ 
-          cursor: edgeAlignmentSession || appMode === 'measure' || appMode === 'pixel-array' ? 'crosshair' : (isPanning ? 'grabbing' : 'grab')
+        style={{
+          cursor: canvasCursor,
         }}
       >
         <Layer>
@@ -1659,13 +1748,23 @@ export const FloorplanCanvas: React.FC = () => {
             shadowOffsetY={-4 / stageScale}
           />
 
-          {/* Adaptive drafting grid */}
-          {gridLines.map(line => (
+          {/* Virtuoso Minor & Major Drafting Grid (exact integer multiples of gridSize) */}
+          {gridGeometry.lines.map(line => (
             <Line
               key={line.key}
               points={line.points}
-              stroke="#e2e8f0"
-              strokeWidth={0.8 / stageScale}
+              stroke={line.major ? '#cbd5e1' : '#e2e8f0'}
+              strokeWidth={(line.major ? 1.1 : 0.75) / stageScale}
+              listening={false}
+            />
+          ))}
+          {gridGeometry.dots.map(dot => (
+            <Circle
+              key={dot.key}
+              x={dot.x}
+              y={dot.y}
+              radius={1.4 / stageScale}
+              fill="#94a3b8"
               listening={false}
             />
           ))}
@@ -1753,11 +1852,11 @@ export const FloorplanCanvas: React.FC = () => {
             </Group>
           )}
 
-          {appMode === 'pixel-array' && pendingPixelArraySize && mousePos && (() => {
+          {appMode === 'pixel-array' && pendingPixelArraySize && snappedMousePos && (() => {
             try {
               const position = clampInstancePosition(
-                mousePos.x - pendingPixelArraySize.width / 2,
-                mousePos.y - pendingPixelArraySize.height / 2,
+                snappedMousePos.x - pendingPixelArraySize.width / 2,
+                snappedMousePos.y - pendingPixelArraySize.height / 2,
                 'R0',
                 pendingPixelArraySize.width,
                 pendingPixelArraySize.height,
@@ -2265,28 +2364,36 @@ export const FloorplanCanvas: React.FC = () => {
             showAutoDim && !edgeAlignmentSession && !pixelArraySelected,
           )}
 
-          {/* Snap Indicator */}
-          {appMode === 'measure' && snapIndicator && (
-            <Group x={snapIndicator.x * SCALE_FACTOR} y={snapIndicator.y * SCALE_FACTOR}>
-              <Circle radius={4 / stageScale} stroke="#eab308" strokeWidth={1.5 / stageScale} />
-              <Line points={[-8 / stageScale, 0, 8 / stageScale, 0]} stroke="#eab308" strokeWidth={1 / stageScale} />
-              <Line points={[0, -8 / stageScale, 0, 8 / stageScale]} stroke="#eab308" strokeWidth={1 / stageScale} />
+          {/* Grid-Locked Canvas Anchor Reticle & Measure Edge Snap Indicator */}
+          {appMode === 'measure' && snapIndicator ? (
+            <Group x={snapIndicator.x * SCALE_FACTOR} y={snapIndicator.y * SCALE_FACTOR} listening={false}>
+              <Circle radius={4.5 / stageScale} stroke="#eab308" strokeWidth={1.6 / stageScale} />
+              <Line points={[-9 / stageScale, 0, 9 / stageScale, 0]} stroke="#eab308" strokeWidth={1.1 / stageScale} />
+              <Line points={[0, -9 / stageScale, 0, 9 / stageScale]} stroke="#eab308" strokeWidth={1.1 / stageScale} />
             </Group>
-          )}
+          ) : snappedMousePos && !isPanning && !isSpaceDown ? (
+            <Group x={snappedMousePos.x * SCALE_FACTOR} y={snappedMousePos.y * SCALE_FACTOR} listening={false}>
+              <Line points={[-7 / stageScale, 0, 7 / stageScale, 0]} stroke="#ffffff" strokeWidth={2.6 / stageScale} opacity={0.85} />
+              <Line points={[0, -7 / stageScale, 0, 7 / stageScale]} stroke="#ffffff" strokeWidth={2.6 / stageScale} opacity={0.85} />
+              <Line points={[-7 / stageScale, 0, 7 / stageScale, 0]} stroke="#0284c7" strokeWidth={1.25 / stageScale} />
+              <Line points={[0, -7 / stageScale, 0, 7 / stageScale]} stroke="#0284c7" strokeWidth={1.25 / stageScale} />
+              <Circle radius={2.2 / stageScale} fill="#0284c7" stroke="#ffffff" strokeWidth={1 / stageScale} />
+            </Group>
+          ) : null}
 
           {/* Ghost Placement Group */}
-          {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && mousePos && (() => {
+          {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && snappedMousePos && (() => {
             const m = masterCells[placementMasterId];
             let previewOrientation = placementOrientation;
-            let ghostPosition = mousePos;
+            let ghostPosition = snappedMousePos;
             if (m.kind === 'pad') {
               try {
                 if (pendingManualPadGroup) {
-                  const snapped = snapPadToAutoOrientedEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize, padInset);
+                  const snapped = snapPadToAutoOrientedEdge(snappedMousePos.x, snappedMousePos.y, m.width, m.height, topWidth, topHeight, gridSize, padInset);
                   previewOrientation = snapped.orientation;
                   const t = getTransformProps(previewOrientation);
                   const horizontal = snapped.side === 'top' || snapped.side === 'bottom';
-                  const centerAlong = horizontal ? mousePos.x : mousePos.y;
+                  const centerAlong = horizontal ? snappedMousePos.x : snappedMousePos.y;
                   const positions = computePadGroupPositions({
                     width: m.width, height: m.height, count: pendingManualPadGroup.count,
                     pitch: pendingManualPadGroup.pitch, side: snapped.side, centerAlong,
@@ -2314,13 +2421,13 @@ export const FloorplanCanvas: React.FC = () => {
                     </Group>
                   ))}</>;
                 }
-                ghostPosition = snapPadToNearestEdge(mousePos.x, mousePos.y, m.width, m.height, topWidth, topHeight, gridSize, placementOrientation, padInset);
+                ghostPosition = snapPadToNearestEdge(snappedMousePos.x, snappedMousePos.y, m.width, m.height, topWidth, topHeight, gridSize, placementOrientation, padInset);
               } catch {
                 return null;
               }
             } else {
               try {
-                ghostPosition = clampInstancePosition(mousePos.x, mousePos.y, placementOrientation, m.width, m.height, topWidth, topHeight, gridSize);
+                ghostPosition = clampWithSnapStep(snappedMousePos.x, snappedMousePos.y, placementOrientation, m.width, m.height);
               } catch {
                 return null;
               }
@@ -2469,10 +2576,10 @@ export const FloorplanCanvas: React.FC = () => {
         </div>
       )}
       <div className="viewport-hud" aria-label="Viewport controls">
-        {mousePos && (
+        {snappedMousePos && (
           <>
             <span className="viewport-hud__coords">
-              X {formatGridValue(mousePos.x, gridSize)} · Y {formatGridValue(mousePos.y, gridSize)}
+              X {formatGridValue(snappedMousePos.x, gridSize)} · Y {formatGridValue(snappedMousePos.y, gridSize)}
             </span>
             <span className="viewport-hud__divider" aria-hidden="true" />
           </>
@@ -2508,10 +2615,23 @@ export const FloorplanCanvas: React.FC = () => {
           type="button"
           className={`viewport-hud__btn${showGrid ? ' active' : ''}`}
           onClick={toggleGrid}
-          title="Toggle drafting grid (G)"
+          title={`Toggle drafting grid (G) · Display step: ${formatGridValue(displayGrid.minorStep, gridSize)} µm (major ${formatGridValue(displayGrid.majorStep, gridSize)} µm)`}
           aria-pressed={showGrid}
         >
           <FiGrid /> Grid
+        </button>
+        <button
+          type="button"
+          className={`viewport-hud__btn${snapToVisibleGrid ? ' active' : ''}`}
+          onClick={toggleSnapToVisibleGrid}
+          title={
+            snapToVisibleGrid
+              ? `Anchor & placement locked to visible grid (${formatGridValue(activeSnapStep, gridSize)} µm, exact ${displayGrid.multiplier}× multiple of ${formatGridValue(gridSize, gridSize)} µm) · Click or press Shift+G for defined grid`
+              : `Anchor & placement locked to defined grid (${formatGridValue(gridSize, gridSize)} µm) · Click or press Shift+G to lock onto visible grid lines (${formatGridValue(displayGrid.minorStep, gridSize)} µm)`
+          }
+          aria-pressed={snapToVisibleGrid}
+        >
+          <FiCrosshair /> {snapToVisibleGrid ? `Vis ${formatGridValue(activeSnapStep, gridSize)}` : `Snap ${formatGridValue(gridSize, gridSize)}`}
         </button>
       </div>
       {showAutoDim && appMode !== 'measure' && !pixelArraySelected && (

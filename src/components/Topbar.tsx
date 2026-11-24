@@ -501,6 +501,7 @@ export const Topbar: React.FC = () => {
             <label>Grid:</label>
             <input 
               type="number" 
+              list="grid-size-presets"
               min="0.000000000001"
               step="any"
               value={draftGridSize} 
@@ -514,9 +515,22 @@ export const Topbar: React.FC = () => {
                 }
               }}
               className="input-field grid-input"
-              title="Placement grid (µm) — re-snaps every instance to an exact grid multiple"
+              title="Defined placement & anchor snap grid (µm) — re-snaps all geometry to exact grid multiples"
               aria-label="Placement grid in micrometers"
             />
+            <datalist id="grid-size-presets">
+              <option value="0.005" />
+              <option value="0.01" />
+              <option value="0.05" />
+              <option value="0.1" />
+              <option value="0.5" />
+              <option value="1" />
+              <option value="5" />
+              <option value="10" />
+              <option value="25" />
+              <option value="50" />
+              <option value="100" />
+            </datalist>
           </div>
           <div className="vertical-divider vertical-divider--compact" />
           <button

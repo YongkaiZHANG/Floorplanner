@@ -162,6 +162,8 @@ export type ProjectState = {
   showAutoDim: boolean;
   showOverlapDrc: boolean;
   showGrid: boolean;
+  /** When enabled, canvas anchor/drag/placement snap to visible grid lines (exact multiples of gridSize). */
+  snapToVisibleGrid: boolean;
   
   placementMasterId: string | null;
   placementOrientation: string;
@@ -249,6 +251,7 @@ export type ProjectState = {
   toggleAutoDim: () => void;
   toggleOverlapDrc: () => void;
   toggleGrid: () => void;
+  toggleSnapToVisibleGrid: () => void;
   loadProject: (data: ProjectSnapshot) => void;
 };
 
@@ -1243,6 +1246,7 @@ export const useStore = create<ProjectState>((set) => ({
   showAutoDim: false,
   showOverlapDrc: true,
   showGrid: true,
+  snapToVisibleGrid: false,
   clipboard: [],
 
   setGridSize: (size) => set((state) => {
@@ -2954,6 +2958,7 @@ export const useStore = create<ProjectState>((set) => ({
   toggleAutoDim: () => set((state) => ({ showAutoDim: !state.showAutoDim })),
   toggleOverlapDrc: () => set((state) => ({ showOverlapDrc: !state.showOverlapDrc })),
   toggleGrid: () => set((state) => ({ showGrid: !state.showGrid })),
+  toggleSnapToVisibleGrid: () => set((state) => ({ snapToVisibleGrid: !state.snapToVisibleGrid })),
 
   loadProject: (data) => set((state) => {
     const gridSize = data.gridSize ?? state.gridSize;

@@ -36,7 +36,7 @@ const shortcutGroups: Array<{ title: string; items: Array<[string, string]> }> =
       ['Middle-drag / Space+drag', 'Pan the canvas'],
       ['Arrow keys / Shift+Arrow', 'Pan viewport (small / large step)'],
       ['F / Double-click canvas', 'Fit top cell to viewport'],
-      ['G', 'Toggle adaptive drafting grid'],
+      ['G / Shift+G', 'Toggle drafting grid / Snap anchor to visible grid'],
     ],
   },
   {

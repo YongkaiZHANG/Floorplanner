@@ -981,3 +981,15 @@ test('opening multiple IP cellviews in separate split windows manages focus, lay
   assert.equal(useStore.getState().activeCellId, null);
   assert.equal(useStore.getState().windowLayoutMode, 'tabs');
 });
+
+test('snapToVisibleGrid toggles cleanly as a transient UI preference without mutating history', () => {
+  useStore.getState().loadProject(emptyProject);
+  const historyBefore = useStore.getState().history.past.length;
+  const initial = useStore.getState().snapToVisibleGrid;
+  useStore.getState().toggleSnapToVisibleGrid();
+  assert.equal(useStore.getState().snapToVisibleGrid, !initial);
+  useStore.getState().toggleSnapToVisibleGrid();
+  assert.equal(useStore.getState().snapToVisibleGrid, initial);
+  assert.equal(useStore.getState().history.past.length, historyBefore);
+  assert.equal(Object.hasOwn(getProjectSnapshot(useStore.getState()), 'snapToVisibleGrid'), false);
+});
