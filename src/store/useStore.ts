@@ -1107,7 +1107,11 @@ const applyCanonicalSnapshot = (
       activeCoordinateMode: activeView?.coordinateMode ?? ((activeView?.instances.length ?? 0) > 0 && shapes.length === 0 ? 'centered' : 'origin') as CellViewCoordinateMode,
       pixelArray: activeView?.pixelArray ?? null,
       activeCellId: state.activeCellId,
-      openViewIds: ensureOpenViewTab(state.openViewIds, state.activeCellId, snapshot.masterCells),
+      openViewIds: ensureOpenViewTab(
+        state.openViewIds,
+        nextDescendStack.length > 0 ? nextDescendStack[0].parentCellId : state.activeCellId,
+        snapshot.masterCells,
+      ),
       viewBreadcrumb,
       descendStack: nextDescendStack,
       history,
@@ -1162,7 +1166,12 @@ const switchToCellView = (
   nextBreadcrumb: string[],
   nextDescendStack: DescendContextFrame[] = [],
 ) => {
-  if (targetCellId === state.activeCellId) return state;
+  const sameDescendStack = nextDescendStack.length === state.descendStack.length
+    && nextDescendStack.every((frame, idx) => (
+      frame.instanceId === state.descendStack[idx]?.instanceId
+      && frame.cellId === state.descendStack[idx]?.cellId
+    ));
+  if (targetCellId === state.activeCellId && sameDescendStack) return state;
   if (targetCellId !== null && !state.masterCells[targetCellId]) return state;
 
   const flushedCellViews = mergeActiveViewIntoCellViews(state);
@@ -1203,7 +1212,12 @@ const switchToCellView = (
     appMode: 'select' as AppMode,
   };
 
-  const openViewIds = ensureOpenViewTab(state.openViewIds, targetCellId, state.masterCells);
+  // True Virtuoso Edit-in-Place (X) keeps the user inside the current cellview tab
+  // instead of opening/switching to a separate tab for the descended child cell.
+  const tabAnchorCellId = nextDescendStack.length > 0
+    ? nextDescendStack[0].parentCellId
+    : targetCellId;
+  const openViewIds = ensureOpenViewTab(state.openViewIds, tabAnchorCellId, state.masterCells);
 
   if (targetCellId === null) {
     return {
@@ -2039,7 +2053,7 @@ export const useStore = create<ProjectState>((set) => ({
   openCellViewInNewWindow: (cellId) => set((state) => {
     if (cellId !== null && !state.masterCells[cellId]) return state;
     const nextOpenViewIds = ensureOpenViewTab(state.openViewIds, cellId, state.masterCells);
-    if (cellId === state.activeCellId) {
+    if (cellId === state.activeCellId && state.descendStack.length === 0) {
       return {
         openViewIds: nextOpenViewIds,
         windowLayoutMode: nextOpenViewIds.length >= 2 ? 'split' : state.windowLayoutMode,
@@ -2065,7 +2079,8 @@ export const useStore = create<ProjectState>((set) => ({
     if (idx === -1) return state;
     const nextOpenViewIds = state.openViewIds.filter(id => id !== cellId);
     const nextLayoutMode = nextOpenViewIds.length < 2 ? 'tabs' : state.windowLayoutMode;
-    if (state.activeCellId !== cellId) {
+    const displayedTabId = state.descendStack.length > 0 ? state.descendStack[0].parentCellId : state.activeCellId;
+    if (displayedTabId !== cellId) {
       return { openViewIds: nextOpenViewIds, windowLayoutMode: nextLayoutMode };
     }
     const fallbackTarget = nextOpenViewIds[Math.max(0, idx - 1)] ?? null;
@@ -2114,7 +2129,9 @@ export const useStore = create<ProjectState>((set) => ({
     if (index < 0) return switchToCellView(state, null, [], []);
     const nextBreadcrumb = state.viewBreadcrumb.slice(0, index + 1);
     const targetId = nextBreadcrumb[nextBreadcrumb.length - 1] ?? null;
-    const nextDescendStack = state.descendStack.slice(0, index + 1);
+    const baseDepthOffset = Math.max(0, state.viewBreadcrumb.length - state.descendStack.length);
+    const nextDescendCount = Math.max(0, index + 1 - baseDepthOffset);
+    const nextDescendStack = state.descendStack.slice(0, nextDescendCount);
     return switchToCellView(state, targetId, nextBreadcrumb, nextDescendStack);
   }),
   
@@ -3915,7 +3932,10 @@ export const useStore = create<ProjectState>((set) => ({
       const viewPixelArray = rawView.pixelArray && container.width > gridSize && container.height > gridSize
         ? normalizePixelArray(rawView.pixelArray, container.width, container.height, gridSize, viewOriginX, viewOriginY)
         : null;
-      const normalized = buildCellViewContent(viewInstances, rawView.rulers ?? [], viewPixelArray, viewInset, viewShapes, rawView.coordinateMode);
+      const normalizedCoordMode = viewShapes.length > 0 && viewInstances.length === 0
+        ? 'origin'
+        : rawView.coordinateMode;
+      const normalized = buildCellViewContent(viewInstances, rawView.rulers ?? [], viewPixelArray, viewInset, viewShapes, normalizedCoordMode);
       if (!isEmptyCellView(normalized)) {
         loadedCellViews[cellId] = normalized;
       }

@@ -51,6 +51,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
     openViewIds,
     windowLayoutMode,
     viewBreadcrumb,
+    descendStack,
     rootView,
     selectedInstanceId,
     openCellView,
@@ -73,6 +74,8 @@ export const VirtuosoCellViewBar: React.FC = () => {
   const rootCellName = rootView?.topCellName ?? topCellName;
   const rootWidth = rootView?.topWidth ?? topWidth;
   const rootHeight = rootView?.topHeight ?? topHeight;
+  // In Virtuoso Edit-in-Place (X), the active tab remains on the current cellview (descendStack[0].parentCellId).
+  const displayedTabCellId = descendStack.length > 0 ? descendStack[0].parentCellId : activeCellId;
 
   const updateScrollButtons = useCallback(() => {
     const el = tabRailRef.current;
@@ -87,7 +90,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
     if (!el) return;
     const activeTab = el.querySelector<HTMLElement>('.virtuoso-tab.active');
     activeTab?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-  }, [activeCellId, openViewIds.length, updateScrollButtons]);
+  }, [displayedTabCellId, openViewIds.length, updateScrollButtons]);
 
   useEffect(() => {
     const handleResize = () => updateScrollButtons();
@@ -160,7 +163,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
             const isRoot = tabId === null;
             const tabMaster = tabId ? masterCells[tabId] : null;
             if (!isRoot && !tabMaster) return null;
-            const isActive = activeCellId === tabId;
+            const isActive = displayedTabCellId === tabId;
             const lib = isRoot ? rootLibName : (tabMaster?.libName ?? '');
             const cell = isRoot ? rootCellName : (tabMaster?.cellName ?? '');
             const tabColor = isRoot ? '#2997ff' : (tabMaster?.color ?? '#3b82f6');
@@ -798,6 +801,7 @@ export const VirtuosoWorkspace: React.FC = () => {
     pixelArray,
     cellViews,
     activeCellId,
+    descendStack,
     openViewIds,
     windowLayoutMode,
     rootView,
@@ -806,6 +810,7 @@ export const VirtuosoWorkspace: React.FC = () => {
   } = useStore();
 
   const [preferredCompanionId, setPreferredCompanionId] = useState<string | null>(null);
+  const displayedTabCellId = descendStack.length > 0 ? descendStack[0].parentCellId : activeCellId;
 
   const companionCandidates = useMemo(() => {
     if (windowLayoutMode !== 'split') return [];
@@ -884,12 +889,13 @@ export const VirtuosoWorkspace: React.FC = () => {
     };
 
     return openViewIds
-      .filter(id => id !== activeCellId)
+      .filter(id => id !== displayedTabCellId)
       .map(resolveView)
       .filter((view): view is ResolvedViewData => view !== null);
   }, [
     windowLayoutMode,
     openViewIds,
+    displayedTabCellId,
     activeCellId,
     masterCells,
     cellViews,

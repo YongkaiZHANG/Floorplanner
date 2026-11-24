@@ -85,6 +85,90 @@ export const invertCadenceTransform = (
   };
 };
 
+const normalizeZero = (value: number): number => (Object.is(value, -0) ? 0 : value);
+
+/** Applies a 2D Cadence placement transform `(x, y, orientation)` to a local point `(px, py)`. */
+export const applyCadenceTransformPoint = (
+  transform: { x: number; y: number; orientation: string },
+  px: number,
+  py: number,
+): { x: number; y: number } => {
+  const m = getOrientationMatrix(transform.orientation);
+  return {
+    x: normalizeZero(transform.x + m[0] * px + m[1] * py),
+    y: normalizeZero(transform.y + m[2] * px + m[3] * py),
+  };
+};
+
+/** Applies the linear rotation/mirror matrix of a Cadence orientation to a delta vector `(dx, dy)`. */
+export const applyCadenceOrientationVector = (
+  orientation: string,
+  dx: number,
+  dy: number,
+): { dx: number; dy: number } => {
+  const m = getOrientationMatrix(orientation);
+  return {
+    dx: normalizeZero(m[0] * dx + m[1] * dy),
+    dy: normalizeZero(m[2] * dx + m[3] * dy),
+  };
+};
+
+/**
+ * Given a chain of parent->child placement steps (starting at the base cellview and ending
+ * at the currently edited EIP cell), returns the forward transform mapping points from the
+ * active cellview's local coordinate frame directly into the base cellview's coordinate frame.
+ */
+export const computeActiveToBaseTransform = (
+  chain: ReadonlyArray<{
+    x: number;
+    y: number;
+    orientation: string;
+    parentWidth: number;
+    parentHeight: number;
+    parentCoordinateMode: CellViewCoordinateMode;
+  }>,
+  activeCoordinateMode: CellViewCoordinateMode = 'origin',
+  activeWidth = 0,
+  activeHeight = 0,
+): { x: number; y: number; orientation: CadenceOrientation } => {
+  if (chain.length === 0) {
+    return { x: 0, y: 0, orientation: 'R0' };
+  }
+  let activeToBase: { x: number; y: number; orientation: CadenceOrientation } = {
+    x: 0,
+    y: 0,
+    orientation: 'R0',
+  };
+  for (let i = 0; i < chain.length; i += 1) {
+    const step = chain[i];
+    // For i === 0, step is placed directly inside the base view's coordinate frame (no extra parent half-shift).
+    const stepMode: CellViewCoordinateMode = i === 0 ? 'origin' : step.parentCoordinateMode;
+    activeToBase = composeCadenceTransform(
+      activeToBase,
+      { x: step.x, y: step.y, orientation: step.orientation },
+      step.parentWidth,
+      step.parentHeight,
+      stepMode,
+    );
+  }
+  // If the active cell itself uses legacy 'centered' coordinates, p_local_origin = p_centered + (activeW/2, activeH/2)
+  if (activeCoordinateMode === 'centered') {
+    const m = getOrientationMatrix(activeToBase.orientation);
+    const ox = activeWidth / 2;
+    const oy = activeHeight / 2;
+    activeToBase = {
+      x: normalizeZero(activeToBase.x + m[0] * ox + m[1] * oy),
+      y: normalizeZero(activeToBase.y + m[2] * ox + m[3] * oy),
+      orientation: activeToBase.orientation,
+    };
+  }
+  return {
+    x: normalizeZero(activeToBase.x),
+    y: normalizeZero(activeToBase.y),
+    orientation: activeToBase.orientation,
+  };
+};
+
 /**
  * Given a chain of parent->child placement steps (starting at an ancestor level and ending
  * at the currently edited cell), returns the transform mapping points from that ancestor's
@@ -102,42 +186,11 @@ export const computeAncestorToActiveTransform = (
   activeCoordinateMode: CellViewCoordinateMode = 'origin',
   activeWidth = 0,
   activeHeight = 0,
-): { x: number; y: number; orientation: CadenceOrientation } => {
-  if (chain.length === 0) {
-    return { x: 0, y: 0, orientation: 'R0' };
-  }
-  // Forward transform from active cell's local frame up to the ancestor's coordinate frame:
-  // Start with identity in the immediate parent of the last step, or compose top-down from ancestor to active.
-  let activeToAncestor: { x: number; y: number; orientation: CadenceOrientation } = {
-    x: 0,
-    y: 0,
-    orientation: 'R0',
-  };
-  for (let i = 0; i < chain.length; i += 1) {
-    const step = chain[i];
-    // For i === 0, step is placed directly inside the ancestor's coordinate frame (no extra parent half-shift).
-    const stepMode: CellViewCoordinateMode = i === 0 ? 'origin' : step.parentCoordinateMode;
-    activeToAncestor = composeCadenceTransform(
-      activeToAncestor,
-      { x: step.x, y: step.y, orientation: step.orientation },
-      step.parentWidth,
-      step.parentHeight,
-      stepMode,
-    );
-  }
-  // If the active cell itself uses legacy 'centered' coordinates, p_local_origin = p_centered + (activeW/2, activeH/2)
-  if (activeCoordinateMode === 'centered') {
-    const m = getOrientationMatrix(activeToAncestor.orientation);
-    const ox = activeWidth / 2;
-    const oy = activeHeight / 2;
-    activeToAncestor = {
-      x: activeToAncestor.x + m[0] * ox + m[1] * oy,
-      y: activeToAncestor.y + m[2] * ox + m[3] * oy,
-      orientation: activeToAncestor.orientation,
-    };
-  }
-  return invertCadenceTransform(activeToAncestor);
-};
+): { x: number; y: number; orientation: CadenceOrientation } => (
+  invertCadenceTransform(
+    computeActiveToBaseTransform(chain, activeCoordinateMode, activeWidth, activeHeight),
+  )
+);
 
 /**
  * Composes a parent's placement transform with a child's placement inside that parent.

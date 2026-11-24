@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getPhysicalBounds } from '../src/utils/alignment.ts';
 import {
+  applyCadenceOrientationVector,
+  applyCadenceTransformPoint,
+  computeActiveToBaseTransform,
   computeAncestorToActiveTransform,
   getOrientationMatrix,
   invertCadenceOrientation,
@@ -250,4 +253,111 @@ test('undo inside Edit-in-Place refreshes or clears descendStack, deleteMasterCe
   useStore.getState().togglePartialSelectMode();
   assert.equal(useStore.getState().partialSelectMode, true);
   assert.equal(useStore.getState().appMode, 'stretch');
+});
+
+test('computeActiveToBaseTransform, applyCadenceTransformPoint, and applyCadenceOrientationVector round-trip across all 8 orientations and multi-level chains', () => {
+  const orientations = ['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'];
+  for (const orientation of orientations) {
+    const chain = [
+      { x: -468.49, y: -874.315, orientation, parentWidth: 3000, parentHeight: 2000, parentCoordinateMode: 'origin' },
+    ];
+    const forward = computeActiveToBaseTransform(chain, 'origin', 180.075, 125.685);
+    const inverse = invertCadenceTransform(forward);
+    const ptBase = applyCadenceTransformPoint(forward, 42.5, 17.25);
+    const ptRecovered = applyCadenceTransformPoint(inverse, ptBase.x, ptBase.y);
+    assert.ok(Math.abs(ptRecovered.x - 42.5) < 1e-9);
+    assert.ok(Math.abs(ptRecovered.y - 17.25) < 1e-9);
+
+    // Forward vector followed by inverse vector recovers the original screen delta
+    const editVec = applyCadenceOrientationVector(inverse.orientation, 12, -5);
+    const baseVec = applyCadenceOrientationVector(forward.orientation, editVec.dx, editVec.dy);
+    assert.deepEqual(baseVec, { dx: 12, dy: -5 });
+  }
+
+  // Exact R180 bottom-pad check: moving +10 um right on screen moves -10 um in local PAD coordinates
+  const r180Forward = computeActiveToBaseTransform([
+    { x: -468.49, y: -874.315, orientation: 'R180', parentWidth: 3000, parentHeight: 2000, parentCoordinateMode: 'origin' },
+  ], 'origin', 180.075, 125.685);
+  const r180Inv = invertCadenceTransform(r180Forward);
+  assert.deepEqual(applyCadenceOrientationVector(r180Inv.orientation, 10, 5), { dx: -10, dy: -5 });
+
+  // Multi-level chain matches exact inverse of computeAncestorToActiveTransform (origin & legacy centered parent)
+  const multiChain = [
+    { x: 100, y: 200, orientation: 'R90', parentWidth: 3000, parentHeight: 2000, parentCoordinateMode: 'origin' },
+    { x: -50, y: 10, orientation: 'MX', parentWidth: 400, parentHeight: 300, parentCoordinateMode: 'centered' },
+  ];
+  const fwdMulti = computeActiveToBaseTransform(multiChain, 'origin', 80, 60);
+  const invMulti = computeAncestorToActiveTransform(multiChain, 'origin', 80, 60);
+  const basePt = applyCadenceTransformPoint(fwdMulti, 13, 29);
+  assert.deepEqual(applyCadenceTransformPoint(invMulti, basePt.x, basePt.y), { x: 13, y: 29 });
+});
+
+test('True Edit-in-Place (X) keeps openViewIds on current cellview tab, supports standalone switch, background close, and nested IP descent', () => {
+  useStore.getState().loadProject(baseProject);
+
+  // Create LEAF (PAD) and CLUSTER containing LEAF
+  useStore.getState().createEmptyCell('xxxL_TOP', 'PAD_EIP', '#f59e0b', true);
+  const padId = useStore.getState().activeCellId;
+  useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 0, y: 0, width: 100, height: 80, label: 'PAD' });
+
+  useStore.getState().createEmptyCell('xxxL_TOP', 'CLUSTER_EIP', '#10b981', true);
+  const clusterId = useStore.getState().activeCellId;
+  useStore.getState().placeInstance(padId, 20, 30, 'R180', 'I_PAD');
+  const subPadInstId = useStore.getState().instances[0].id;
+
+  // Return to top_asic and close IP tabs so only top_asic is open
+  useStore.getState().openCellView(null);
+  useStore.getState().closeCellViewTab(padId);
+  useStore.getState().closeCellViewTab(clusterId);
+  assert.deepEqual(useStore.getState().openViewIds, [null]);
+
+  useStore.getState().placeInstance(clusterId, 200, 100, 'R0', 'I_CLUS');
+  const clusterInstId = useStore.getState().instances[0].id;
+
+  // Press X on I_CLUS in top_asic -> edits CLUSTER_EIP in place WITHOUT opening a new tab!
+  useStore.getState().descendIntoInstance(clusterInstId);
+  assert.equal(useStore.getState().activeCellId, clusterId);
+  assert.equal(useStore.getState().descendStack.length, 1);
+  assert.equal(useStore.getState().descendStack[0].parentCellId, null);
+  assert.deepEqual(useStore.getState().openViewIds, [null]);
+
+  // Press X again on I_PAD inside CLUSTER_EIP -> 2-level EIP still anchored to top_asic tab!
+  useStore.getState().descendIntoInstance(subPadInstId);
+  assert.equal(useStore.getState().activeCellId, padId);
+  assert.equal(useStore.getState().descendStack.length, 2);
+  assert.equal(useStore.getState().descendStack[0].parentCellId, null);
+  assert.deepEqual(useStore.getState().openViewIds, [null]);
+
+  // Explicitly opening PAD_EIP as standalone tab exits EIP and adds PAD_EIP tab
+  useStore.getState().openCellView(padId);
+  assert.equal(useStore.getState().activeCellId, padId);
+  assert.equal(useStore.getState().descendStack.length, 0);
+  assert.deepEqual(useStore.getState().openViewIds, [null, padId]);
+
+  // Switch back to top_asic, descend into CLUSTER -> PAD while PAD tab is open in background,
+  // then close the background PAD tab -> must stay in top_asic EIP!
+  useStore.getState().openCellView(null);
+  useStore.getState().descendIntoInstance(clusterInstId);
+  useStore.getState().descendIntoInstance(subPadInstId);
+  assert.equal(useStore.getState().activeCellId, padId);
+  assert.equal(useStore.getState().descendStack.length, 2);
+  useStore.getState().closeCellViewTab(padId);
+  assert.equal(useStore.getState().activeCellId, padId);
+  assert.equal(useStore.getState().descendStack.length, 2);
+  assert.deepEqual(useStore.getState().openViewIds, [null]);
+
+  // Open standalone CLUSTER_EIP tab and descend via X into I_PAD -> stays on CLUSTER_EIP tab!
+  useStore.getState().openCellView(clusterId);
+  assert.deepEqual(useStore.getState().openViewIds, [null, clusterId]);
+  assert.equal(useStore.getState().descendStack.length, 0);
+  useStore.getState().descendIntoInstance(subPadInstId);
+  assert.equal(useStore.getState().activeCellId, padId);
+  assert.equal(useStore.getState().descendStack.length, 1);
+  assert.equal(useStore.getState().descendStack[0].parentCellId, clusterId);
+  assert.deepEqual(useStore.getState().openViewIds, [null, clusterId]);
+
+  // navigateBreadcrumb(0) from standalone CLUSTER_EIP -> PAD_EIP cleanly pops descendStack to []
+  useStore.getState().navigateBreadcrumb(0);
+  assert.equal(useStore.getState().activeCellId, clusterId);
+  assert.equal(useStore.getState().descendStack.length, 0);
 });
