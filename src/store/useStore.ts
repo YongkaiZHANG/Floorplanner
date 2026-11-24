@@ -521,23 +521,43 @@ const normalizePixelArray = (
   topWidth: number,
   topHeight: number,
   gridSize: number,
+  containerOriginX = -topWidth / 2,
+  containerOriginY = -topHeight / 2,
 ): PixelArray => {
   const maxWidth = snapToGrid(Math.floor((topWidth - 1e-9) / gridSize) * gridSize, gridSize);
   const maxHeight = snapToGrid(Math.floor((topHeight - 1e-9) / gridSize) * gridSize, gridSize);
   if (maxWidth <= 0 || maxHeight <= 0) throw new RangeError('The top cell is too small for a pixel array');
   const width = Math.min(maxWidth, Math.max(gridSize, snapToGrid(pixelArray.width, gridSize)));
   const height = Math.min(maxHeight, Math.max(gridSize, snapToGrid(pixelArray.height, gridSize)));
-  const position = clampInstancePosition(
-    pixelArray.x,
-    pixelArray.y,
-    'R0',
-    width,
-    height,
-    topWidth,
-    topHeight,
-    gridSize,
-  );
-  return { ...pixelArray, ...position, width, height };
+  const snapWithin = (value: number, min: number, max: number) => {
+    const minStep = Math.ceil((min - 1e-9) / gridSize);
+    const maxStep = Math.floor((max + 1e-9) / gridSize);
+    if (minStep > maxStep) throw new RangeError('No grid-snapped position fits inside the cell');
+    const step = Math.max(minStep, Math.min(Math.round(value / gridSize), maxStep));
+    const snapped = snapToGrid(step * gridSize, gridSize);
+    return Object.is(snapped, -0) ? 0 : snapped;
+  };
+  const x = snapWithin(pixelArray.x, containerOriginX, containerOriginX + topWidth - width);
+  const y = snapWithin(pixelArray.y, containerOriginY, containerOriginY + topHeight - height);
+  return { ...pixelArray, x, y, width, height };
+};
+
+const resolveStoredCoordinateMode = (
+  view?: Pick<CellViewContent, 'coordinateMode' | 'shapes'>,
+): CellViewCoordinateMode => (
+  view?.coordinateMode ?? ((view?.shapes?.length ?? 0) > 0 ? 'origin' : 'centered')
+);
+
+const getActiveContainerOrigin = (
+  state: Pick<ProjectState, 'activeCellId' | 'activeCoordinateMode' | 'masterCells' | 'topWidth' | 'topHeight'>,
+): { originX: number; originY: number } => {
+  if (state.activeCellId && state.activeCoordinateMode === 'origin') {
+    const activeMaster = state.masterCells[state.activeCellId];
+    if (activeMaster) {
+      return { originX: activeMaster.originX ?? 0, originY: activeMaster.originY ?? 0 };
+    }
+  }
+  return { originX: -state.topWidth / 2, originY: -state.topHeight / 2 };
 };
 
 const getNextInstanceName = (instances: Instance[]) => {
@@ -1293,16 +1313,19 @@ const edgeAlignmentPatch = (
     sourceEdge,
     targetEdge,
     offset,
-    { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize },
+    { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize, unbounded: Boolean(state.activeCellId) },
   );
   const patch = alignmentGroupPositionPatch(state, sourceIds, sourceId, position.x, position.y);
+  const boundsSync = state.activeCellId
+    ? syncMasterBoundsForActiveCell(state, state.shapes, patch.instances, patch.pixelArray ?? null)
+    : null;
   const offsetLabel = displaySpacing === undefined
     ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
     : (displaySpacing === 0 ? '' : ` gap ${displaySpacing} um`);
   return commitProjectPatch(
     state,
     `Align ${sourceIds.length > 1 ? `${sourceIds.length} objects via ` : ''}${source.name}.${sourceEdge} to ${target.name}.${targetEdge}${offsetLabel}`,
-    patch,
+    { ...patch, ...(boundsSync ?? {}) },
   );
 };
 
@@ -1322,16 +1345,19 @@ const edgeAlignmentCoordinatePatch = (
     sourceEdge,
     targetCoordinate,
     offset,
-    { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize },
+    { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize, unbounded: Boolean(state.activeCellId) },
   );
   const patch = alignmentGroupPositionPatch(state, sourceIds, sourceId, position.x, position.y);
+  const boundsSync = state.activeCellId
+    ? syncMasterBoundsForActiveCell(state, state.shapes, patch.instances, patch.pixelArray ?? null)
+    : null;
   const offsetLabel = displaySpacing === undefined
     ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
     : (displaySpacing === 0 ? '' : ` gap ${displaySpacing} um`);
   return commitProjectPatch(
     state,
     `Align ${sourceIds.length > 1 ? `${sourceIds.length} objects via ` : ''}${source.name}.${sourceEdge} to ${referenceLabel}${offsetLabel}`,
-    patch,
+    { ...patch, ...(boundsSync ?? {}) },
   );
 };
 
@@ -1438,8 +1464,9 @@ export const useStore = create<ProjectState>((set) => ({
     const padInset = normalizePadInset(state.padInset, state.topWidth, state.topHeight, size);
     const instances = clampInstancesToContainer(state.instances, state.masterCells, state.topWidth, state.topHeight, size, padInset, undefined, Boolean(state.activeCellId));
     const shapes = normalizeShapesForGrid(state.shapes, size);
+    const activeOrigin = getActiveContainerOrigin(state);
     const pixelArray = state.pixelArray
-      ? normalizePixelArray(state.pixelArray, state.topWidth, state.topHeight, size)
+      ? normalizePixelArray(state.pixelArray, state.topWidth, state.topHeight, size, activeOrigin.originX, activeOrigin.originY)
       : null;
 
     const nextRootView = state.rootView ? (() => {
@@ -1461,11 +1488,13 @@ export const useStore = create<ProjectState>((set) => ({
       const container = state.masterCells[cellId];
       if (!container) continue;
       const viewInset = normalizePadInset(view.padInset ?? 0, container.width, container.height, size);
-      const isOriginView = view.coordinateMode === 'origin';
+      const isOriginView = resolveStoredCoordinateMode(view) === 'origin';
       const viewInstances = clampInstancesToContainer(view.instances, state.masterCells, container.width, container.height, size, viewInset, undefined, isOriginView);
       const viewShapes = normalizeShapesForGrid(view.shapes ?? [], size);
+      const viewOriginX = isOriginView ? (container.originX ?? 0) : -container.width / 2;
+      const viewOriginY = isOriginView ? (container.originY ?? 0) : -container.height / 2;
       const viewPixelArray = view.pixelArray
-        ? normalizePixelArray(view.pixelArray, container.width, container.height, size)
+        ? normalizePixelArray(view.pixelArray, container.width, container.height, size, viewOriginX, viewOriginY)
         : null;
       nextCellViews[cellId] = buildCellViewContent(viewInstances, view.rulers, viewPixelArray, viewInset, viewShapes, view.coordinateMode);
     }
@@ -1492,8 +1521,11 @@ export const useStore = create<ProjectState>((set) => ({
     }
     const padInset = normalizePadInset(state.padInset, w, h, state.gridSize);
     const instances = clampInstancesToContainer(state.instances, state.masterCells, w, h, state.gridSize, padInset, undefined, Boolean(state.activeCellId));
+    const activeOrigin = state.activeCellId && state.activeCoordinateMode === 'origin'
+      ? { originX: state.masterCells[state.activeCellId]?.originX ?? 0, originY: state.masterCells[state.activeCellId]?.originY ?? 0 }
+      : { originX: -w / 2, originY: -h / 2 };
     const pixelArray = state.pixelArray
-      ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
+      ? normalizePixelArray(state.pixelArray, w, h, state.gridSize, activeOrigin.originX, activeOrigin.originY)
       : null;
 
     if (state.activeCellId && state.masterCells[state.activeCellId]) {
@@ -1515,7 +1547,7 @@ export const useStore = create<ProjectState>((set) => ({
         if (!container) continue;
         nextCellViews[cellId] = {
           ...view,
-          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId, view.coordinateMode === 'origin'),
+          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId, resolveStoredCoordinateMode(view) === 'origin'),
         };
       }
       return commitProjectPatch(state, `Resize ${masterCells[activeId].cellName}`, {
@@ -1581,8 +1613,11 @@ export const useStore = create<ProjectState>((set) => ({
         [activeId]: { ...state.masterCells[activeId], libName: nextLibName, cellName: nextCellName, width: w, height: h },
       };
       const instances = clampInstancesToContainer(state.instances, masterCells, w, h, state.gridSize, padInset, undefined, true);
+      const activeOrigin = state.activeCoordinateMode === 'origin'
+        ? { originX: masterCells[activeId].originX ?? 0, originY: masterCells[activeId].originY ?? 0 }
+        : { originX: -w / 2, originY: -h / 2 };
       const pixelArray = state.pixelArray
-        ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
+        ? normalizePixelArray(state.pixelArray, w, h, state.gridSize, activeOrigin.originX, activeOrigin.originY)
         : null;
       const rootView = state.rootView
         ? {
@@ -1597,7 +1632,7 @@ export const useStore = create<ProjectState>((set) => ({
         if (!container) continue;
         nextCellViews[cellId] = {
           ...view,
-          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId, view.coordinateMode === 'origin'),
+          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId, resolveStoredCoordinateMode(view) === 'origin'),
         };
       }
       return commitProjectPatch(state, `Update ${nextCellName}`, {
@@ -1937,8 +1972,10 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = editingActiveView
       ? clampInstancesToContainer(state.instances, masterCells, w, h, state.gridSize, activePadInset, undefined, true)
       : clampInstancesToContainer(state.instances, masterCells, state.topWidth, state.topHeight, state.gridSize, state.padInset, id, Boolean(state.activeCellId));
+    const editingOriginX = state.activeCoordinateMode === 'origin' ? (existing.originX ?? 0) : -w / 2;
+    const editingOriginY = state.activeCoordinateMode === 'origin' ? (existing.originY ?? 0) : -h / 2;
     const pixelArray = editingActiveView && state.pixelArray
-      ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
+      ? normalizePixelArray(state.pixelArray, w, h, state.gridSize, editingOriginX, editingOriginY)
       : state.pixelArray;
     const rootView = state.rootView
       ? {
@@ -1953,17 +1990,19 @@ export const useStore = create<ProjectState>((set) => ({
       if (!container) continue;
       if (viewCellId === id) {
         const viewInset = normalizePadInset(view.padInset ?? 0, w, h, state.gridSize);
-        const isOriginView = view.coordinateMode === 'origin';
+        const isOriginView = resolveStoredCoordinateMode(view) === 'origin';
+        const viewOriginX = isOriginView ? (existing.originX ?? 0) : -w / 2;
+        const viewOriginY = isOriginView ? (existing.originY ?? 0) : -h / 2;
         nextCellViews[viewCellId] = buildCellViewContent(
           clampInstancesToContainer(view.instances, masterCells, w, h, state.gridSize, viewInset, undefined, isOriginView),
           view.rulers,
-          view.pixelArray ? normalizePixelArray(view.pixelArray, w, h, state.gridSize) : null,
+          view.pixelArray ? normalizePixelArray(view.pixelArray, w, h, state.gridSize, viewOriginX, viewOriginY) : null,
           viewInset,
           view.shapes ?? [],
           view.coordinateMode,
         );
       } else {
-        const isOriginView = view.coordinateMode === 'origin';
+        const isOriginView = resolveStoredCoordinateMode(view) === 'origin';
         nextCellViews[viewCellId] = {
           ...view,
           instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, id, isOriginView),
@@ -2702,17 +2741,15 @@ export const useStore = create<ProjectState>((set) => ({
   placePixelArray: (centerX, centerY) => set((state) => {
     const size = state.pendingPixelArraySize;
     if (!size) return state;
-    const position = clampInstancePosition(
-      centerX - size.width / 2,
-      centerY - size.height / 2,
-      'R0',
-      size.width,
-      size.height,
+    const { originX, originY } = getActiveContainerOrigin(state);
+    const pixelArray = normalizePixelArray(
+      { x: centerX - size.width / 2, y: centerY - size.height / 2, width: size.width, height: size.height, visible: true },
       state.topWidth,
       state.topHeight,
       state.gridSize,
+      originX,
+      originY,
     );
-    const pixelArray: PixelArray = { ...size, ...position, visible: true };
     return {
       ...commitProjectPatch(state, state.pixelArray ? 'Move pixel array' : 'Place pixel array', { pixelArray }),
       pendingPixelArraySize: null,
@@ -2723,11 +2760,14 @@ export const useStore = create<ProjectState>((set) => ({
 
   updatePixelArrayPosition: (x, y) => set((state) => {
     if (!state.pixelArray) return state;
+    const { originX, originY } = getActiveContainerOrigin(state);
     const pixelArray = normalizePixelArray(
       { ...state.pixelArray, x, y },
       state.topWidth,
       state.topHeight,
       state.gridSize,
+      originX,
+      originY,
     );
     return commitProjectPatch(state, 'Move pixel array', { pixelArray });
   }),
@@ -2748,11 +2788,14 @@ export const useStore = create<ProjectState>((set) => ({
     if (snappedWidth >= state.topWidth || snappedHeight >= state.topHeight) {
       throw new RangeError('Pixel array must be smaller than the top cell in both dimensions');
     }
+    const { originX, originY } = getActiveContainerOrigin(state);
     const pixelArray = normalizePixelArray(
       { ...state.pixelArray, x, y, width: snappedWidth, height: snappedHeight },
       state.topWidth,
       state.topHeight,
       state.gridSize,
+      originX,
+      originY,
     );
     return commitProjectPatch(state, 'Edit pixel array', { pixelArray });
   }),
@@ -3194,11 +3237,18 @@ export const useStore = create<ProjectState>((set) => ({
     }
     
     if (newSelectedIds.length === 0) return state;
+    const boundsSync = state.activeCellId
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
     
     return {
-      ...commitProjectPatch(state, `Paste ${newSelectedIds.length} block${newSelectedIds.length === 1 ? '' : 's'}`, { instances }),
+      ...commitProjectPatch(state, `Paste ${newSelectedIds.length} block${newSelectedIds.length === 1 ? '' : 's'}`, {
+        instances,
+        ...(boundsSync ?? {}),
+      }),
       selectedInstanceIds: newSelectedIds,
       selectedInstanceId: newSelectedIds.at(-1) ?? null,
+      selectedShapeId: null,
       pixelArraySelected: false,
     };
   }),
@@ -3242,6 +3292,7 @@ export const useStore = create<ProjectState>((set) => ({
       topHeight: state.topHeight,
       gridSize: state.gridSize,
       anchorId: state.selectedInstanceId ?? undefined,
+      unbounded: Boolean(state.activeCellId),
     });
     const positionById = new Map(positions.map(position => [position.id, position]));
     const instances = state.instances.map(instance => {
@@ -3251,7 +3302,7 @@ export const useStore = create<ProjectState>((set) => ({
         throw new Error(`Cannot align because ${instance.name} is locked`);
       }
       const master = state.masterCells[instance.cellId];
-      if (master?.kind === 'pad') {
+      if (master?.kind === 'pad' && !state.activeCellId) {
         const bounds = getPhysicalBounds({
           ...instance, x: position.x, y: position.y, width: master.width, height: master.height,
           originX: master.originX, originY: master.originY,
@@ -3263,7 +3314,13 @@ export const useStore = create<ProjectState>((set) => ({
       return { ...instance, x: position.x, y: position.y };
     });
     assertMovedInstancesDoNotOverlap(instances, state.masterCells, selectedIds, `align ${operation.replace('-', ' ')}`);
-    return commitProjectPatch(state, `Align ${operation.replace('-', ' ')}`, { instances });
+    const boundsSync = state.activeCellId
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    return commitProjectPatch(state, `Align ${operation.replace('-', ' ')}`, {
+      instances,
+      ...(boundsSync ?? {}),
+    });
   }),
 
   alignInstanceEdges: (sourceId, targetId, sourceEdge, targetEdge, offset = 0) => set((state) => (
@@ -3351,10 +3408,11 @@ export const useStore = create<ProjectState>((set) => ({
     if (getAlignmentEdgeAxis(session.sourceEdge) !== getAlignmentEdgeAxis(targetEdge)) {
       throw new Error('Source and top-cell edges must be on the same axis');
     }
-    const coordinate = targetEdge === 'left' ? -state.topWidth / 2
-      : targetEdge === 'right' ? state.topWidth / 2
-      : targetEdge === 'bottom' ? -state.topHeight / 2
-      : state.topHeight / 2;
+    const { originX, originY } = getActiveContainerOrigin(state);
+    const coordinate = targetEdge === 'left' ? originX
+      : targetEdge === 'right' ? originX + state.topWidth
+      : targetEdge === 'bottom' ? originY
+      : originY + state.topHeight;
     const spacing = parseEdgeAlignmentSpacing(session);
     const offset = directionalSpacingOffset(getAlignable(state, session.sourceId), session.sourceEdge, coordinate, spacing);
     return {
@@ -3443,6 +3501,7 @@ export const useStore = create<ProjectState>((set) => ({
       topWidth: state.topWidth,
       topHeight: state.topHeight,
       gridSize: state.gridSize,
+      unbounded: Boolean(state.activeCellId),
     });
     const positionById = new Map(positions.map(position => [position.id, position]));
     const instances = state.instances.map(instance => {
@@ -3452,7 +3511,7 @@ export const useStore = create<ProjectState>((set) => ({
         throw new Error(`Cannot distribute because ${instance.name} is locked`);
       }
       const master = state.masterCells[instance.cellId];
-      if (master?.kind === 'pad') {
+      if (master?.kind === 'pad' && !state.activeCellId) {
         const bounds = getPhysicalBounds({
           ...instance, x: position.x, y: position.y, width: master.width, height: master.height,
           originX: master.originX, originY: master.originY,
@@ -3464,7 +3523,13 @@ export const useStore = create<ProjectState>((set) => ({
       return { ...instance, x: position.x, y: position.y };
     });
     assertMovedInstancesDoNotOverlap(instances, state.masterCells, selectedIds, `distribute ${axis}`);
-    return commitProjectPatch(state, `Distribute ${axis}`, { instances });
+    const boundsSync = state.activeCellId
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    return commitProjectPatch(state, `Distribute ${axis}`, {
+      instances,
+      ...(boundsSync ?? {}),
+    });
   }),
   
   toggleOrthogonalRuler: () => set((state) => ({ orthogonalRuler: !state.orthogonalRuler })),
@@ -3494,11 +3559,13 @@ export const useStore = create<ProjectState>((set) => ({
       const container = masterCells[cellId];
       if (!container) continue;
       const viewInset = normalizePadInset(rawView.padInset ?? 0, container.width, container.height, gridSize);
-      const isOriginView = rawView.coordinateMode === 'origin';
+      const isOriginView = resolveStoredCoordinateMode(rawView) === 'origin';
       const viewInstances = clampInstancesToContainer(rawView.instances ?? [], masterCells, container.width, container.height, gridSize, viewInset, undefined, isOriginView);
       const viewShapes = normalizeShapesForGrid(rawView.shapes ?? [], gridSize);
+      const viewOriginX = isOriginView ? (container.originX ?? 0) : -container.width / 2;
+      const viewOriginY = isOriginView ? (container.originY ?? 0) : -container.height / 2;
       const viewPixelArray = rawView.pixelArray
-        ? normalizePixelArray(rawView.pixelArray, container.width, container.height, gridSize)
+        ? normalizePixelArray(rawView.pixelArray, container.width, container.height, gridSize, viewOriginX, viewOriginY)
         : null;
       const normalized = buildCellViewContent(viewInstances, rawView.rulers ?? [], viewPixelArray, viewInset, viewShapes, rawView.coordinateMode);
       if (!isEmptyCellView(normalized)) {

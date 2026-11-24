@@ -45,6 +45,8 @@ export interface ArrangementOptions {
   gridSize: number;
   /** The reference block that must remain fixed while the others move. */
   anchorId?: string;
+  /** When true (e.g. inside an unbounded Virtuoso IP cellview canvas), snap to grid without clamping to [-topW/2..topW/2]. */
+  unbounded?: boolean;
 }
 
 export interface InstancePosition {
@@ -164,6 +166,15 @@ const placeInsideTop = (
   targetY: number,
   options: ArrangementOptions,
 ): InstancePosition => {
+  if (options.unbounded) {
+    const sx = snapToGrid(targetX, options.gridSize);
+    const sy = snapToGrid(targetY, options.gridSize);
+    return {
+      id: instance.id,
+      x: Object.is(sx, -0) ? 0 : sx,
+      y: Object.is(sy, -0) ? 0 : sy,
+    };
+  }
   const local = getLocalBounds(instance);
   const halfTopWidth = options.topWidth / 2;
   const halfTopHeight = options.topHeight / 2;

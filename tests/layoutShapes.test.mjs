@@ -204,3 +204,145 @@ test('IP cellview canvas draws text/drawing rectangles freely, auto-fits bounds,
   );
   assert.deepEqual(computed, { originX: -400, originY: 100, width: 700, height: 400 });
 });
+
+test('align, distribute, boundary edge-align, and paste work unboundedly inside an IP cellview and sync master bounds', () => {
+  useStore.getState().loadProject(baseProject);
+  useStore.getState().addMasterCell('xxxL_TOP', 'BLK', 100, 80, '#22c55e', 0.5, 'solid', false, false);
+  const blk = Object.values(useStore.getState().masterCells).find(c => c.cellName === 'BLK');
+
+  useStore.getState().addMasterCell('xxxL_TOP', 'FREE_IP', 100, 100, '#3b82f6', 0.5, 'solid', true, true);
+  const freeId = useStore.getState().activeCellId;
+  assert.ok(freeId);
+
+  // Place 3 sub-instances well outside any centered [-W/2..W/2] placeholder box
+  useStore.getState().placeInstance(blk.id, 1200, 800, 'R0', 'I0');
+  useStore.getState().placeInstance(blk.id, 1500, 900, 'R0', 'I1');
+  useStore.getState().placeInstance(blk.id, 2000, 820, 'R0', 'I2');
+  const [i0, i1, i2] = useStore.getState().instances;
+
+  // Select with i0 last so i0 (y=800) is the alignment anchor
+  useStore.getState().setSelection([i1.id, i2.id, i0.id]);
+  useStore.getState().alignSelectedInstances('bottom');
+  for (const inst of useStore.getState().instances) {
+    assert.equal(inst.y, 800);
+  }
+  assert.equal(useStore.getState().masterCells[freeId].height, 80);
+
+  // Horizontal distribution across [1200..2100] puts i1 cleanly at x=1600
+  useStore.getState().distributeSelectedInstances('horizontal');
+  const afterDist = Object.fromEntries(useStore.getState().instances.map(inst => [inst.name, inst]));
+  assert.equal(afterDist.I0.x, 1200);
+  assert.equal(afterDist.I1.x, 1600);
+  assert.equal(afterDist.I2.x, 2000);
+
+  // Draw a wider boundary shape [1000..2100] x [700..900] and edge-align I0.left to active left boundary (originX = 1000)
+  useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 1000, y: 700, width: 1100, height: 200 });
+  assert.equal(useStore.getState().masterCells[freeId].originX, 1000);
+  useStore.getState().startEdgeAlignment(afterDist.I0.id);
+  useStore.getState().setEdgeAlignmentEdge(afterDist.I0.id, 'left');
+  useStore.getState().setEdgeAlignmentOffset('0');
+  useStore.getState().completeEdgeAlignmentToBoundary('left');
+  const i0AfterEdge = useStore.getState().instances.find(inst => inst.name === 'I0');
+  assert.equal(i0AfterEdge.x, 1000);
+
+  // Copy & paste rightmost instance I2 — must expand FREE_IP bounds beyond x=2100
+  useStore.getState().setSelection([afterDist.I2.id]);
+  useStore.getState().copySelection();
+  useStore.getState().pasteClipboard();
+  assert.equal(useStore.getState().instances.length, 4);
+  const masterAfterPaste = useStore.getState().masterCells[freeId];
+  assert.ok(masterAfterPaste.originX + masterAfterPaste.width > 2100);
+});
+
+test('generateSkillCode and loadProject default cellViews with shapes and omitted coordinateMode to native origin', () => {
+  const doc = {
+    ...baseProject,
+    masterCells: {
+      ip1: {
+        id: 'ip1',
+        libName: 'xxxL_TOP',
+        cellName: 'SHAPE_IP',
+        width: 500,
+        height: 300,
+        originX: -200,
+        originY: 100,
+        color: '#3b82f6',
+        autoBounds: true,
+      },
+    },
+    instances: [{ id: 'inst1', cellId: 'ip1', name: 'I0', x: 0, y: 0, orientation: 'R0' }],
+    cellViews: {
+      ip1: {
+        instances: [],
+        rulers: [],
+        shapes: [{ id: 's1', layer: 'text', purpose: 'drawing', x: -200, y: 100, width: 500, height: 300 }],
+      },
+    },
+  };
+
+  const skill = generateSkillCode(
+    doc.topLibName,
+    doc.topCellName,
+    doc.topWidth,
+    doc.topHeight,
+    doc.masterCells,
+    doc.instances,
+    doc.gridSize,
+    null,
+    { hierarchyMode: 'zero-origin-direct', cellViews: doc.cellViews },
+  );
+  // Must emit exact (-200:100 300:400) without legacy (+250/+150) centered shift
+  assert.match(skill, /dbCreateRect\(cv list\("text" "drawing"\) list\(-200:100 300:400\)\)/);
+
+  const parsed = parseProjectDocument(serializeProjectDocument(doc));
+  useStore.getState().loadProject(parsed);
+  useStore.getState().openCellView('ip1');
+  assert.equal(useStore.getState().activeCoordinateMode, 'origin');
+  assert.equal(useStore.getState().shapes[0].x, -200);
+  assert.equal(useStore.getState().shapes[0].y, 100);
+});
+
+test('pixel array inside an origin-mode IP cellview with non-zero originX/originY survives placement, serialization, and SKILL export', () => {
+  useStore.getState().loadProject(baseProject);
+  useStore.getState().addMasterCell('xxxL_TOP', 'PIX_IP', 100, 100, '#3b82f6', 0.5, 'solid', true, true);
+  const pixId = useStore.getState().activeCellId;
+  assert.ok(pixId);
+
+  // Define PIX_IP bounds at [500..1100] x [200..600] (originX=500, originY=200, width=600, height=400)
+  useStore.getState().addShape({ layer: 'prBoundary', purpose: 'drawing', x: 500, y: 200, width: 600, height: 400 });
+  assert.equal(useStore.getState().masterCells[pixId].originX, 500);
+  assert.equal(useStore.getState().masterCells[pixId].originY, 200);
+
+  // Place a 200x150 pixel array centered at (700, 325) -> lower-left (600, 250)
+  useStore.getState().startPixelArrayPlacement(200, 150);
+  useStore.getState().placePixelArray(700, 325);
+  assert.deepEqual(useStore.getState().pixelArray, {
+    x: 600,
+    y: 250,
+    width: 200,
+    height: 150,
+    visible: true,
+  });
+
+  // Switch up to top_asic and instantiate PIX_IP at (0, 0)
+  useStore.getState().openCellView(null);
+  useStore.getState().placeInstance(pixId, 0, 0, 'R0', 'I_PIX');
+
+  const snapshot = getProjectSnapshot(useStore.getState());
+  const reparsed = parseProjectDocument(serializeProjectDocument(snapshot));
+  assert.equal(reparsed.cellViews?.[pixId]?.pixelArray?.x, 600);
+  assert.equal(reparsed.cellViews?.[pixId]?.pixelArray?.y, 250);
+
+  const skill = generateSkillCode(
+    snapshot.topLibName,
+    snapshot.topCellName,
+    snapshot.topWidth,
+    snapshot.topHeight,
+    snapshot.masterCells,
+    snapshot.instances,
+    snapshot.gridSize,
+    snapshot.pixelArray,
+    { hierarchyMode: 'zero-origin-direct', cellViews: snapshot.cellViews },
+  );
+  assert.match(skill, /dbCreateRect\(cv list\("prBoundary" "drawing"\) list\(600:250 800:400\)\)/);
+});

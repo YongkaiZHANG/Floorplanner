@@ -67,8 +67,8 @@ export const Sidebar: React.FC = () => {
   const [newColor, setNewColor] = useState(PRESET_COLORS[0]);
   const [newOpacity, setNewOpacity] = useState('50');
   const [newOutlineStyle, setNewOutlineStyle] = useState<NonNullable<Cell['outlineStyle']>>('solid');
-  const [newCellCreationMode, setNewCellCreationMode] = useState<'canvas' | 'fixed'>('fixed');
-  const [openCellAfterCreate, setOpenCellAfterCreate] = useState(false);
+  const [newCellCreationMode, setNewCellCreationMode] = useState<'canvas' | 'fixed'>('canvas');
+  const [openCellAfterCreate, setOpenCellAfterCreate] = useState(true);
 
   const [showEditTopModal, setShowEditTopModal] = useState(false);
   const [editTopLibName, setEditTopLibName] = useState(topLibName);
@@ -432,10 +432,12 @@ export const Sidebar: React.FC = () => {
   const padEndCoordinate = padStartCoordinate + padSpan;
 
   useEffect(() => {
-    if (showCreateModal && !editingCellId && !newLibName.trim()) {
-      setNewLibName(topLibName);
+    if (showCreateModal && !editingCellId) {
+      setNewLibName(prev => (prev.trim() ? prev : topLibName));
+      setNewCellCreationMode('canvas');
+      setOpenCellAfterCreate(true);
     }
-  }, [showCreateModal, editingCellId, newLibName, topLibName]);
+  }, [showCreateModal, editingCellId, topLibName]);
 
   useEffect(() => {
     if (!showInstantiateModal) return;

@@ -152,11 +152,17 @@ const validateInstancesList = (
   });
 };
 
+const resolveViewCoordinateMode = (view?: CellViewContent): 'origin' | 'centered' => (
+  view?.coordinateMode ?? ((view?.shapes?.length ?? 0) > 0 ? 'origin' : 'centered')
+);
+
 const validatePixelArrayForContainer = (
   pixelArray: PixelArray,
   containerWidth: number,
   containerHeight: number,
   gridSize: number,
+  originX = -containerWidth / 2,
+  originY = -containerHeight / 2,
 ) => {
   if (!Number.isFinite(pixelArray.x) || !Number.isFinite(pixelArray.y) ||
       !Number.isFinite(pixelArray.width) || !Number.isFinite(pixelArray.height) ||
@@ -169,8 +175,8 @@ const validatePixelArrayForContainer = (
       throw new Error(`Pixel array geometry is off the ${formatGridValue(gridSize, gridSize)} um placement grid.`);
     }
   }
-  if (pixelArray.x < -containerWidth / 2 - 1e-9 || pixelArray.x + pixelArray.width > containerWidth / 2 + 1e-9 ||
-      pixelArray.y < -containerHeight / 2 - 1e-9 || pixelArray.y + pixelArray.height > containerHeight / 2 + 1e-9) {
+  if (pixelArray.x < originX - 1e-9 || pixelArray.x + pixelArray.width > originX + containerWidth + 1e-9 ||
+      pixelArray.y < originY - 1e-9 || pixelArray.y + pixelArray.height > originY + containerHeight + 1e-9) {
     throw new Error('Pixel array must fit completely inside its parent cell.');
   }
 };
@@ -244,7 +250,10 @@ const validateFloorplan = (
       validateShapesList(view.shapes, gridSize, `${master.libName}/${master.cellName}`);
     }
     if (view.pixelArray) {
-      validatePixelArrayForContainer(view.pixelArray, master.width, master.height, gridSize);
+      const viewCoordMode = resolveViewCoordinateMode(view);
+      const containerOriginX = viewCoordMode === 'origin' ? (master.originX ?? 0) : -master.width / 2;
+      const containerOriginY = viewCoordMode === 'origin' ? (master.originY ?? 0) : -master.height / 2;
+      validatePixelArrayForContainer(view.pixelArray, master.width, master.height, gridSize, containerOriginX, containerOriginY);
     }
   }
 
@@ -335,7 +344,7 @@ export const generateSkillCode = (
               resolved,
               master.width,
               master.height,
-              childView.coordinateMode ?? 'centered',
+              resolveViewCoordinateMode(childView),
             );
           }
         }
@@ -395,7 +404,7 @@ export const generateSkillCode = (
     const view = cellViews[cellId];
     const subInstances = view?.instances ?? [];
     const viewShapes = view?.shapes ?? [];
-    const viewCoordinateMode = view?.coordinateMode ?? 'centered';
+    const viewCoordinateMode = resolveViewCoordinateMode(view);
     const anchoredTransform = globalPlacements.get(cellId);
     const ox = cell.originX ?? 0;
     const oy = cell.originY ?? 0;

@@ -100,13 +100,19 @@ const assertShapes = (rawShapes: unknown[]): LayoutShape[] => {
   });
 };
 
-const assertPixelArray = (raw: unknown, containerWidth: number, containerHeight: number): PixelArray => {
+const assertPixelArray = (
+  raw: unknown,
+  containerWidth: number,
+  containerHeight: number,
+  originX = -containerWidth / 2,
+  originY = -containerHeight / 2,
+): PixelArray => {
   if (!isRecord(raw) || !finite(raw.x) || !finite(raw.y) ||
       !finite(raw.width) || raw.width <= 0 || raw.width >= containerWidth ||
       !finite(raw.height) || raw.height <= 0 || raw.height >= containerHeight ||
       typeof raw.visible !== 'boolean' ||
-      raw.x < -containerWidth / 2 - 1e-9 || raw.x + raw.width > containerWidth / 2 + 1e-9 ||
-      raw.y < -containerHeight / 2 - 1e-9 || raw.y + raw.height > containerHeight / 2 + 1e-9) {
+      raw.x < originX - 1e-9 || raw.x + raw.width > originX + containerWidth + 1e-9 ||
+      raw.y < originY - 1e-9 || raw.y + raw.height > originY + containerHeight + 1e-9) {
     throw new Error('Invalid pixel array.');
   }
   return raw as PixelArray;
@@ -203,8 +209,11 @@ const assertProject = (value: unknown): ProjectSnapshot => {
       if (rawView.coordinateMode !== undefined && rawView.coordinateMode !== 'origin' && rawView.coordinateMode !== 'centered') {
         throw new Error(`Invalid coordinateMode in cell view ${master.cellName}.`);
       }
+      const viewCoordMode = rawView.coordinateMode ?? (viewShapes && viewShapes.length > 0 ? 'origin' : 'centered');
+      const viewOriginX = viewCoordMode === 'origin' ? (master.originX ?? 0) : -master.width / 2;
+      const viewOriginY = viewCoordMode === 'origin' ? (master.originY ?? 0) : -master.height / 2;
       const viewPixelArray = rawView.pixelArray !== undefined && rawView.pixelArray !== null
-        ? assertPixelArray(rawView.pixelArray, master.width, master.height)
+        ? assertPixelArray(rawView.pixelArray, master.width, master.height, viewOriginX, viewOriginY)
         : undefined;
       const viewPadInset = rawView.padInset !== undefined
         ? assertPadInset(rawView.padInset, master.width, master.height)

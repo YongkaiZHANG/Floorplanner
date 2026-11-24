@@ -434,6 +434,7 @@ const CompanionCellViewWindow: React.FC<{
   activeCellId: string | null;
   activeInstances: Instance[];
   activeShapes: LayoutShape[];
+  activeCoordinateMode: 'origin' | 'centered';
   onSelectCompanion: (cellId: string | null) => void;
   onActivate: () => void;
   onClose: () => void;
@@ -445,6 +446,7 @@ const CompanionCellViewWindow: React.FC<{
   activeCellId,
   activeInstances,
   activeShapes,
+  activeCoordinateMode,
   onSelectCompanion,
   onActivate,
   onClose,
@@ -652,51 +654,60 @@ const CompanionCellViewWindow: React.FC<{
                     }
                     vectorEffect="non-scaling-stroke"
                   />
-                  {childShapes.map(shape => {
-                    const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                  {(() => {
+                    const childCoordMode = inst.cellId === activeCellId
+                      ? activeCoordinateMode
+                      : (cellViews[inst.cellId]?.coordinateMode ?? (childShapes.length > 0 ? 'origin' : 'centered'));
+                    const childTransform = childCoordMode === 'origin'
+                      ? undefined
+                      : `translate(${master.width / 2} ${master.height / 2})`;
+                    if (childShapes.length === 0 && subInstances.length === 0) return null;
                     return (
-                      <rect
-                        key={shape.id}
-                        x={shape.x}
-                        y={shape.y}
-                        width={shape.width}
-                        height={shape.height}
-                        fill={style.color}
-                        fillOpacity={style.fillOpacity}
-                        stroke={style.color}
-                        strokeWidth={1}
-                        vectorEffect="non-scaling-stroke"
-                      />
-                    );
-                  })}
-                  {subInstances.length > 0 && (
-                    <g transform={cellViews[inst.cellId]?.coordinateMode === 'origin' ? undefined : `translate(${master.width / 2} ${master.height / 2})`}>
-                      {subInstances.map(sub => {
-                        const subMaster = masterCells[sub.cellId];
-                        if (!subMaster) return null;
-                        const st = getTransformProps(sub.orientation);
-                        return (
-                          <g
-                            key={sub.id}
-                            transform={`translate(${sub.x} ${sub.y}) rotate(${st.rotation}) scale(${st.scaleX} ${st.scaleY})`}
-                          >
+                      <g transform={childTransform}>
+                        {childShapes.map(shape => {
+                          const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                          return (
                             <rect
-                              x={subMaster.originX ?? 0}
-                              y={subMaster.originY ?? 0}
-                              width={subMaster.width}
-                              height={subMaster.height}
-                              fill={subMaster.color}
-                              fillOpacity={Math.min(0.7, (subMaster.opacity ?? 0.5) * 0.85)}
-                              stroke="#0f172a"
-                              strokeWidth={0.75}
-                              strokeOpacity={0.55}
+                              key={shape.id}
+                              x={shape.x}
+                              y={shape.y}
+                              width={shape.width}
+                              height={shape.height}
+                              fill={style.color}
+                              fillOpacity={style.fillOpacity}
+                              stroke={style.color}
+                              strokeWidth={1}
                               vectorEffect="non-scaling-stroke"
                             />
-                          </g>
-                        );
-                      })}
-                    </g>
-                  )}
+                          );
+                        })}
+                        {subInstances.map(sub => {
+                          const subMaster = masterCells[sub.cellId];
+                          if (!subMaster) return null;
+                          const st = getTransformProps(sub.orientation);
+                          return (
+                            <g
+                              key={sub.id}
+                              transform={`translate(${sub.x} ${sub.y}) rotate(${st.rotation}) scale(${st.scaleX} ${st.scaleY})`}
+                            >
+                              <rect
+                                x={subMaster.originX ?? 0}
+                                y={subMaster.originY ?? 0}
+                                width={subMaster.width}
+                                height={subMaster.height}
+                                fill={subMaster.color}
+                                fillOpacity={Math.min(0.7, (subMaster.opacity ?? 0.5) * 0.85)}
+                                stroke="#0f172a"
+                                strokeWidth={0.75}
+                                strokeOpacity={0.55}
+                                vectorEffect="non-scaling-stroke"
+                              />
+                            </g>
+                          );
+                        })}
+                      </g>
+                    );
+                  })()}
                   <text
                     x={ox + master.width / 2}
                     y={-(oy + master.height / 2)}
@@ -901,6 +912,7 @@ export const VirtuosoWorkspace: React.FC = () => {
             activeCellId={activeCellId}
             activeInstances={instances}
             activeShapes={shapes}
+            activeCoordinateMode={activeCoordinateMode}
             onSelectCompanion={setPreferredCompanionId}
             onActivate={() => openCellView(companionView.id)}
             onClose={() => setWindowLayoutMode('tabs')}

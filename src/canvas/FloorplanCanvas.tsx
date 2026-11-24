@@ -252,12 +252,18 @@ export const FloorplanCanvas: React.FC = () => {
     }
   }, [activeBoundaryBox, isSubCellCanvas, activeMasterCell, shapes.length, instances.length, rootView, gridSize]);
 
+  const fitViewRef = useRef(fitView);
+  useEffect(() => {
+    fitViewRef.current = fitView;
+  }, [fitView]);
+
+  const rootDimensionsKey = activeCellId === null ? `${topWidth}x${topHeight}` : 'subcell';
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      fitView();
+      fitViewRef.current();
     }, 20);
     return () => window.clearTimeout(timer);
-  }, [activeCellId, windowLayoutMode, openViewIds.length, fitView]);
+  }, [activeCellId, windowLayoutMode, openViewIds.length, rootDimensionsKey]);
 
   useEffect(() => {
     const updateSize = () => {
@@ -898,6 +904,9 @@ export const FloorplanCanvas: React.FC = () => {
       setPanStart(null);
       setIsPanning(false);
     }
+    if (rectDraggingRef.current) {
+      rectDraggingRef.current = false;
+    }
     finishMarqueeSelection(e.evt?.shiftKey ?? false);
   };
 
@@ -1045,6 +1054,32 @@ export const FloorplanCanvas: React.FC = () => {
     ));
   };
 
+  const clampBoxInsideActiveBoundary = (x: number, y: number, width: number, height: number, step: number) => {
+    const snapAxis = (val: number, min: number, max: number, grid: number) => {
+      const minStep = Math.ceil((min - 1e-9) / grid);
+      const maxStep = Math.floor((max + 1e-9) / grid);
+      if (minStep > maxStep) throw new RangeError('Does not fit inside active cell');
+      const idx = Math.max(minStep, Math.min(Math.round(val / grid), maxStep));
+      const snapped = snapToGrid(idx * grid, grid);
+      return Object.is(snapped, -0) ? 0 : snapped;
+    };
+    const minX = activeBoundaryBox.minX;
+    const maxX = activeBoundaryBox.maxX - width;
+    const minY = activeBoundaryBox.minY;
+    const maxY = activeBoundaryBox.maxY - height;
+    try {
+      return {
+        x: snapAxis(x, minX, maxX, step),
+        y: snapAxis(y, minY, maxY, step),
+      };
+    } catch {
+      return {
+        x: snapAxis(x, minX, maxX, gridSize),
+        y: snapAxis(y, minY, maxY, gridSize),
+      };
+    }
+  };
+
   const pixelArrayDragBoundFunc = (pos: { x: number; y: number }) => {
     if (!pixelArray) return pos;
     const worldX = (pos.x - stagePos.x) / stageScale;
@@ -1052,12 +1087,12 @@ export const FloorplanCanvas: React.FC = () => {
     const umX = worldX / SCALE_FACTOR;
     const umY = worldY / SCALE_FACTOR;
     try {
-      const snapped = clampWithSnapStep(
+      const snapped = clampBoxInsideActiveBoundary(
         umX,
         umY,
-        'R0',
         pixelArray.width,
         pixelArray.height,
+        activeSnapStep,
       );
       return {
         x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
@@ -1152,7 +1187,7 @@ export const FloorplanCanvas: React.FC = () => {
     const AUTO_BORDER = 'rgba(139, 92, 246, 0.45)';
     const placedLabelRects: ScreenLabelRect[] = [];
     const annotations: React.ReactNode[] = [];
-    const topBox: BBox = { minX: -topWidth / 2, maxX: topWidth / 2, minY: -topHeight / 2, maxY: topHeight / 2 };
+    const topBox: BBox = activeBoundaryBox;
 
     type DimSpec = {
       x1: number;
@@ -2215,14 +2250,11 @@ export const FloorplanCanvas: React.FC = () => {
 
           {appMode === 'pixel-array' && pendingPixelArraySize && snappedMousePos && (() => {
             try {
-              const position = clampInstancePosition(
+              const position = clampBoxInsideActiveBoundary(
                 snappedMousePos.x - pendingPixelArraySize.width / 2,
                 snappedMousePos.y - pendingPixelArraySize.height / 2,
-                'R0',
                 pendingPixelArraySize.width,
                 pendingPixelArraySize.height,
-                topWidth,
-                topHeight,
                 gridSize,
               );
               return (
@@ -2515,17 +2547,20 @@ export const FloorplanCanvas: React.FC = () => {
 
             const buildResizeCorners = () => {
               if (!isSelected || !canDragShape) return null;
+              // Anchor opposite corners to the original immutable `shape` bounds so dragging past an edge never flips the anchor.
               const corners: Array<{ key: 'sw' | 'se' | 'ne' | 'nw'; hx: number; hy: number; anchorX: number; anchorY: number }> = [
-                { key: 'sw', hx: curX, hy: curY, anchorX: curX + curW, anchorY: curY + curH },
-                { key: 'se', hx: curX + curW, hy: curY, anchorX: curX, anchorY: curY + curH },
-                { key: 'ne', hx: curX + curW, hy: curY + curH, anchorX: curX, anchorY: curY },
-                { key: 'nw', hx: curX, hy: curY + curH, anchorX: curX + curW, anchorY: curY },
+                { key: 'sw', hx: curX, hy: curY, anchorX: shape.x + shape.width, anchorY: shape.y + shape.height },
+                { key: 'se', hx: curX + curW, hy: curY, anchorX: shape.x, anchorY: shape.y + shape.height },
+                { key: 'ne', hx: curX + curW, hy: curY + curH, anchorX: shape.x, anchorY: shape.y },
+                { key: 'nw', hx: curX, hy: curY + curH, anchorX: shape.x + shape.width, anchorY: shape.y },
               ];
               return corners.map(corner => (
                 <Rect
                   key={`shape-handle-${shape.id}-${corner.key}`}
-                  x={corner.hx * SCALE_FACTOR - handleSize / 2}
-                  y={corner.hy * SCALE_FACTOR - handleSize / 2}
+                  x={corner.hx * SCALE_FACTOR}
+                  y={corner.hy * SCALE_FACTOR}
+                  offsetX={handleSize / 2}
+                  offsetY={handleSize / 2}
                   width={handleSize}
                   height={handleSize}
                   fill="#ffffff"
@@ -2537,22 +2572,22 @@ export const FloorplanCanvas: React.FC = () => {
                     const worldY = (pos.y - stagePos.y) / -stageScale;
                     const snapped = snapPointToGrid(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR, activeSnapStep);
                     return {
-                      x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x - (handleSize * stageScale) / 2,
-                      y: snapped.y * SCALE_FACTOR * -stageScale + stagePos.y - (handleSize * stageScale) / 2,
+                      x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
+                      y: snapped.y * SCALE_FACTOR * -stageScale + stagePos.y,
                     };
                   }}
                   onClick={event => { event.cancelBubble = true; }}
                   onDragMove={event => {
-                    const nx = (event.target.x() + handleSize / 2) / SCALE_FACTOR;
-                    const ny = (event.target.y() + handleSize / 2) / SCALE_FACTOR;
+                    const nx = event.target.x() / SCALE_FACTOR;
+                    const ny = event.target.y() / SCALE_FACTOR;
                     const nextRect = normalizeRectFromPoints(corner.anchorX, corner.anchorY, nx, ny, activeSnapStep, gridSize);
                     if (nextRect) {
                       setShapeResizePreview({ id: shape.id, ...nextRect });
                     }
                   }}
                   onDragEnd={event => {
-                    const nx = (event.target.x() + handleSize / 2) / SCALE_FACTOR;
-                    const ny = (event.target.y() + handleSize / 2) / SCALE_FACTOR;
+                    const nx = event.target.x() / SCALE_FACTOR;
+                    const ny = event.target.y() / SCALE_FACTOR;
                     const nextRect = normalizeRectFromPoints(corner.anchorX, corner.anchorY, nx, ny, activeSnapStep, gridSize);
                     setShapeResizePreview(null);
                     if (nextRect) {
@@ -2835,12 +2870,7 @@ export const FloorplanCanvas: React.FC = () => {
             const boundaryEdges: AlignmentEdge[] = sourceAxis === 'horizontal'
               ? ['left', 'right']
               : ['bottom', 'top'];
-            const boundaryBox: BBox = {
-              minX: -topWidth / 2,
-              maxX: topWidth / 2,
-              minY: -topHeight / 2,
-              maxY: topHeight / 2,
-            };
+            const boundaryBox: BBox = activeBoundaryBox;
             const boundaryTargets = boundaryEdges.map(edge => {
               const key = `top-${edge}`;
               return (

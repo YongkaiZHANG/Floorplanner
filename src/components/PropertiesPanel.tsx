@@ -84,6 +84,8 @@ export const PropertiesPanel: React.FC = () => {
     setDraftArrayH(formatGridValue(pixelArray.height, gridSize));
   }, [pixelArray, gridSize]);
 
+  const skipNextBlurCommitRef = React.useRef(false);
+
   const commitInstanceName = () => {
     if (!selectedInstance) return;
     const trimmed = draftName.trim();
@@ -100,6 +102,10 @@ export const PropertiesPanel: React.FC = () => {
   };
 
   const commitPosition = (axis: 'x' | 'y') => {
+    if (skipNextBlurCommitRef.current) {
+      skipNextBlurCommitRef.current = false;
+      return;
+    }
     if (!selectedInstance) return;
     const value = Number.parseFloat(axis === 'x' ? draftX : draftY);
     if (!Number.isFinite(value)) {
@@ -121,6 +127,10 @@ export const PropertiesPanel: React.FC = () => {
   };
 
   const commitPixelArrayField = (field: 'x' | 'y' | 'width' | 'height') => {
+    if (skipNextBlurCommitRef.current) {
+      skipNextBlurCommitRef.current = false;
+      return;
+    }
     if (!pixelArray) return;
     const raw = field === 'x' ? draftArrayX : field === 'y' ? draftArrayY : field === 'width' ? draftArrayW : draftArrayH;
     const value = Number.parseFloat(raw);
@@ -163,6 +173,7 @@ export const PropertiesPanel: React.FC = () => {
   const handlePositionKeyDown = (event: React.KeyboardEvent<HTMLInputElement>, axis: 'x' | 'y') => {
     if (event.key === 'Enter') event.currentTarget.blur();
     if (event.key === 'Escape' && selectedInstance) {
+      skipNextBlurCommitRef.current = true;
       if (axis === 'x') setDraftX(formatGridValue(selectedInstance.x, gridSize));
       else setDraftY(formatGridValue(selectedInstance.y, gridSize));
       event.currentTarget.blur();
@@ -172,6 +183,7 @@ export const PropertiesPanel: React.FC = () => {
   const handlePixelArrayKeyDown = (event: React.KeyboardEvent<HTMLInputElement>, field: 'x' | 'y' | 'width' | 'height') => {
     if (event.key === 'Enter') event.currentTarget.blur();
     if (event.key === 'Escape' && pixelArray) {
+      skipNextBlurCommitRef.current = true;
       if (field === 'x') setDraftArrayX(formatGridValue(pixelArray.x, gridSize));
       else if (field === 'y') setDraftArrayY(formatGridValue(pixelArray.y, gridSize));
       else if (field === 'width') setDraftArrayW(formatGridValue(pixelArray.width, gridSize));
@@ -191,6 +203,10 @@ export const PropertiesPanel: React.FC = () => {
   };
 
   const commitShapeMeta = () => {
+    if (skipNextBlurCommitRef.current) {
+      skipNextBlurCommitRef.current = false;
+      return;
+    }
     if (!selectedShape) return;
     try {
       updateShape(selectedShape.id, {
@@ -204,6 +220,10 @@ export const PropertiesPanel: React.FC = () => {
   };
 
   const commitShapeBox = () => {
+    if (skipNextBlurCommitRef.current) {
+      skipNextBlurCommitRef.current = false;
+      return;
+    }
     if (!selectedShape) return;
     const x1 = Number.parseFloat(draftShapeX1);
     const y1 = Number.parseFloat(draftShapeY1);
@@ -233,6 +253,29 @@ export const PropertiesPanel: React.FC = () => {
       setDraftShapeX2(formatGridValue(selectedShape.x + selectedShape.width, gridSize));
       setDraftShapeY2(formatGridValue(selectedShape.y + selectedShape.height, gridSize));
       alert(error instanceof Error ? error.message : 'Unable to update shape coordinates.');
+    }
+  };
+
+  const handleShapeMetaKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') event.currentTarget.blur();
+    if (event.key === 'Escape' && selectedShape) {
+      skipNextBlurCommitRef.current = true;
+      setDraftShapeLayer(selectedShape.layer);
+      setDraftShapePurpose(selectedShape.purpose);
+      setDraftShapeLabel(selectedShape.label ?? '');
+      event.currentTarget.blur();
+    }
+  };
+
+  const handleShapeBoxKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') event.currentTarget.blur();
+    if (event.key === 'Escape' && selectedShape) {
+      skipNextBlurCommitRef.current = true;
+      setDraftShapeX1(formatGridValue(selectedShape.x, gridSize));
+      setDraftShapeY1(formatGridValue(selectedShape.y, gridSize));
+      setDraftShapeX2(formatGridValue(selectedShape.x + selectedShape.width, gridSize));
+      setDraftShapeY2(formatGridValue(selectedShape.y + selectedShape.height, gridSize));
+      event.currentTarget.blur();
     }
   };
 
@@ -307,7 +350,7 @@ export const PropertiesPanel: React.FC = () => {
                     disabled={Boolean(selectedShape.locked)}
                     onChange={e => setDraftShapeLayer(e.target.value)}
                     onBlur={commitShapeMeta}
-                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    onKeyDown={handleShapeMetaKeyDown}
                   />
                 </div>
                 <div className="form-group">
@@ -319,7 +362,7 @@ export const PropertiesPanel: React.FC = () => {
                     disabled={Boolean(selectedShape.locked)}
                     onChange={e => setDraftShapePurpose(e.target.value)}
                     onBlur={commitShapeMeta}
-                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    onKeyDown={handleShapeMetaKeyDown}
                   />
                 </div>
               </div>
@@ -333,7 +376,7 @@ export const PropertiesPanel: React.FC = () => {
                   placeholder="e.g. CORE_REGION"
                   onChange={e => setDraftShapeLabel(e.target.value)}
                   onBlur={commitShapeMeta}
-                  onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                  onKeyDown={handleShapeMetaKeyDown}
                 />
               </div>
               <div className="form-row" style={{ marginTop: '10px', alignItems: 'center' }}>
@@ -375,7 +418,7 @@ export const PropertiesPanel: React.FC = () => {
                     disabled={Boolean(selectedShape.locked)}
                     onChange={e => setDraftShapeX1(e.target.value)}
                     onBlur={commitShapeBox}
-                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    onKeyDown={handleShapeBoxKeyDown}
                   />
                 </div>
                 <div className="form-group">
@@ -388,7 +431,7 @@ export const PropertiesPanel: React.FC = () => {
                     disabled={Boolean(selectedShape.locked)}
                     onChange={e => setDraftShapeY1(e.target.value)}
                     onBlur={commitShapeBox}
-                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    onKeyDown={handleShapeBoxKeyDown}
                   />
                 </div>
               </div>
@@ -403,7 +446,7 @@ export const PropertiesPanel: React.FC = () => {
                     disabled={Boolean(selectedShape.locked)}
                     onChange={e => setDraftShapeX2(e.target.value)}
                     onBlur={commitShapeBox}
-                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    onKeyDown={handleShapeBoxKeyDown}
                   />
                 </div>
                 <div className="form-group">
@@ -416,7 +459,7 @@ export const PropertiesPanel: React.FC = () => {
                     disabled={Boolean(selectedShape.locked)}
                     onChange={e => setDraftShapeY2(e.target.value)}
                     onBlur={commitShapeBox}
-                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    onKeyDown={handleShapeBoxKeyDown}
                   />
                 </div>
               </div>
