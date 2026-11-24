@@ -820,7 +820,7 @@ export const Sidebar: React.FC = () => {
               {pixelArray?.visible ? <FiEyeOff /> : <FiEye />}
               <span>
                 <strong>{pixelArray?.visible ? 'Disable Pixel Array' : 'Enable Pixel Array'}</strong>
-                <small>{pixelArray ? `${pixelArray.width} × ${pixelArray.height} µm · only overlap-capable cell` : 'Only cell allowed to overlap other blocks'}</small>
+                <small>{pixelArray ? `${pixelArray.width} × ${pixelArray.height} µm · excluded from overlap DRC` : 'Optical sensor region · excluded from overlap DRC'}</small>
               </span>
             </button>
             {pixelArray && (

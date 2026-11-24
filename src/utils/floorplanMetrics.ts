@@ -4,6 +4,22 @@ import { formatGridValue } from './grid.ts';
 
 export type OverlapKind = 'ip-ip' | 'pad-pad' | 'ip-pad';
 
+export type BoundaryViolationSide = 'left' | 'right' | 'bottom' | 'top';
+
+export type BoundaryViolation = {
+  id: string;
+  instanceId: string;
+  instanceName: string;
+  cellName: string;
+  sides: BoundaryViolationSide[];
+  leftOverflow: number;
+  rightOverflow: number;
+  bottomOverflow: number;
+  topOverflow: number;
+  maxOverflowUm: number;
+  bounds: { minX: number; maxX: number; minY: number; maxY: number };
+};
+
 export type OverlapViolation = {
   id: string;
   idA: string;
@@ -43,6 +59,7 @@ export type FloorplanMetrics = {
   pixelArrayPct: number;
   padsBySide: PadSideCounts;
   overlaps: OverlapViolation[];
+  boundaryViolations: BoundaryViolation[];
 };
 
 const OVERLAP_EPSILON = 1e-6;
@@ -77,7 +94,7 @@ export const findOverlapViolations = (
 ): OverlapViolation[] => {
   const entries = snapshot.instances.flatMap(instance => {
     const master = snapshot.masterCells[instance.cellId];
-    if (!master) return [];
+    if (!master || master.width <= 0 || master.height <= 0) return [];
     const bounds = getPhysicalBounds({
       ...instance,
       width: master.width,
@@ -125,6 +142,66 @@ export const findOverlapViolations = (
         });
       }
     }
+  }
+  return violations;
+};
+
+/**
+ * Finds all instances whose physical bounding box extends outside the top-cell
+ * die boundary `[-topWidth/2..topWidth/2] × [-topHeight/2..topHeight/2]`.
+ * Instances are allowed to exceed the boundary (just like Cadence Virtuoso) and
+ * are flagged here as non-blocking DRC warnings so the engineer can adjust them.
+ */
+export const findBoundaryViolations = (
+  snapshot: Pick<ProjectSnapshot, 'topWidth' | 'topHeight' | 'masterCells' | 'instances'>,
+): BoundaryViolation[] => {
+  if (!(Number.isFinite(snapshot.topWidth) && Number.isFinite(snapshot.topHeight) && snapshot.topWidth > 0 && snapshot.topHeight > 0)) {
+    return [];
+  }
+  const halfW = snapshot.topWidth / 2;
+  const halfH = snapshot.topHeight / 2;
+  const violations: BoundaryViolation[] = [];
+
+  for (const instance of snapshot.instances) {
+    const master = snapshot.masterCells[instance.cellId];
+    if (!master || master.width <= 0 || master.height <= 0) continue;
+    const bounds = getPhysicalBounds({
+      ...instance,
+      width: master.width,
+      height: master.height,
+      originX: master.originX,
+      originY: master.originY,
+    });
+    const leftOverflow = Math.max(0, -halfW - bounds.left);
+    const rightOverflow = Math.max(0, bounds.right - halfW);
+    const bottomOverflow = Math.max(0, -halfH - bounds.bottom);
+    const topOverflow = Math.max(0, bounds.top - halfH);
+
+    const sides: BoundaryViolationSide[] = [];
+    if (leftOverflow > OVERLAP_EPSILON) sides.push('left');
+    if (rightOverflow > OVERLAP_EPSILON) sides.push('right');
+    if (bottomOverflow > OVERLAP_EPSILON) sides.push('bottom');
+    if (topOverflow > OVERLAP_EPSILON) sides.push('top');
+    if (sides.length === 0) continue;
+
+    violations.push({
+      id: `oob:${instance.id}`,
+      instanceId: instance.id,
+      instanceName: instance.name,
+      cellName: master.cellName,
+      sides,
+      leftOverflow: cleanDecimal(leftOverflow),
+      rightOverflow: cleanDecimal(rightOverflow),
+      bottomOverflow: cleanDecimal(bottomOverflow),
+      topOverflow: cleanDecimal(topOverflow),
+      maxOverflowUm: cleanDecimal(Math.max(leftOverflow, rightOverflow, bottomOverflow, topOverflow)),
+      bounds: {
+        minX: cleanDecimal(bounds.left),
+        maxX: cleanDecimal(bounds.right),
+        minY: cleanDecimal(bounds.bottom),
+        maxY: cleanDecimal(bounds.top),
+      },
+    });
   }
   return violations;
 };
@@ -186,6 +263,7 @@ export const computeFloorplanMetrics = (snapshot: ProjectSnapshot): FloorplanMet
     pixelArrayPct: cleanDecimal(pct(pixelArrayAreaUm2)),
     padsBySide,
     overlaps: findOverlapViolations(snapshot),
+    boundaryViolations: findBoundaryViolations(snapshot),
   };
 };
 

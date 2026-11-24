@@ -3,12 +3,17 @@ import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
 import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiExternalLink, FiCrosshair } from 'react-icons/fi';
 import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
+import { findBoundaryViolations, findOverlapViolations } from '../utils/floorplanMetrics';
 import { resolveLayerStyle, VIRTUOSO_LAYER_PRESETS } from '../utils/layoutLayers';
 
 const ORIENTATIONS = ['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'];
 
 export const PropertiesPanel: React.FC = () => {
   const {
+    activeCellId,
+    topWidth,
+    topHeight,
+    topCellName,
     masterCells,
     instances,
     shapes,
@@ -41,6 +46,21 @@ export const PropertiesPanel: React.FC = () => {
   const selectedInstance = instances.find(inst => inst.id === selectedInstanceId);
   const selectedShape = shapes.find(shape => shape.id === selectedShapeId) ?? null;
   const masterCell = selectedInstance ? masterCells[selectedInstance.cellId] : null;
+  const selectedBoundaryViolation = React.useMemo(() => {
+    if (activeCellId !== null || !selectedInstance) return null;
+    return findBoundaryViolations({
+      topWidth,
+      topHeight,
+      masterCells,
+      instances: [selectedInstance],
+    })[0] ?? null;
+  }, [activeCellId, selectedInstance, topWidth, topHeight, masterCells]);
+  const selectedOverlapNames = React.useMemo(() => {
+    if (!selectedInstance) return [] as string[];
+    return findOverlapViolations({ masterCells, instances })
+      .filter(v => v.idA === selectedInstance.id || v.idB === selectedInstance.id)
+      .map(v => (v.idA === selectedInstance.id ? v.nameB : v.nameA));
+  }, [selectedInstance, masterCells, instances]);
   const [draftName, setDraftName] = React.useState('');
   const [draftX, setDraftX] = React.useState('0');
   const [draftY, setDraftY] = React.useState('0');
@@ -719,6 +739,26 @@ export const PropertiesPanel: React.FC = () => {
                 >
                   <FiCrosshair /> Align Origin to (0, 0)
                 </button>
+              )}
+              {selectedBoundaryViolation && (
+                <div className="pad-edge-note" role="status">
+                  <strong>
+                    ⚠ Exceeds {topCellName} boundary ({selectedBoundaryViolation.sides.join(', ')} +{formatGridValue(selectedBoundaryViolation.maxOverflowUm, gridSize)} µm)
+                  </strong>
+                  <span>
+                    Press <strong>X</strong> (Descend Edit) to adjust its internal drawing in place, or reposition this instance.
+                  </span>
+                </div>
+              )}
+              {selectedOverlapNames.length > 0 && (
+                <div className="pad-edge-note" role="status">
+                  <strong>
+                    ⚠ Overlaps {selectedOverlapNames.join(', ')}
+                  </strong>
+                  <span>
+                    Cell overlap is allowed and flagged as a DRC warning so you can adjust layout hierarchy freely.
+                  </span>
+                </div>
               )}
               {masterCell.kind === 'pad' && (
                 <div className="pad-edge-note">

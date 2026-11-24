@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, clampInstancePosition, computePadGroupPositions, findOverlappingInstance, getTransformProps, isCellEmpty, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
+import { useStore, computePadGroupPositions, findOverlappingInstance, getTransformProps, isCellEmpty, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
 import type { Instance } from '../store/useStore';
 import { getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
@@ -8,7 +8,7 @@ import { collapseCollinearPadCandidates, labelRectsOverlap } from '../utils/auto
 import type { ScreenLabelRect } from '../utils/autoDim';
 import { SCALE_FACTOR } from '../utils/canvasConstants';
 import { computeDisplayGridStep, resolveActiveSnapStep, resolveCanvasCursor, snapPointToGrid } from '../utils/canvasCursor';
-import { findOverlapViolations } from '../utils/floorplanMetrics';
+import { findBoundaryViolations, findOverlapViolations } from '../utils/floorplanMetrics';
 import { formatGridValue, snapToGrid } from '../utils/grid';
 import {
   applyCadenceOrientationVector,
@@ -354,17 +354,6 @@ export const FloorplanCanvas: React.FC = () => {
     if (appMode === 'measure' && snapIndicator) return mousePos;
     return snapPointToGrid(mousePos.x, mousePos.y, activeSnapStep);
   }, [mousePos, appMode, snapIndicator, activeSnapStep]);
-
-  const clampWithSnapStep = (x: number, y: number, orientation: string, width: number, height: number, originX = 0, originY = 0) => {
-    if (isSubCellCanvas) {
-      return snapPointToGrid(x, y, activeSnapStep);
-    }
-    try {
-      return clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, activeSnapStep, originX, originY);
-    } catch {
-      return clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, gridSize, originX, originY);
-    }
-  };
 
   const fitView = useCallback(() => {
     if (containerRef.current) {
@@ -1390,29 +1379,22 @@ export const FloorplanCanvas: React.FC = () => {
         originX: master.originX,
         originY: master.originY,
       });
-      if (isSubCellCanvas) {
-        // Sub-cell layout canvases are unbounded around (0, 0)
+      if (isSubCellCanvas || master.kind !== 'pad') {
+        // Virtuoso allows regular cells & sub-cells to move freely (exceeding top bounds triggers a live warning)
         continue;
       }
-      if (master.kind === 'pad') {
-        const onTopOrBottom = Math.abs(bounds.top - padHalfH) <= 1e-6 || Math.abs(bounds.bottom + padHalfH) <= 1e-6;
-        const onLeftOrRight = Math.abs(bounds.left + padHalfW) <= 1e-6 || Math.abs(bounds.right - padHalfW) <= 1e-6;
-        minDx = Math.max(minDx, -padHalfW - bounds.left);
-        maxDx = Math.min(maxDx, padHalfW - bounds.right);
-        minDy = Math.max(minDy, -padHalfH - bounds.bottom);
-        maxDy = Math.min(maxDy, padHalfH - bounds.top);
-        if (onTopOrBottom && !onLeftOrRight) {
-          minDy = Math.max(minDy, 0);
-          maxDy = Math.min(maxDy, 0);
-        } else if (onLeftOrRight && !onTopOrBottom) {
-          minDx = Math.max(minDx, 0);
-          maxDx = Math.min(maxDx, 0);
-        }
-      } else {
-        minDx = Math.max(minDx, -halfW - bounds.left);
-        maxDx = Math.min(maxDx, halfW - bounds.right);
-        minDy = Math.max(minDy, -halfH - bounds.bottom);
-        maxDy = Math.min(maxDy, halfH - bounds.top);
+      const onTopOrBottom = Math.abs(bounds.top - padHalfH) <= 1e-6 || Math.abs(bounds.bottom + padHalfH) <= 1e-6;
+      const onLeftOrRight = Math.abs(bounds.left + padHalfW) <= 1e-6 || Math.abs(bounds.right - padHalfW) <= 1e-6;
+      minDx = Math.max(minDx, -padHalfW - bounds.left);
+      maxDx = Math.min(maxDx, padHalfW - bounds.right);
+      minDy = Math.max(minDy, -padHalfH - bounds.bottom);
+      maxDy = Math.min(maxDy, padHalfH - bounds.top);
+      if (onTopOrBottom && !onLeftOrRight) {
+        minDy = Math.max(minDy, 0);
+        maxDy = Math.min(maxDy, 0);
+      } else if (onLeftOrRight && !onTopOrBottom) {
+        minDx = Math.max(minDx, 0);
+        maxDx = Math.min(maxDx, 0);
       }
     }
 
@@ -1466,31 +1448,21 @@ export const FloorplanCanvas: React.FC = () => {
     }
 
     try {
-      const snapped = isSubCellCanvas
+      const snapped = isSubCellCanvas || master.kind !== 'pad'
         ? snapPointToGrid(umX, umY, activeSnapStep)
-        : master.kind === 'pad'
-          ? snapPadToNearestEdge(
-              umX,
-              umY,
-              master.width,
-              master.height,
-              topWidth,
-              topHeight,
-              gridSize,
-              orientation,
-              padInset,
-              master.originX ?? 0,
-              master.originY ?? 0,
-            )
-          : clampWithSnapStep(
-              umX,
-              umY,
-              orientation,
-              master.width,
-              master.height,
-              master.originX ?? 0,
-              master.originY ?? 0,
-            );
+        : snapPadToNearestEdge(
+            umX,
+            umY,
+            master.width,
+            master.height,
+            topWidth,
+            topHeight,
+            gridSize,
+            orientation,
+            padInset,
+            master.originX ?? 0,
+            master.originY ?? 0,
+          );
       const baseBack = editToBasePoint(snapped.x, snapped.y);
       return {
         x: baseBack.x * SCALE_FACTOR * stageScale + stagePos.x,
@@ -1602,6 +1574,17 @@ export const FloorplanCanvas: React.FC = () => {
     () => (showOverlapDrc ? findOverlapViolations({ masterCells, instances }) : []),
     [showOverlapDrc, masterCells, instances],
   );
+
+  const boundaryViolations = useMemo(() => {
+    if (!showOverlapDrc || !baseIsRoot) return [];
+    const rootInstances = isEditInPlace ? (rootView?.instances ?? []) : instances;
+    return findBoundaryViolations({
+      topWidth: baseWidth,
+      topHeight: baseHeight,
+      masterCells,
+      instances: rootInstances,
+    });
+  }, [showOverlapDrc, baseIsRoot, isEditInPlace, rootView, instances, baseWidth, baseHeight, masterCells]);
 
   // ----------------------------------------------------------------
   // Gap annotation helpers
@@ -2561,15 +2544,7 @@ export const FloorplanCanvas: React.FC = () => {
                 placeManualPadGroup(editMapped.x, editMapped.y);
               } else {
                 const targetPos = placementMaster && (isSubCellCanvas || placementMaster.kind !== 'pad')
-                  ? clampWithSnapStep(
-                      editMapped.x,
-                      editMapped.y,
-                      placementOrientation,
-                      placementMaster.width,
-                      placementMaster.height,
-                      placementMaster.originX ?? 0,
-                      placementMaster.originY ?? 0,
-                    )
+                  ? snapPointToGrid(editMapped.x, editMapped.y, activeSnapStep)
                   : { x: editMapped.x, y: editMapped.y };
                 if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
                   placeInstanceMosaic(placementMasterId, targetPos.x, targetPos.y, placementOrientation, pendingInstanceArray);
@@ -3821,19 +3796,7 @@ export const FloorplanCanvas: React.FC = () => {
                 return null;
               }
             } else {
-              try {
-                ghostPosition = clampWithSnapStep(
-                  editCursorPos.x,
-                  editCursorPos.y,
-                  placementOrientation,
-                  m.width,
-                  m.height,
-                  m.originX ?? 0,
-                  m.originY ?? 0,
-                );
-              } catch {
-                return null;
-              }
+              ghostPosition = snapPointToGrid(editCursorPos.x, editCursorPos.y, activeSnapStep);
             }
             const t = getTransformProps(previewOrientation);
             if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
@@ -3842,29 +3805,12 @@ export const FloorplanCanvas: React.FC = () => {
               const ghosts: Array<{ key: string; x: number; y: number }> = [];
               for (let r = 0; r < rows; r += 1) {
                 for (let c = 0; c < cols; c += 1) {
-                  try {
-                    const p = isSubCellCanvas
-                      ? snapPointToGrid(
-                          ghostPosition.x + c * pendingInstanceArray.deltaX,
-                          ghostPosition.y + r * pendingInstanceArray.deltaY,
-                          gridSize,
-                        )
-                      : clampInstancePosition(
-                          ghostPosition.x + c * pendingInstanceArray.deltaX,
-                          ghostPosition.y + r * pendingInstanceArray.deltaY,
-                          previewOrientation,
-                          m.width,
-                          m.height,
-                          topWidth,
-                          topHeight,
-                          gridSize,
-                          m.originX ?? 0,
-                          m.originY ?? 0,
-                        );
-                    ghosts.push({ key: `mosaic-${r}-${c}`, x: p.x, y: p.y });
-                  } catch {
-                    // skip out-of-bounds ghost cell
-                  }
+                  const p = snapPointToGrid(
+                    ghostPosition.x + c * pendingInstanceArray.deltaX,
+                    ghostPosition.y + r * pendingInstanceArray.deltaY,
+                    gridSize,
+                  );
+                  ghosts.push({ key: `mosaic-${r}-${c}`, x: p.x, y: p.y });
                 }
               }
               return (
@@ -3903,6 +3849,25 @@ export const FloorplanCanvas: React.FC = () => {
               instances,
               masterCells,
             );
+            const ghostExceedsBounds = !isSubCellCanvas && m.kind !== 'pad' && m.width > 0 && m.height > 0 && (() => {
+              const gb = getPhysicalBounds({
+                id: '__ghost__',
+                x: ghostPosition.x,
+                y: ghostPosition.y,
+                orientation: previewOrientation,
+                width: m.width,
+                height: m.height,
+                originX: m.originX,
+                originY: m.originY,
+              });
+              return (
+                gb.left < -topWidth / 2 - 1e-6
+                || gb.right > topWidth / 2 + 1e-6
+                || gb.bottom < -topHeight / 2 - 1e-6
+                || gb.top > topHeight / 2 + 1e-6
+              );
+            })();
+            const ghostHasWarning = Boolean(ghostOverlap) || ghostExceedsBounds;
             return (
               <Group
                 x={ghostPosition.x * SCALE_FACTOR}
@@ -3910,20 +3875,20 @@ export const FloorplanCanvas: React.FC = () => {
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
-                opacity={ghostOverlap ? 0.72 : 0.65}
+                opacity={ghostHasWarning ? 0.72 : 0.65}
                 listening={false}
               >
-                {(!ghostHasContent || ghostOverlap) && (
+                {(!ghostHasContent || ghostHasWarning) && (
                   <Rect
                     x={ghostOx}
                     y={ghostOy}
                     width={m.width * SCALE_FACTOR}
                     height={m.height * SCALE_FACTOR}
-                    fill={ghostOverlap ? '#ef4444' : m.color}
-                    stroke={ghostOverlap ? '#dc2626' : '#f8fafc'}
-                    strokeWidth={(ghostOverlap ? 2.5 : 2) / stageScale}
+                    fill={ghostHasWarning ? 'rgba(245, 158, 11, 0.25)' : m.color}
+                    stroke={ghostHasWarning ? '#f59e0b' : '#f8fafc'}
+                    strokeWidth={(ghostHasWarning ? 2.5 : 2) / stageScale}
                     dash={[5 / stageScale, 5 / stageScale]}
-                    opacity={ghostOverlap ? 0.55 : 0.5}
+                    opacity={ghostHasWarning ? 0.85 : 0.5}
                   />
                 )}
                 {renderCellViewContents(m.id, m.width * SCALE_FACTOR, m.height * SCALE_FACTOR)}
@@ -4125,6 +4090,106 @@ export const FloorplanCanvas: React.FC = () => {
               </Group>
             );
           })()}
+
+          {/* Out-of-Bounds Die Warning Highlights (live in top_asic and during Edit-in-Place X) */}
+          {showOverlapDrc && baseIsRoot && boundaryViolations.map(violation => {
+            const halfW = baseWidth / 2;
+            const halfH = baseHeight / 2;
+            const { minX, maxX, minY, maxY } = violation.bounds;
+            const strips: Array<{ key: string; x: number; y: number; w: number; h: number }> = [];
+            if (violation.bottomOverflow > 0) {
+              strips.push({
+                key: 'bottom',
+                x: minX,
+                y: minY,
+                w: maxX - minX,
+                h: Math.min(maxY, -halfH) - minY,
+              });
+            }
+            if (violation.topOverflow > 0) {
+              const y0 = Math.max(minY, halfH);
+              strips.push({
+                key: 'top',
+                x: minX,
+                y: y0,
+                w: maxX - minX,
+                h: maxY - y0,
+              });
+            }
+            const midYMin = Math.max(minY, -halfH);
+            const midYMax = Math.min(maxY, halfH);
+            if (midYMax > midYMin + 1e-6) {
+              if (violation.leftOverflow > 0) {
+                strips.push({
+                  key: 'left',
+                  x: minX,
+                  y: midYMin,
+                  w: Math.min(maxX, -halfW) - minX,
+                  h: midYMax - midYMin,
+                });
+              }
+              if (violation.rightOverflow > 0) {
+                const x0 = Math.max(minX, halfW);
+                strips.push({
+                  key: 'right',
+                  x: x0,
+                  y: midYMin,
+                  w: maxX - x0,
+                  h: midYMax - midYMin,
+                });
+              }
+            }
+            const sidesText = violation.sides.join('/');
+            const badgeText = `⚠ ${violation.instanceName} · outside ${sidesText} (+${formatGridValue(violation.maxOverflowUm, gridSize)} µm)`;
+            const fs = 10.5 / stageScale;
+            const pillW = Math.max(88 / stageScale, (badgeText.length * 6.1 + 14) / stageScale);
+            const pillH = 18 / stageScale;
+            const badgeX = ((minX + maxX) / 2) * SCALE_FACTOR;
+            const badgeY = violation.bottomOverflow >= violation.topOverflow
+              ? minY * SCALE_FACTOR - 14 / stageScale
+              : maxY * SCALE_FACTOR + 14 / stageScale;
+
+            return (
+              <Group key={violation.id} listening={false}>
+                {strips.map(strip => (
+                  <Rect
+                    key={`${violation.id}-${strip.key}`}
+                    x={strip.x * SCALE_FACTOR}
+                    y={strip.y * SCALE_FACTOR}
+                    width={strip.w * SCALE_FACTOR}
+                    height={strip.h * SCALE_FACTOR}
+                    fill="rgba(245, 158, 11, 0.22)"
+                    stroke="#f59e0b"
+                    strokeWidth={1.8 / stageScale}
+                    dash={[6 / stageScale, 4 / stageScale]}
+                  />
+                ))}
+                <Group x={badgeX} y={badgeY} scaleY={-1}>
+                  <Rect
+                    x={-pillW / 2}
+                    y={-pillH / 2}
+                    width={pillW}
+                    height={pillH}
+                    cornerRadius={pillH / 2}
+                    fill="rgba(217, 119, 6, 0.94)"
+                  />
+                  <Text
+                    text={badgeText}
+                    x={-pillW / 2}
+                    y={-pillH / 2}
+                    width={pillW}
+                    height={pillH}
+                    align="center"
+                    verticalAlign="middle"
+                    fill="#ffffff"
+                    fontSize={fs}
+                    fontFamily={CANVAS_FONT_MONO}
+                    fontStyle="bold"
+                  />
+                </Group>
+              </Group>
+            );
+          })}
 
           {/* Rulers (rendered upright in Base View space) */}
           {rulers.map(r => renderRuler(r, r.id, edgeAlignmentSession ? undefined : () => deleteRuler(r.id)))}

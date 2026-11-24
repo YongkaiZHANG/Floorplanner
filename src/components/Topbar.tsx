@@ -3,7 +3,7 @@ import { getProjectSnapshot, PIXEL_ARRAY_ALIGNMENT_ID, useStore } from '../store
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
 import type { SkillExportOptions, SkillHierarchyMode } from '../utils/skillExport';
 import { exportSVG, extractProjectFromSvg } from '../utils/svgExport';
-import { computeFloorplanMetrics, downloadCsvFile, generateFloorplanCsv } from '../utils/floorplanMetrics';
+import { computeFloorplanMetrics, downloadCsvFile, findBoundaryViolations, generateFloorplanCsv } from '../utils/floorplanMetrics';
 import { createCisDemoProject } from '../utils/demoProjects';
 import { formatGridValue } from '../utils/grid';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
@@ -16,7 +16,7 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, rootView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, descendStack, rootView, openCellView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
@@ -67,6 +67,14 @@ export const Topbar: React.FC = () => {
   );
   const projectSignature = useMemo(() => JSON.stringify(canonicalSnapshot), [canonicalSnapshot]);
   const metrics = useMemo(() => computeFloorplanMetrics(activeViewSnapshot), [activeViewSnapshot]);
+  const drcBoundaryViolations = useMemo(() => {
+    if (activeCellId === null) return metrics.boundaryViolations;
+    if (descendStack.length > 0 && descendStack[0].parentCellId === null) {
+      return findBoundaryViolations(canonicalSnapshot);
+    }
+    return [];
+  }, [activeCellId, descendStack, metrics.boundaryViolations, canonicalSnapshot]);
+  const drcTotalWarnings = metrics.overlaps.length + drcBoundaryViolations.length;
   const isDirty = savedSignature === null ? history.past.length > 0 : projectSignature !== savedSignature;
   const saveStatus = isDirty ? 'Unsaved' : savedSignature === null ? 'Not saved' : 'Saved';
   const alignmentSource = edgeAlignmentSession
@@ -577,14 +585,24 @@ export const Topbar: React.FC = () => {
           </div>
           <div className="vertical-divider vertical-divider--compact" />
           <button
-            className={`btn metrics-btn${metrics.overlaps.length > 0 ? ' metrics-btn--alert' : ''}`}
+            className={`btn metrics-btn${metrics.overlaps.length > 0 ? ' metrics-btn--alert' : drcBoundaryViolations.length > 0 ? ' metrics-btn--warn' : ''}`}
             onClick={() => setShowSummary(true)}
-            title={metrics.overlaps.length > 0
-              ? `${metrics.overlaps.length} overlap violation${metrics.overlaps.length === 1 ? '' : 's'} detected — click to inspect summary & DRC`
+            title={drcTotalWarnings > 0
+              ? `${metrics.overlaps.length} overlap${metrics.overlaps.length === 1 ? '' : 's'}, ${drcBoundaryViolations.length} out-of-bounds warning${drcBoundaryViolations.length === 1 ? '' : 's'} — click to inspect summary & DRC`
               : 'Floorplan area metrics, DRC status, and CSV export'}
           >
-            {metrics.overlaps.length > 0 ? (
-              <><FiAlertTriangle /> <span>{metrics.overlaps.length}</span><span className="topbar-label-lg"> Overlap{metrics.overlaps.length === 1 ? '' : 's'}</span></>
+            {drcTotalWarnings > 0 ? (
+              <>
+                <FiAlertTriangle />
+                <span>{drcTotalWarnings}</span>
+                <span className="topbar-label-lg">
+                  {metrics.overlaps.length > 0 && drcBoundaryViolations.length > 0
+                    ? ' Warnings'
+                    : metrics.overlaps.length > 0
+                      ? ` Overlap${metrics.overlaps.length === 1 ? '' : 's'}`
+                      : ' Out of Bounds'}
+                </span>
+              </>
             ) : (
               <><FiBarChart2 /> <span className="topbar-label-lg">Summary</span></>
             )}
@@ -676,17 +694,46 @@ export const Topbar: React.FC = () => {
             <div className="drc-section">
               <div className="drc-section__header">
                 <h3 className="drc-section__title">
-                  {metrics.overlaps.length === 0 ? (
-                    <span className="drc-status drc-status--clean"><FiCheckCircle /> No instance overlaps detected</span>
+                  {drcTotalWarnings === 0 ? (
+                    <span className="drc-status drc-status--clean"><FiCheckCircle /> No DRC warnings detected</span>
                   ) : (
-                    <span className="drc-status drc-status--error"><FiAlertTriangle /> {metrics.overlaps.length} overlap violation{metrics.overlaps.length === 1 ? '' : 's'}</span>
+                    <span className={`drc-status ${metrics.overlaps.length > 0 ? 'drc-status--error' : 'drc-status--warn'}`}>
+                      <FiAlertTriangle /> {drcTotalWarnings} DRC warning{drcTotalWarnings === 1 ? '' : 's'}
+                      {metrics.overlaps.length > 0 ? ` · ${metrics.overlaps.length} overlap${metrics.overlaps.length === 1 ? '' : 's'}` : ''}
+                      {drcBoundaryViolations.length > 0 ? ` · ${drcBoundaryViolations.length} out of bounds` : ''}
+                    </span>
                   )}
                 </h3>
                 <label className="drc-toggle">
                   <input type="checkbox" checked={showOverlapDrc} onChange={toggleOverlapDrc} />
-                  Highlight overlaps on canvas
+                  Highlight DRC warnings on canvas
                 </label>
               </div>
+              {drcBoundaryViolations.length > 0 && (
+                <ul className="drc-list">
+                  {drcBoundaryViolations.map(violation => (
+                    <li key={violation.id}>
+                      <button
+                        type="button"
+                        className="drc-item drc-item--warn"
+                        onClick={() => {
+                          if (activeCellId !== null) openCellView(null);
+                          setSelection([violation.instanceId]);
+                          setShowSummary(false);
+                        }}
+                      >
+                        <span className="drc-item__names">
+                          <strong>{violation.instanceName}</strong> ({violation.cellName})
+                        </span>
+                        <span className="drc-item__meta">
+                          <span className="drc-kind-badge drc-kind-badge--warn">OUT OF BOUNDS</span>
+                          {violation.sides.join(', ')} +{formatGridValue(violation.maxOverflowUm, gridSize)} µm
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {metrics.overlaps.length > 0 && (
                 <ul className="drc-list">
                   {metrics.overlaps.map(violation => (

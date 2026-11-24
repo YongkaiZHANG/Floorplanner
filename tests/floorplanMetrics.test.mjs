@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   computeFloorplanMetrics,
+  findBoundaryViolations,
   findOverlapViolations,
   generateFloorplanCsv,
 } from '../src/utils/floorplanMetrics.ts';
@@ -76,4 +77,52 @@ test('generates RFC-4180 CSV with transformed physical bounds and pad sides', ()
   assert.match(lines[1], /^"I_ADC, ""main""",ADC,ip,chip_lib,0,0,R0,100,50,0,0,100,50,50,25,$/);
   assert.match(lines[3], /^PAD_0,PAD,pad,chip_lib,-10,220,R0,20,10,-10,220,10,230,0,225,top$/);
   assert.match(lines[4], /^PAD_1,PAD,pad,chip_lib,-470,0,R90,20,10,-480,0,-470,20,-475,10,left$/);
+});
+
+test('findBoundaryViolations flags instances extending outside the top cell with exact overflow distances', () => {
+  assert.equal(findBoundaryViolations(sampleProject).length, 0);
+
+  // Padring placed at (0, 0) in 3000x2000 top_asic whose internal pads start at originY = -1317.69
+  const padringProject = {
+    topWidth: 3000,
+    topHeight: 2000,
+    masterCells: {
+      padring: {
+        id: 'padring',
+        libName: 'chip_lib',
+        cellName: 'padring',
+        width: 845.69,
+        height: 110.405,
+        originX: -422.845,
+        originY: -1317.69,
+        color: '#06b6d4',
+      },
+      wideBlock: {
+        id: 'wideBlock',
+        libName: 'chip_lib',
+        cellName: 'WIDE',
+        width: 200,
+        height: 100,
+        color: '#2563eb',
+      },
+    },
+    instances: [
+      { id: 'i_pr', cellId: 'padring', name: 'I3', x: 0, y: 0, orientation: 'R0' },
+      { id: 'i_wide', cellId: 'wideBlock', name: 'I4', x: 1450, y: 980, orientation: 'R0' },
+    ],
+  };
+
+  const violations = findBoundaryViolations(padringProject);
+  assert.equal(violations.length, 2);
+
+  assert.equal(violations[0].instanceName, 'I3');
+  assert.deepEqual(violations[0].sides, ['bottom']);
+  assert.equal(violations[0].bottomOverflow, 317.69);
+  assert.equal(violations[0].maxOverflowUm, 317.69);
+
+  assert.equal(violations[1].instanceName, 'I4');
+  assert.deepEqual(violations[1].sides, ['right', 'top']);
+  assert.equal(violations[1].rightOverflow, 150);
+  assert.equal(violations[1].topOverflow, 80);
+  assert.equal(violations[1].maxOverflowUm, 150);
 });

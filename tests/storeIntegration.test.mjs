@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getPhysicalBounds } from '../src/utils/alignment.ts';
+import { findBoundaryViolations, findOverlapViolations } from '../src/utils/floorplanMetrics.ts';
 import { getProjectSnapshot, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, useStore } from '../src/store/useStore.ts';
 
 const emptyProject = {
@@ -740,7 +741,7 @@ test('pad moves never leak extra properties and quick align preserves perimeter 
   );
 });
 
-test('multi-block nudge aborts atomically when any block would hit the top-cell boundary', () => {
+test('multi-block nudge allows regular cells to cross the top-cell boundary with a DRC warning while keeping edge-bound pads on perimeter', () => {
   useStore.getState().loadProject({ ...emptyProject, gridSize: 1 });
   useStore.getState().addMasterCell('testLib', 'BLK', 10, 10, '#2563eb');
   const master = Object.values(useStore.getState().masterCells)[0];
@@ -749,11 +750,26 @@ test('multi-block nudge aborts atomically when any block would hit the top-cell 
   const [leftBlock, centerBlock] = useStore.getState().instances;
   useStore.getState().setSelection([leftBlock.id, centerBlock.id]);
 
+  // Regular cells nudge freely across the boundary and are flagged by findBoundaryViolations
   useStore.getState().nudgeSelection(-1, 0);
   assert.deepEqual(
     useStore.getState().instances.map(instance => instance.x),
-    [-50, 0],
+    [-51, -1],
   );
+  const oob = findBoundaryViolations(getProjectSnapshot(useStore.getState()));
+  assert.equal(oob.length, 1);
+  assert.equal(oob[0].leftOverflow, 1);
+
+  // Edge-bound pads still abort atomically if nudged off the perimeter
+  useStore.getState().createPadRow({
+    libName: 'testLib', cellName: 'PAD_N', width: 10, height: 5, color: '#f59e0b',
+    count: 1, pitch: 20, side: 'top', offset: 0,
+  });
+  const pad = useStore.getState().instances.at(-1);
+  const padStartY = pad.y;
+  useStore.getState().setSelection([pad.id, centerBlock.id]);
+  useStore.getState().nudgeSelection(0, -1);
+  assert.equal(useStore.getState().instances.find(i => i.id === pad.id).y, padStartY);
 });
 
 test('setTopConfig updates names and dimensions in one atomic undo step and deleting a master clears placement', () => {
@@ -799,7 +815,7 @@ test('instance renaming, pixel array geometry edits, multi-block drag deltas, an
   useStore.getState().redo();
   assert.equal(useStore.getState().instances[0].name, 'I_ADC_L');
 
-  // Multi-block drag delta moves both blocks in one Undo step
+  // Multi-block drag delta moves both blocks in one Undo step (including beyond top-cell boundary with DRC warning)
   const beforeDrag = useStore.getState().history.past.length;
   useStore.getState().moveInstancesByDelta([first.id, second.id], 5, -10);
   assert.equal(useStore.getState().history.past.length, beforeDrag + 1);
@@ -807,10 +823,14 @@ test('instance renaming, pixel array geometry edits, multi-block drag deltas, an
     useStore.getState().instances.map(instance => [instance.x, instance.y]),
     [[-15, -10], [15, -10]],
   );
-  assert.throws(
-    () => useStore.getState().moveInstancesByDelta([first.id, second.id], 40, 0),
-    /outside the top cell/,
+  useStore.getState().moveInstancesByDelta([first.id, second.id], 40, 0);
+  assert.deepEqual(
+    useStore.getState().instances.map(instance => [instance.x, instance.y]),
+    [[25, -10], [55, -10]],
   );
+  assert.equal(findBoundaryViolations(getProjectSnapshot(useStore.getState())).length, 1);
+  useStore.getState().undo();
+  assert.equal(findBoundaryViolations(getProjectSnapshot(useStore.getState())).length, 0);
 
   // Pixel array geometry editing
   useStore.getState().startPixelArrayPlacement(40, 30);
@@ -868,55 +888,82 @@ test('locked instances resist move, rotate, nudge, align, and delete until unloc
   assert.equal(useStore.getState().instances[0].x, 0);
 });
 
-test('only Pixel Array may overlap other cells; regular cells reject overlap on place, move, rotate, align, and nudge', () => {
-  useStore.getState().loadProject({ ...emptyProject, topWidth: 100, topHeight: 100, gridSize: 1 });
+test('Virtuoso layout allows cells to overlap and exceed top_asic bounds while reporting live DRC warnings (padring at (0,0) + EIP adjustment)', () => {
+  useStore.getState().loadProject({ ...emptyProject, topWidth: 3000, topHeight: 2000, gridSize: 0.005 });
   useStore.getState().addMasterCell('analog_lib', 'BLK', 20, 10, '#2563eb');
   const master = Object.values(useStore.getState().masterCells)[0];
 
   // Place first block at [0..20] x [0..10]
   useStore.getState().placeInstance(master.id, 0, 0, 'R0');
 
-  // Overlapping placement is rejected
-  assert.throws(
-    () => useStore.getState().placeInstance(master.id, 10, 5, 'R0'),
-    /only Pixel Array may overlap/,
-  );
-
-  // Touching / abutting edge placement (0 gap at x = 20) IS allowed
-  useStore.getState().placeInstance(master.id, 20, 0, 'R0');
+  // Overlapping placement IS allowed and flagged by findOverlapViolations
+  useStore.getState().placeInstance(master.id, 10, 5, 'R0');
   const [first, second] = useStore.getState().instances;
+  assert.equal(second.x, 10);
+  assert.equal(second.y, 5);
+  assert.equal(findOverlapViolations(getProjectSnapshot(useStore.getState())).length, 1);
 
-  // Moving second block onto first throws
-  assert.throws(
-    () => useStore.getState().updateInstancePosition(second.id, 5, 0),
-    /only Pixel Array may overlap/,
-  );
-
-  // Nudging second block left into first aborts atomically
+  // Moving, nudging, rotating, and aligning overlapping cells all succeed freely
+  useStore.getState().updateInstancePosition(second.id, 5, 0);
+  assert.equal(useStore.getState().instances[1].x, 5);
   useStore.getState().setSelection([second.id]);
   useStore.getState().nudgeSelection(-1, 0);
-  assert.equal(useStore.getState().instances[1].x, 20);
-
-  // Rotating a block so its rotated footprint collides with neighbor throws
-  useStore.getState().updateInstancePosition(second.id, 20, 0);
-  useStore.getState().placeInstance(master.id, 0, 11, 'R0'); // [0..20] x [11..21], 1 um above first
-  const third = useStore.getState().instances[2];
-  assert.throws(
-    () => useStore.getState().updateInstanceOrientation(third.id, 'R90'),
-    /only Pixel Array may overlap/,
+  assert.equal(useStore.getState().instances[1].x, 4);
+  useStore.getState().updateInstanceOrientation(second.id, 'R90');
+  assert.equal(useStore.getState().instances[1].orientation, 'R90');
+  useStore.getState().alignInstanceEdges(second.id, first.id, 'left', 'left', 0);
+  assert.equal(
+    getPhysicalBounds({ ...useStore.getState().instances[1], width: master.width, height: master.height }).left,
+    0,
   );
 
-  // Aligning second left edge onto first left edge throws (would overlap)
-  assert.throws(
-    () => useStore.getState().alignInstanceEdges(second.id, first.id, 'left', 'left', 0),
-    /only Pixel Array may overlap/,
-  );
+  // End-to-end Virtuoso padring workflow:
+  // Create PAD and padring whose internal pad is too low (y = -1317.69), instantiate padring at (0, 0) in top_asic!
+  useStore.getState().createEmptyCell('chip_lib', 'PAD_CELL', '#38bdf8', true);
+  const padId = useStore.getState().activeCellId;
+  useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 0, y: 0, width: 100, height: 110.405 });
 
-  // Pixel Array CAN overlap all IP blocks freely
-  useStore.getState().startPixelArrayPlacement(60, 40);
-  useStore.getState().placePixelArray(10, 5);
-  assert.equal(useStore.getState().pixelArray?.visible, true);
-  assert.equal(useStore.getState().pixelArray?.width, 60);
+  useStore.getState().createEmptyCell('chip_lib', 'padring', '#06b6d4', true);
+  const padringId = useStore.getState().activeCellId;
+  useStore.getState().placeInstance(padId, -50, -1317.69, 'R0', 'I_PAD0');
+  const subPadId = useStore.getState().instances[0].id;
+
+  // Return to top_asic and place padring at exact (0, 0) — MUST NOT clamp Y to +317.69!
+  useStore.getState().openCellView(null);
+  useStore.getState().placeInstance(padringId, 0, 0, 'R0', 'I_PADRING');
+  const padringInst = useStore.getState().instances.find(i => i.name === 'I_PADRING');
+  assert.equal(padringInst.x, 0);
+  assert.equal(padringInst.y, 0);
+
+  // Out-of-bounds warning flags exact 317.69 um bottom overflow
+  const oobBefore = findBoundaryViolations(getProjectSnapshot(useStore.getState()));
+  assert.equal(oobBefore.length, 1);
+  assert.equal(oobBefore[0].instanceName, 'I_PADRING');
+  assert.deepEqual(oobBefore[0].sides, ['bottom']);
+  assert.equal(oobBefore[0].bottomOverflow, 317.69);
+
+  // Saving & reloading preserves exact (0, 0) placement without silently clamping
+  const savedSnap = getProjectSnapshot(useStore.getState());
+  useStore.getState().loadProject(savedSnap);
+  const reloadedPadring = useStore.getState().instances.find(i => i.name === 'I_PADRING');
+  assert.equal(reloadedPadring.x, 0);
+  assert.equal(reloadedPadring.y, 0);
+
+  // Descend into I_PADRING via Edit-in-Place (X) and move the internal pad up to y = -1000
+  useStore.getState().descendIntoInstance(reloadedPadring.id);
+  assert.equal(useStore.getState().descendStack.length, 1);
+  assert.equal(useStore.getState().descendStack[0].parentCellId, null);
+  useStore.getState().updateInstancePosition(subPadId, -50, -1000);
+
+  // Out-of-bounds warning clears LIVE while still in Edit-in-Place!
+  const oobAfter = findBoundaryViolations(getProjectSnapshot(useStore.getState()));
+  assert.equal(oobAfter.length, 0);
+
+  // Return to top_asic -> I_PADRING remains at (0, 0) and fits cleanly inside top_asic
+  useStore.getState().ascendToParent();
+  const finalPadring = useStore.getState().instances.find(i => i.name === 'I_PADRING');
+  assert.equal(finalPadring.x, 0);
+  assert.equal(finalPadring.y, 0);
 });
 
 test('creating a library like xxxL_TOP can move all cells or individual cells into it cleanly with undo', () => {
