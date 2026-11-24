@@ -65,7 +65,23 @@ export type PixelArray = {
 };
 
 export type PixelArraySize = Pick<PixelArray, 'width' | 'height'>;
-export type AppMode = 'select' | 'measure' | 'place' | 'pixel-array' | 'rect';
+export type AppMode = 'select' | 'measure' | 'place' | 'pixel-array' | 'rect' | 'stretch';
+
+export type DescendContextFrame = {
+  /** Parent cellview ID where the descended instance lives (`null` = root top cell). */
+  parentCellId: string | null;
+  /** Exact instance ID descended through (omitted from the dimmed backdrop so it isn't double-drawn). */
+  instanceId: string;
+  /** Child master cell ID opened by this descent step. */
+  cellId: string;
+  instanceName: string;
+  x: number;
+  y: number;
+  orientation: string;
+  parentCoordinateMode: CellViewCoordinateMode;
+  parentWidth: number;
+  parentHeight: number;
+};
 
 export type PadSide = 'top' | 'bottom' | 'left' | 'right';
 
@@ -163,6 +179,12 @@ export type ProjectState = {
   windowLayoutMode: 'tabs' | 'split';
   /** Hierarchy navigation stack of master cell IDs from top child to activeCellId. */
   viewBreadcrumb: string[];
+  /** Virtuoso Edit-in-Place (X) instance descent stack recording parent context & transforms. */
+  descendStack: DescendContextFrame[];
+  /** When descended via X, render dimmed parent/top context behind the active cellview. */
+  showEditInPlaceContext: boolean;
+  /** Cadence Virtuoso Partial Select mode (F4): marquee & clicks select individual shape edges/corners. */
+  partialSelectMode: boolean;
   /** Saved Top Cell state while descended into a master cell layout view. */
   rootView: RootViewSnapshot | null;
   
@@ -229,6 +251,7 @@ export type ProjectState = {
   setSelectedShape: (id: string | null) => void;
   addShape: (shape: Omit<LayoutShape, 'id'>) => string;
   updateShape: (id: string, patch: Partial<Omit<LayoutShape, 'id'>>) => void;
+  batchUpdateShapes: (updates: ReadonlyArray<{ id: string; x: number; y: number; width: number; height: number }>, actionLabel?: string) => void;
   deleteShape: (id: string) => void;
   toggleShapeLock: (id: string) => void;
   nudgeSelectedShape: (dx: number, dy: number) => void;
@@ -284,6 +307,8 @@ export type ProjectState = {
   toggleOverlapDrc: () => void;
   toggleGrid: () => void;
   toggleSnapToVisibleGrid: () => void;
+  toggleEditInPlaceContext: () => void;
+  togglePartialSelectMode: () => void;
   loadProject: (data: ProjectSnapshot) => void;
 };
 
@@ -1057,6 +1082,7 @@ const applyCanonicalSnapshot = (
     activeCellId: null,
     openViewIds: ensureOpenViewTab(state.openViewIds, null, snapshot.masterCells),
     viewBreadcrumb: [],
+    descendStack: [],
     rootView: null,
     history,
     ...selectionAfterInstancesChange(state, snapshot.instances),
@@ -1075,6 +1101,7 @@ const switchToCellView = (
   state: ProjectState,
   targetCellId: string | null,
   nextBreadcrumb: string[],
+  nextDescendStack: DescendContextFrame[] = [],
 ) => {
   if (targetCellId === state.activeCellId) return state;
   if (targetCellId !== null && !state.masterCells[targetCellId]) return state;
@@ -1127,6 +1154,7 @@ const switchToCellView = (
       activeCellId: null,
       openViewIds,
       viewBreadcrumb: [],
+      descendStack: [],
       rootView: null,
       ...resetInteraction,
     };
@@ -1153,6 +1181,7 @@ const switchToCellView = (
     activeCellId: targetCellId,
     openViewIds,
     viewBreadcrumb: nextBreadcrumb,
+    descendStack: nextDescendStack,
     rootView: savedRoot,
     ...resetInteraction,
   };
@@ -1514,6 +1543,9 @@ export const useStore = create<ProjectState>((set) => ({
   openViewIds: [null],
   windowLayoutMode: 'tabs',
   viewBreadcrumb: [],
+  descendStack: [],
+  showEditInPlaceContext: true,
+  partialSelectMode: false,
   rootView: null,
   selectedInstanceId: null,
   selectedInstanceIds: [],
@@ -1986,22 +2018,43 @@ export const useStore = create<ProjectState>((set) => ({
   descendIntoInstance: (instanceId) => set((state) => {
     const inst = state.instances.find(item => item.id === instanceId);
     if (!inst || !state.masterCells[inst.cellId]) return state;
-    return switchToCellView(state, inst.cellId, [...state.viewBreadcrumb, inst.cellId]);
+    const frame: DescendContextFrame = {
+      parentCellId: state.activeCellId,
+      instanceId: inst.id,
+      cellId: inst.cellId,
+      instanceName: inst.name,
+      x: inst.x,
+      y: inst.y,
+      orientation: inst.orientation,
+      parentCoordinateMode: state.activeCellId === null ? 'origin' : state.activeCoordinateMode,
+      parentWidth: state.topWidth,
+      parentHeight: state.topHeight,
+    };
+    return switchToCellView(
+      state,
+      inst.cellId,
+      [...state.viewBreadcrumb, inst.cellId],
+      [...state.descendStack, frame],
+    );
   }),
   ascendToParent: () => set((state) => {
     if (state.activeCellId === null) return state;
     if (state.viewBreadcrumb.length <= 1) {
-      return switchToCellView(state, null, []);
+      return switchToCellView(state, null, [], []);
     }
     const nextBreadcrumb = state.viewBreadcrumb.slice(0, -1);
     const parentId = nextBreadcrumb[nextBreadcrumb.length - 1] ?? null;
-    return switchToCellView(state, parentId, nextBreadcrumb);
+    const nextDescendStack = state.descendStack.length > 0
+      ? state.descendStack.slice(0, -1)
+      : [];
+    return switchToCellView(state, parentId, nextBreadcrumb, nextDescendStack);
   }),
   navigateBreadcrumb: (index) => set((state) => {
-    if (index < 0) return switchToCellView(state, null, []);
+    if (index < 0) return switchToCellView(state, null, [], []);
     const nextBreadcrumb = state.viewBreadcrumb.slice(0, index + 1);
     const targetId = nextBreadcrumb[nextBreadcrumb.length - 1] ?? null;
-    return switchToCellView(state, targetId, nextBreadcrumb);
+    const nextDescendStack = state.descendStack.slice(0, index + 1);
+    return switchToCellView(state, targetId, nextBreadcrumb, nextDescendStack);
   }),
   
   addMasterCell: (rawLibName, rawCellName, w, h, color, opacity = 0.5, outlineStyle = 'solid', openAfterCreate = false, autoBounds = false) => set((state) => {
@@ -2226,6 +2279,7 @@ export const useStore = create<ProjectState>((set) => ({
           activeCellId: null,
           openViewIds: cleanedOpenViewIds,
           viewBreadcrumb: [],
+          descendStack: [],
           rootView: null,
         }),
         selectedInstanceId: null,
@@ -2372,6 +2426,45 @@ export const useStore = create<ProjectState>((set) => ({
     const shapes = state.shapes.map(s => (s.id === id ? updated : s));
     const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
     return commitProjectPatch(state, `Edit ${nextLayer}/${nextPurpose} rect`, {
+      shapes,
+      ...(boundsSync ?? {}),
+    });
+  }),
+
+  batchUpdateShapes: (updates, actionLabel) => set((state) => {
+    if (updates.length === 0) return state;
+    const byId = new Map(updates.map(u => [u.id, u]));
+    let changedCount = 0;
+    const shapes = state.shapes.map(existing => {
+      const next = byId.get(existing.id);
+      if (!next || existing.locked) return existing;
+      if (!Number.isFinite(next.x) || !Number.isFinite(next.y) || !Number.isFinite(next.width) || !Number.isFinite(next.height)) {
+        throw new RangeError('Rectangle coordinates and dimensions must be finite numbers.');
+      }
+      const x = snapToGrid(next.x, state.gridSize);
+      const y = snapToGrid(next.y, state.gridSize);
+      const width = snapToGrid(next.width, state.gridSize);
+      const height = snapToGrid(next.height, state.gridSize);
+      if (width <= 1e-12 || height <= 1e-12) {
+        throw new RangeError('Rectangle width and height must be positive.');
+      }
+      const cleanX = Object.is(x, -0) ? 0 : x;
+      const cleanY = Object.is(y, -0) ? 0 : y;
+      if (
+        Math.abs(cleanX - existing.x) <= 1e-9
+        && Math.abs(cleanY - existing.y) <= 1e-9
+        && Math.abs(width - existing.width) <= 1e-9
+        && Math.abs(height - existing.height) <= 1e-9
+      ) {
+        return existing;
+      }
+      changedCount += 1;
+      return { ...existing, x: cleanX, y: cleanY, width, height };
+    });
+    if (changedCount === 0) return state;
+    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+    const label = actionLabel ?? `Stretch ${changedCount} shape${changedCount === 1 ? '' : 's'}`;
+    return commitProjectPatch(state, label, {
       shapes,
       ...(boundsSync ?? {}),
     });
@@ -3689,6 +3782,8 @@ export const useStore = create<ProjectState>((set) => ({
   toggleOverlapDrc: () => set((state) => ({ showOverlapDrc: !state.showOverlapDrc })),
   toggleGrid: () => set((state) => ({ showGrid: !state.showGrid })),
   toggleSnapToVisibleGrid: () => set((state) => ({ snapToVisibleGrid: !state.snapToVisibleGrid })),
+  toggleEditInPlaceContext: () => set((state) => ({ showEditInPlaceContext: !state.showEditInPlaceContext })),
+  togglePartialSelectMode: () => set((state) => ({ partialSelectMode: !state.partialSelectMode })),
 
   loadProject: (data) => set((state) => {
     const gridSize = data.gridSize ?? state.gridSize;
@@ -3745,6 +3840,7 @@ export const useStore = create<ProjectState>((set) => ({
       openViewIds: [null],
       windowLayoutMode: 'tabs',
       viewBreadcrumb: [],
+      descendStack: [],
       rootView: null,
       pendingPixelArraySize: null,
       placementMasterId: null,

@@ -10,16 +10,27 @@ import { SCALE_FACTOR } from '../utils/canvasConstants';
 import { computeDisplayGridStep, resolveActiveSnapStep, resolveCanvasCursor, snapPointToGrid } from '../utils/canvasCursor';
 import { findOverlapViolations } from '../utils/floorplanMetrics';
 import { formatGridValue, snapToGrid } from '../utils/grid';
+import { computeAncestorToActiveTransform } from '../utils/hierarchy';
 import { normalizeRectFromPoints, resolveLayerStyle, VIRTUOSO_LAYER_PRESETS } from '../utils/layoutLayers';
 import type { LayoutShape } from '../utils/layoutLayers';
 import { getIpPixelArrayEdgeMeasurements } from '../utils/pixelArrayDimensions';
 import { resolveOrthogonalRulerEnd } from '../utils/ruler';
 import type { SnapEdgeAxis } from '../utils/ruler';
+import {
+  computeStretchedShapes,
+  countPartialSelectedEdges,
+  countPartialSelectedShapes,
+  hasPartialSelection,
+  hitTestShapeEdgeOrCorner,
+  mergePartialSelections,
+  selectShapeEdgesInBox,
+} from '../utils/shapeStretch';
+import type { PartialShapeSelection, RectEdge, StretchHitResult } from '../utils/shapeStretch';
 import { panViewportByArrow } from '../utils/viewport';
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { FiCrosshair, FiGrid, FiMaximize2, FiMinus, FiPlus, FiX } from 'react-icons/fi';
+import { FiArrowUp, FiCrosshair, FiEye, FiEyeOff, FiGrid, FiMaximize2, FiMinus, FiPlus, FiX } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
@@ -58,6 +69,21 @@ export const FloorplanCanvas: React.FC = () => {
   const rectDraftRef = useRef<typeof rectDraft>(null);
   const rectDraggingRef = useRef(false);
   const [shapeResizePreview, setShapeResizePreview] = useState<{ id: string; x: number; y: number; width: number; height: number } | null>(null);
+  const [partialSelection, setPartialSelection] = useState<PartialShapeSelection>({});
+  const partialSelectionRef = useRef<PartialShapeSelection>({});
+  const [hoveredStretchHit, setHoveredStretchHit] = useState<StretchHitResult | null>(null);
+  const [stretchSession, setStretchSession] = useState<{
+    anchorX: number;
+    anchorY: number;
+    currentX: number;
+    currentY: number;
+    selection: PartialShapeSelection;
+  } | null>(null);
+  const stretchSessionRef = useRef<typeof stretchSession>(null);
+  const stretchDraggingRef = useRef(false);
+  const [partialMarquee, setPartialMarquee] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+  const partialMarqueeRef = useRef<typeof partialMarquee>(null);
+  const partialMarqueeDraggedRef = useRef(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number; stageX: number; stageY: number } | null>(null);
   const [isSpaceDown, setIsSpaceDown] = useState(false);
   const [multiDragDelta, setMultiDragDelta] = useState<{ anchorId: string; dx: number; dy: number } | null>(null);
@@ -85,9 +111,15 @@ export const FloorplanCanvas: React.FC = () => {
     activeCoordinateMode,
     cellViews,
     activeCellId,
+    rootView,
+    descendStack,
+    showEditInPlaceContext,
+    toggleEditInPlaceContext,
+    partialSelectMode,
     windowLayoutMode,
     openViewIds,
     descendIntoInstance,
+    ascendToParent,
     rulers,
     gridSize, 
     updateInstancePosition,
@@ -105,6 +137,7 @@ export const FloorplanCanvas: React.FC = () => {
     setActiveDrawLabel,
     addShape,
     updateShape,
+    batchUpdateShapes,
     addRuler,
     deleteRuler,
     clearRulers,
@@ -184,13 +217,53 @@ export const FloorplanCanvas: React.FC = () => {
     activeSnapStepRef.current = activeSnapStep;
   }, [activeSnapStep]);
 
+  const updatePartialSelection = useCallback((next: PartialShapeSelection) => {
+    partialSelectionRef.current = next;
+    setPartialSelection(next);
+  }, []);
+
   useEffect(() => {
     if (appMode !== 'rect') {
       rectDraftRef.current = null;
       rectDraggingRef.current = false;
       setRectDraft(null);
     }
-  }, [appMode, activeCellId]);
+    if (appMode !== 'stretch') {
+      stretchSessionRef.current = null;
+      stretchDraggingRef.current = false;
+      setStretchSession(null);
+    }
+    if (appMode !== 'stretch' && !partialSelectMode) {
+      setHoveredStretchHit(null);
+    }
+  }, [appMode, activeCellId, partialSelectMode]);
+
+  useEffect(() => {
+    // Clear partial selection & stretch gestures when switching cellviews
+    partialSelectionRef.current = {};
+    setPartialSelection({});
+    stretchSessionRef.current = null;
+    stretchDraggingRef.current = false;
+    setStretchSession(null);
+    partialMarqueeRef.current = null;
+    partialMarqueeDraggedRef.current = false;
+    setPartialMarquee(null);
+    setHoveredStretchHit(null);
+  }, [activeCellId]);
+
+  useEffect(() => {
+    // Prune partial selection entries for deleted or locked shapes
+    const current = partialSelectionRef.current;
+    const keys = Object.keys(current);
+    if (keys.length === 0) return;
+    const validIds = new Set(shapes.filter(s => !s.locked).map(s => s.id));
+    if (keys.every(id => validIds.has(id))) return;
+    const pruned: PartialShapeSelection = {};
+    for (const id of keys) {
+      if (validIds.has(id) && current[id].length > 0) pruned[id] = current[id];
+    }
+    updatePartialSelection(pruned);
+  }, [shapes, updatePartialSelection]);
 
   const snappedMousePos = useMemo(() => {
     if (!mousePos) return null;
@@ -230,6 +303,15 @@ export const FloorplanCanvas: React.FC = () => {
           maxX = Math.max(maxX, 0);
           minY = Math.min(minY, 0);
           maxY = Math.max(maxY, 0);
+          // When descended via Edit-in-Place (X), expand framing slightly so surrounding dimmed parent/top context is visible
+          if (descendStack.length > 0 && showEditInPlaceContext) {
+            const padX = Math.max(gridSize * 40, (maxX - minX) * 0.35);
+            const padY = Math.max(gridSize * 40, (maxY - minY) * 0.35);
+            minX -= padX;
+            maxX += padX;
+            minY -= padY;
+            maxY += padY;
+          }
         }
       }
 
@@ -252,7 +334,7 @@ export const FloorplanCanvas: React.FC = () => {
         y: offsetHeight / 2 + centerY * initialScale, 
       }); 
     }
-  }, [activeBoundaryBox, isSubCellCanvas, isSubCellEmpty, topWidth, topHeight, gridSize]);
+  }, [activeBoundaryBox, isSubCellCanvas, isSubCellEmpty, topWidth, topHeight, gridSize, descendStack.length, showEditInPlaceContext]);
 
   const fitViewRef = useRef(fitView);
   useEffect(() => {
@@ -309,12 +391,22 @@ export const FloorplanCanvas: React.FC = () => {
 
       if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key)) {
         e.preventDefault();
-        if (e.altKey && (state.selectedInstanceIds.length > 0 || state.selectedShapeId)) {
+        if (e.altKey && (hasPartialSelection(partialSelectionRef.current) || state.selectedInstanceIds.length > 0 || state.selectedShapeId)) {
           const dx = key === 'arrowright' ? 1 : key === 'arrowleft' ? -1 : 0;
           const dy = key === 'arrowup' ? 1 : key === 'arrowdown' ? -1 : 0;
           const multiplier = e.shiftKey ? 10 : 1;
           const step = activeSnapStepRef.current;
-          if (state.selectedShapeId) {
+          if (hasPartialSelection(partialSelectionRef.current)) {
+            const updates = computeStretchedShapes(
+              state.shapes,
+              partialSelectionRef.current,
+              dx * multiplier * step,
+              dy * multiplier * step,
+              step,
+              state.gridSize,
+            );
+            state.batchUpdateShapes(updates);
+          } else if (state.selectedShapeId) {
             state.nudgeSelectedShape(dx * multiplier * step, dy * multiplier * step);
           } else {
             state.nudgeSelection(dx * multiplier * step, dy * multiplier * step);
@@ -417,6 +509,16 @@ export const FloorplanCanvas: React.FC = () => {
           e.preventDefault();
           setAppMode('select');
           break;
+        case 's':
+          if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            setAppMode('stretch');
+          }
+          break;
+        case 'f4':
+          e.preventDefault();
+          state.togglePartialSelectMode();
+          break;
         case 'd':
           e.preventDefault();
           setAppMode('rect');
@@ -488,7 +590,19 @@ export const FloorplanCanvas: React.FC = () => {
           else if (state.selectedInstanceId) state.startEdgeAlignment(state.selectedInstanceId);
           break;
         case 'escape':
-          if (state.edgeAlignmentSession) {
+          if (stretchSessionRef.current) {
+            stretchSessionRef.current = null;
+            stretchDraggingRef.current = false;
+            setStretchSession(null);
+          } else if (partialMarqueeRef.current) {
+            partialMarqueeRef.current = null;
+            partialMarqueeDraggedRef.current = false;
+            setPartialMarquee(null);
+          } else if (hasPartialSelection(partialSelectionRef.current)) {
+            updatePartialSelection({});
+          } else if (state.appMode === 'stretch') {
+            setAppMode('select');
+          } else if (state.edgeAlignmentSession) {
             state.cancelEdgeAlignment();
           } else if (state.appMode === 'rect') {
             if (rectDraftRef.current) {
@@ -537,7 +651,7 @@ export const FloorplanCanvas: React.FC = () => {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [clearRulers, fitView, setAppMode, setSelectedInstance]);
+  }, [clearRulers, fitView, setAppMode, setSelectedInstance, updatePartialSelection]);
 
   const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -732,6 +846,117 @@ export const FloorplanCanvas: React.FC = () => {
       return;
     }
 
+    if (appMode === 'stretch' && e.evt.button === 0) {
+      const pointer = stageRef.current?.getPointerPosition();
+      if (pointer) {
+        const rawUmX = ((pointer.x - stagePos.x) / stageScale) / SCALE_FACTOR;
+        const rawUmY = ((pointer.y - stagePos.y) / -stageScale) / SCALE_FACTOR;
+        const snapped = snapPointToGrid(rawUmX, rawUmY, activeSnapStep);
+        setMousePos(snapped);
+
+        // 1. Two-click stretch destination commit
+        if (stretchSessionRef.current) {
+          const active = stretchSessionRef.current;
+          const updates = computeStretchedShapes(
+            shapes,
+            active.selection,
+            snapped.x - active.anchorX,
+            snapped.y - active.anchorY,
+            activeSnapStep,
+            gridSize,
+          );
+          stretchSessionRef.current = null;
+          stretchDraggingRef.current = false;
+          setStretchSession(null);
+          try {
+            batchUpdateShapes(updates);
+          } catch (error) {
+            alert(error instanceof Error ? error.message : 'Unable to stretch selected edges.');
+          }
+          updatePartialSelection({});
+          ignoreBackgroundClickUntilRef.current = performance.now() + 100;
+          return;
+        }
+
+        // 2. If edges are already partially selected (and not holding Shift to add more), start stretching from this anchor
+        if (hasPartialSelection(partialSelectionRef.current) && !e.evt.shiftKey) {
+          const nextSession = {
+            anchorX: snapped.x,
+            anchorY: snapped.y,
+            currentX: snapped.x,
+            currentY: snapped.y,
+            selection: partialSelectionRef.current,
+          };
+          stretchSessionRef.current = nextSession;
+          stretchDraggingRef.current = true;
+          setStretchSession(nextSession);
+          return;
+        }
+
+        // 3. Direct edge/corner click starts stretch immediately (or Shift-toggles edge into partial selection)
+        const hitTolUm = 10 / (stageScale * SCALE_FACTOR);
+        const hit = hitTestShapeEdgeOrCorner(shapes, rawUmX, rawUmY, hitTolUm);
+        if (hit) {
+          if (e.evt.shiftKey) {
+            const nextSel = mergePartialSelections(partialSelectionRef.current, { [hit.shapeId]: hit.edges }, 'toggle');
+            updatePartialSelection(nextSel);
+            ignoreBackgroundClickUntilRef.current = performance.now() + 100;
+            return;
+          }
+          const directSelection: PartialShapeSelection = { [hit.shapeId]: hit.edges };
+          updatePartialSelection(directSelection);
+          setSelectedShape(hit.shapeId);
+          const nextSession = {
+            anchorX: snapped.x,
+            anchorY: snapped.y,
+            currentX: snapped.x,
+            currentY: snapped.y,
+            selection: directSelection,
+          };
+          stretchSessionRef.current = nextSession;
+          stretchDraggingRef.current = true;
+          setStretchSession(nextSession);
+          return;
+        }
+
+        // 4. Drag a Virtuoso partial-selection marquee across one or more shape edges/corners
+        const nextBox = { startX: rawUmX, startY: rawUmY, currentX: rawUmX, currentY: rawUmY };
+        partialMarqueeRef.current = nextBox;
+        partialMarqueeDraggedRef.current = false;
+        setPartialMarquee(nextBox);
+      }
+      return;
+    }
+
+    if (appMode === 'select' && partialSelectMode && !edgeAlignmentSession && e.evt.button === 0) {
+      const pointer = stageRef.current?.getPointerPosition();
+      if (pointer) {
+        const rawUmX = ((pointer.x - stagePos.x) / stageScale) / SCALE_FACTOR;
+        const rawUmY = ((pointer.y - stagePos.y) / -stageScale) / SCALE_FACTOR;
+        const snapped = snapPointToGrid(rawUmX, rawUmY, activeSnapStep);
+        setMousePos(snapped);
+        const hitTolUm = 10 / (stageScale * SCALE_FACTOR);
+        const hit = hitTestShapeEdgeOrCorner(shapes, rawUmX, rawUmY, hitTolUm);
+        if (hit) {
+          const nextSel = mergePartialSelections(
+            partialSelectionRef.current,
+            { [hit.shapeId]: hit.edges },
+            e.evt.shiftKey ? 'toggle' : 'replace',
+          );
+          updatePartialSelection(nextSel);
+          setSelectedInstance(null);
+          setSelectedShape(hit.shapeId);
+          ignoreBackgroundClickUntilRef.current = performance.now() + 100;
+          return;
+        }
+        const nextBox = { startX: rawUmX, startY: rawUmY, currentX: rawUmX, currentY: rawUmY };
+        partialMarqueeRef.current = nextBox;
+        partialMarqueeDraggedRef.current = false;
+        setPartialMarquee(nextBox);
+      }
+      return;
+    }
+
     if (appMode === 'rect' && e.evt.button === 0) {
       const pointer = stageRef.current?.getPointerPosition();
       if (pointer) {
@@ -783,6 +1008,31 @@ export const FloorplanCanvas: React.FC = () => {
     const pointer = stageRef.current?.getPointerPosition();
     if (!pointer) return;
 
+    if (stretchSessionRef.current) {
+      const worldX = (pointer.x - stagePos.x) / stageScale;
+      const worldY = (pointer.y - stagePos.y) / -stageScale;
+      const snapped = snapPointToGrid(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR, activeSnapStep);
+      setMousePos(snapped);
+      const nextSession = { ...stretchSessionRef.current, currentX: snapped.x, currentY: snapped.y };
+      stretchSessionRef.current = nextSession;
+      setStretchSession(nextSession);
+      return;
+    }
+
+    if (partialMarqueeRef.current) {
+      const rawUmX = ((pointer.x - stagePos.x) / stageScale) / SCALE_FACTOR;
+      const rawUmY = ((pointer.y - stagePos.y) / -stageScale) / SCALE_FACTOR;
+      setMousePos(snapPointToGrid(rawUmX, rawUmY, activeSnapStep));
+      const nextBox = { ...partialMarqueeRef.current, currentX: rawUmX, currentY: rawUmY };
+      partialMarqueeRef.current = nextBox;
+      partialMarqueeDraggedRef.current ||= Math.hypot(
+        (rawUmX - nextBox.startX) * SCALE_FACTOR * stageScale,
+        (rawUmY - nextBox.startY) * SCALE_FACTOR * stageScale,
+      ) >= MARQUEE_DRAG_THRESHOLD_PX;
+      setPartialMarquee(nextBox);
+      return;
+    }
+
     if (rectDraftRef.current) {
       const worldX = (pointer.x - stagePos.x) / stageScale;
       const worldY = (pointer.y - stagePos.y) / -stageScale;
@@ -812,6 +1062,21 @@ export const FloorplanCanvas: React.FC = () => {
     const { umX, umY, isSnapped, snapEdgeAxis } = getSnappedWorldPos(pointer, appMode === 'measure');
 
     setMousePos({ x: umX, y: umY });
+
+    if (appMode === 'stretch' || (appMode === 'select' && partialSelectMode && !edgeAlignmentSession)) {
+      const rawUmX = ((pointer.x - stagePos.x) / stageScale) / SCALE_FACTOR;
+      const rawUmY = ((pointer.y - stagePos.y) / -stageScale) / SCALE_FACTOR;
+      const hit = hitTestShapeEdgeOrCorner(shapes, rawUmX, rawUmY, 10 / (stageScale * SCALE_FACTOR));
+      setHoveredStretchHit(prev => {
+        if (!prev && !hit) return prev;
+        if (prev && hit && prev.shapeId === hit.shapeId && prev.kind === hit.kind && prev.edges.join(',') === hit.edges.join(',')) {
+          return prev;
+        }
+        return hit;
+      });
+    } else if (hoveredStretchHit !== null) {
+      setHoveredStretchHit(null);
+    }
     
     if (appMode === 'measure' && isSnapped) {
       setSnapIndicator({ x: umX, y: umY });
@@ -880,10 +1145,69 @@ export const FloorplanCanvas: React.FC = () => {
     ignoreBackgroundClickUntilRef.current = performance.now() + 100;
   };
 
+  const finishPartialMarquee = (shiftKey: boolean) => {
+    const completedBox = partialMarqueeRef.current;
+    const wasDragged = partialMarqueeDraggedRef.current;
+    partialMarqueeRef.current = null;
+    partialMarqueeDraggedRef.current = false;
+    setPartialMarquee(null);
+
+    if (!completedBox) return;
+    if (!wasDragged) {
+      if (!shiftKey) {
+        updatePartialSelection({});
+      }
+      return;
+    }
+
+    const picked = selectShapeEdgesInBox(shapes, {
+      minX: Math.min(completedBox.startX, completedBox.currentX),
+      maxX: Math.max(completedBox.startX, completedBox.currentX),
+      minY: Math.min(completedBox.startY, completedBox.currentY),
+      maxY: Math.max(completedBox.startY, completedBox.currentY),
+    });
+    const next = mergePartialSelections(
+      partialSelectionRef.current,
+      picked,
+      shiftKey ? 'toggle' : 'replace',
+    );
+    updatePartialSelection(next);
+    if (hasPartialSelection(next)) {
+      setSelectedInstance(null);
+      const firstId = Object.keys(next)[0];
+      if (firstId) setSelectedShape(firstId);
+    }
+    ignoreBackgroundClickUntilRef.current = performance.now() + 100;
+  };
+
   const handleMouseUp = (e: KonvaEventObject<MouseEvent>) => {
     if (panStart) {
       setPanStart(null);
       setIsPanning(false);
+      return;
+    }
+    if (stretchSessionRef.current && stretchDraggingRef.current) {
+      stretchDraggingRef.current = false;
+      const active = stretchSessionRef.current;
+      const dx = active.currentX - active.anchorX;
+      const dy = active.currentY - active.anchorY;
+      // If the user dragged across at least one snap step, commit immediately; otherwise stay in Virtuoso two-click stretch mode.
+      if (Math.abs(dx) > 1e-9 || Math.abs(dy) > 1e-9) {
+        const updates = computeStretchedShapes(shapes, active.selection, dx, dy, activeSnapStep, gridSize);
+        stretchSessionRef.current = null;
+        setStretchSession(null);
+        try {
+          batchUpdateShapes(updates);
+        } catch (error) {
+          alert(error instanceof Error ? error.message : 'Unable to stretch selected edges.');
+        }
+        updatePartialSelection({});
+        ignoreBackgroundClickUntilRef.current = performance.now() + 100;
+      }
+      return;
+    }
+    if (partialMarqueeRef.current) {
+      finishPartialMarquee(e.evt.shiftKey);
       return;
     }
     if (rectDraftRef.current && rectDraggingRef.current) {
@@ -902,9 +1226,16 @@ export const FloorplanCanvas: React.FC = () => {
 
   const handleMouseLeave = (e: KonvaEventObject<MouseEvent>) => {
     setMousePos(null);
+    setHoveredStretchHit(null);
     if (panStart) {
       setPanStart(null);
       setIsPanning(false);
+    }
+    if (stretchDraggingRef.current) {
+      stretchDraggingRef.current = false;
+    }
+    if (partialMarqueeRef.current) {
+      finishPartialMarquee(e.evt?.shiftKey ?? false);
     }
     if (rectDraggingRef.current) {
       rectDraggingRef.current = false;
@@ -2090,6 +2421,9 @@ export const FloorplanCanvas: React.FC = () => {
             if (!e.evt.shiftKey) {
               setSelectedInstance(null);
               setSelectedShape(null);
+              if (hasPartialSelection(partialSelectionRef.current)) {
+                updatePartialSelection({});
+              }
             }
           }
         }}
@@ -2132,6 +2466,128 @@ export const FloorplanCanvas: React.FC = () => {
               shadowOffsetY={-4 / stageScale}
             />
           )}
+
+          {/* Cadence Virtuoso Edit-in-Place (X) dimmed ancestor/top context rendered in exact physical alignment */}
+          {isSubCellCanvas && descendStack.length > 0 && showEditInPlaceContext && descendStack.map((frame, levelIdx) => {
+            const chain = descendStack.slice(levelIdx);
+            const invTransform = computeAncestorToActiveTransform(chain, activeCoordinateMode, topWidth, topHeight);
+            const invProps = getTransformProps(invTransform.orientation);
+            const isRootLevel = frame.parentCellId === null;
+            const parentInstances = isRootLevel
+              ? (rootView?.instances ?? [])
+              : (cellViews[frame.parentCellId!]?.instances ?? []);
+            const parentShapes = isRootLevel
+              ? (rootView?.shapes ?? [])
+              : (cellViews[frame.parentCellId!]?.shapes ?? []);
+            const parentPixelArray = isRootLevel
+              ? (rootView?.pixelArray ?? null)
+              : (cellViews[frame.parentCellId!]?.pixelArray ?? null);
+            const parentW = isRootLevel ? (rootView?.topWidth ?? frame.parentWidth) : frame.parentWidth;
+            const parentH = isRootLevel ? (rootView?.topHeight ?? frame.parentHeight) : frame.parentHeight;
+            const parentName = isRootLevel ? (rootView?.topCellName ?? 'TOP') : (masterCells[frame.parentCellId!]?.cellName ?? 'PARENT');
+            const levelOpacity = levelIdx === descendStack.length - 1 ? 0.30 : 0.17;
+            const siblingInstances = parentInstances.filter(inst => inst.id !== frame.instanceId);
+
+            return (
+              <Group
+                key={`eip-context-${levelIdx}-${frame.instanceId}`}
+                x={invTransform.x * SCALE_FACTOR}
+                y={invTransform.y * SCALE_FACTOR}
+                rotation={invProps.rotation}
+                scaleX={invProps.scaleX}
+                scaleY={invProps.scaleY}
+                opacity={levelOpacity}
+                listening={false}
+              >
+                {isRootLevel && parentW > 0 && parentH > 0 && (
+                  <>
+                    <Rect
+                      x={(-parentW / 2) * SCALE_FACTOR}
+                      y={(-parentH / 2) * SCALE_FACTOR}
+                      width={parentW * SCALE_FACTOR}
+                      height={parentH * SCALE_FACTOR}
+                      fill="rgba(241, 245, 249, 0.55)"
+                      stroke="#475569"
+                      strokeWidth={1.75 / stageScale}
+                      dash={[10 / stageScale, 8 / stageScale]}
+                    />
+                    <Text
+                      text={`${parentName} (${formatGridValue(parentW, gridSize)} × ${formatGridValue(parentH, gridSize)} µm)`}
+                      x={(-parentW / 2) * SCALE_FACTOR}
+                      y={(parentH / 2) * SCALE_FACTOR + 22 / stageScale}
+                      fill="#475569"
+                      fontSize={14 / stageScale}
+                      fontFamily={CANVAS_FONT_SANS}
+                      scaleY={-1}
+                    />
+                  </>
+                )}
+                {parentPixelArray?.visible && (
+                  <Rect
+                    x={parentPixelArray.x * SCALE_FACTOR}
+                    y={parentPixelArray.y * SCALE_FACTOR}
+                    width={parentPixelArray.width * SCALE_FACTOR}
+                    height={parentPixelArray.height * SCALE_FACTOR}
+                    fill="rgba(139, 92, 246, 0.18)"
+                    stroke="#7c3aed"
+                    strokeWidth={1.5 / stageScale}
+                    dash={[7 / stageScale, 5 / stageScale]}
+                  />
+                )}
+                {parentShapes.map(shape => {
+                  const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                  return (
+                    <Rect
+                      key={`eip-shape-${shape.id}`}
+                      x={shape.x * SCALE_FACTOR}
+                      y={shape.y * SCALE_FACTOR}
+                      width={shape.width * SCALE_FACTOR}
+                      height={shape.height * SCALE_FACTOR}
+                      fill={style.color}
+                      opacity={Math.max(0.25, style.fillOpacity)}
+                      stroke={style.color}
+                      strokeWidth={1.25 / stageScale}
+                    />
+                  );
+                })}
+                {siblingInstances.map(sib => {
+                  const sibMaster = masterCells[sib.cellId];
+                  if (!sibMaster || isCellEmpty(sibMaster)) return null;
+                  const st = getTransformProps(sib.orientation);
+                  const sibOx = (sibMaster.originX ?? 0) * SCALE_FACTOR;
+                  const sibOy = (sibMaster.originY ?? 0) * SCALE_FACTOR;
+                  const sibW = sibMaster.width * SCALE_FACTOR;
+                  const sibH = sibMaster.height * SCALE_FACTOR;
+                  const sibView = cellViews[sib.cellId];
+                  const sibHasContent = (sibView?.shapes?.length ?? 0) > 0 || (sibView?.instances?.length ?? 0) > 0;
+                  return (
+                    <Group
+                      key={`eip-sib-${sib.id}`}
+                      x={sib.x * SCALE_FACTOR}
+                      y={sib.y * SCALE_FACTOR}
+                      rotation={st.rotation}
+                      scaleX={st.scaleX}
+                      scaleY={st.scaleY}
+                    >
+                      {!sibHasContent && (
+                        <Rect
+                          x={sibOx}
+                          y={sibOy}
+                          width={sibW}
+                          height={sibH}
+                          fill={sibMaster.color}
+                          opacity={sibMaster.opacity ?? 0.5}
+                          stroke="#334155"
+                          strokeWidth={1 / stageScale}
+                        />
+                      )}
+                      {sibHasContent && renderCellViewContents(sib.cellId, sibW, sibH)}
+                    </Group>
+                  );
+                })}
+              </Group>
+            );
+          })}
 
           {/* Virtuoso Minor & Major Drafting Grid (exact integer multiples of gridSize) */}
           {gridGeometry.lines.map(line => (
@@ -2365,19 +2821,20 @@ export const FloorplanCanvas: React.FC = () => {
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
-                draggable={canDragInstance}
+                draggable={canDragInstance && !partialSelectMode}
                 dragBoundFunc={(pos) => dragBoundFunc(pos, inst.cellId, inst.orientation, inst.id)}
                 onDragStart={() => handleDragStart(inst)}
                 onDragMove={(e) => handleDragMove(e, inst.id)}
                 onDragEnd={(e) => handleDragEnd(e, inst.id)}
                 onClick={(e) => {
-                  if (appMode === 'rect') return;
+                  if (appMode === 'rect' || appMode === 'stretch' || partialSelectMode) return;
                   e.cancelBubble = true;
                   if (appMode === 'select' && !edgeAlignmentSession) {
                     setSelectedInstance(inst.id, e.evt.shiftKey);
                   }
                 }}
                 onDblClick={(e) => {
+                  if (appMode === 'stretch' || partialSelectMode) return;
                   e.cancelBubble = true;
                   if (appMode === 'select' && !edgeAlignmentSession) {
                     descendIntoInstance(inst.id);
@@ -2591,7 +3048,7 @@ export const FloorplanCanvas: React.FC = () => {
             const sh = curH * SCALE_FACTOR;
             const isSelected = selectedShapeId === shape.id;
             const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
-            const canDragShape = appMode === 'select' && !edgeAlignmentSession && !shape.locked;
+            const canDragShape = appMode === 'select' && !partialSelectMode && !edgeAlignmentSession && !shape.locked;
             const tagText = shape.label?.trim()
               ? `${shape.label.trim()}\n${shape.layer}/${shape.purpose}`
               : `${shape.layer}/${shape.purpose}`;
@@ -2670,14 +3127,14 @@ export const FloorplanCanvas: React.FC = () => {
                     };
                   }}
                   onClick={event => {
-                    if (appMode === 'rect') return;
+                    if (appMode === 'rect' || appMode === 'stretch' || partialSelectMode) return;
                     event.cancelBubble = true;
                     if (appMode === 'select' && !edgeAlignmentSession) {
                       setSelectedShape(shape.id);
                     }
                   }}
                   onDblClick={event => {
-                    if (appMode !== 'select') return;
+                    if (appMode !== 'select' || partialSelectMode) return;
                     event.cancelBubble = true;
                     setSelectedShape(shape.id);
                     setRightSidebarPinned(true);
@@ -2783,6 +3240,132 @@ export const FloorplanCanvas: React.FC = () => {
                 </Group>
               </Group>
             );
+          })()}
+
+          {/* Virtuoso Partial Select (F4) & Stretch (S) edge highlights, live stretch preview, and partial marquee */}
+          {(() => {
+            const getEdgePts = (s: LayoutShape, edge: RectEdge): number[] => {
+              const x1 = s.x * SCALE_FACTOR;
+              const y1 = s.y * SCALE_FACTOR;
+              const x2 = (s.x + s.width) * SCALE_FACTOR;
+              const y2 = (s.y + s.height) * SCALE_FACTOR;
+              if (edge === 'left') return [x1, y1, x1, y2];
+              if (edge === 'right') return [x2, y1, x2, y2];
+              if (edge === 'bottom') return [x1, y1, x2, y1];
+              return [x1, y2, x2, y2];
+            };
+            const shapeById = new Map(shapes.map(s => [s.id, s]));
+            const nodes: React.ReactNode[] = [];
+
+            // 1. Hovered stretchable edge/corner preview
+            if (hoveredStretchHit && !stretchSession) {
+              const s = shapeById.get(hoveredStretchHit.shapeId);
+              if (s) {
+                hoveredStretchHit.edges.forEach(edge => {
+                  nodes.push(
+                    <Line
+                      key={`stretch-hover-${s.id}-${edge}`}
+                      points={getEdgePts(s, edge)}
+                      stroke="#06b6d4"
+                      strokeWidth={3 / stageScale}
+                      lineCap="round"
+                      opacity={0.9}
+                      listening={false}
+                    />,
+                  );
+                });
+              }
+            }
+
+            // 2. Partially selected edges & vertices (bright Virtuoso highlight magenta)
+            Object.entries(partialSelection).forEach(([shapeId, edges]) => {
+              const s = shapeById.get(shapeId);
+              if (!s || edges.length === 0) return;
+              edges.forEach(edge => {
+                const pts = getEdgePts(s, edge);
+                nodes.push(
+                  <React.Fragment key={`partial-edge-${shapeId}-${edge}`}>
+                    <Line
+                      points={pts}
+                      stroke="#ec4899"
+                      strokeWidth={3.5 / stageScale}
+                      lineCap="round"
+                      listening={false}
+                    />
+                    <Circle x={pts[0]} y={pts[1]} radius={3.2 / stageScale} fill="#ffffff" stroke="#ec4899" strokeWidth={1.6 / stageScale} listening={false} />
+                    <Circle x={pts[2]} y={pts[3]} radius={3.2 / stageScale} fill="#ffffff" stroke="#ec4899" strokeWidth={1.6 / stageScale} listening={false} />
+                  </React.Fragment>,
+                );
+              });
+            });
+
+            // 3. Live Stretch rubber-band preview & delta vector
+            if (stretchSession) {
+              const dx = stretchSession.currentX - stretchSession.anchorX;
+              const dy = stretchSession.currentY - stretchSession.anchorY;
+              const previewUpdates = computeStretchedShapes(shapes, stretchSession.selection, dx, dy, activeSnapStep, gridSize);
+              previewUpdates.forEach(u => {
+                nodes.push(
+                  <Rect
+                    key={`stretch-ghost-${u.id}`}
+                    x={u.x * SCALE_FACTOR}
+                    y={u.y * SCALE_FACTOR}
+                    width={u.width * SCALE_FACTOR}
+                    height={u.height * SCALE_FACTOR}
+                    fill="rgba(236, 72, 153, 0.16)"
+                    stroke="#ec4899"
+                    strokeWidth={2 / stageScale}
+                    dash={[6 / stageScale, 4 / stageScale]}
+                    listening={false}
+                  />,
+                );
+              });
+              const ax = stretchSession.anchorX * SCALE_FACTOR;
+              const ay = stretchSession.anchorY * SCALE_FACTOR;
+              const cx = stretchSession.currentX * SCALE_FACTOR;
+              const cy = stretchSession.currentY * SCALE_FACTOR;
+              const deltaText = `dX ${dx >= 0 ? '+' : ''}${formatGridValue(dx, gridSize)} · dY ${dy >= 0 ? '+' : ''}${formatGridValue(dy, gridSize)} µm`;
+              nodes.push(
+                <Group key="stretch-vector" listening={false}>
+                  <Line points={[ax, ay, cx, cy]} stroke="#ec4899" strokeWidth={1.6 / stageScale} dash={[4 / stageScale, 3 / stageScale]} />
+                  <Circle x={ax} y={ay} radius={3.2 / stageScale} fill="#ec4899" />
+                  <Circle x={cx} y={cy} radius={3.5 / stageScale} fill="#ffffff" stroke="#ec4899" strokeWidth={1.8 / stageScale} />
+                  <Group x={cx + 10 / stageScale} y={cy + 14 / stageScale} scaleY={-1}>
+                    <Text
+                      text={deltaText}
+                      fill="#be185d"
+                      fontSize={11.5 / stageScale}
+                      fontFamily={CANVAS_FONT_MONO}
+                      fontStyle="bold"
+                    />
+                  </Group>
+                </Group>,
+              );
+            }
+
+            // 4. Partial Select marquee box (distinct magenta dashed frame)
+            if (partialMarquee) {
+              const mx = Math.min(partialMarquee.startX, partialMarquee.currentX) * SCALE_FACTOR;
+              const my = Math.min(partialMarquee.startY, partialMarquee.currentY) * SCALE_FACTOR;
+              const mw = Math.abs(partialMarquee.currentX - partialMarquee.startX) * SCALE_FACTOR;
+              const mh = Math.abs(partialMarquee.currentY - partialMarquee.startY) * SCALE_FACTOR;
+              nodes.push(
+                <Rect
+                  key="partial-marquee"
+                  x={mx}
+                  y={my}
+                  width={mw}
+                  height={mh}
+                  fill="rgba(236, 72, 153, 0.10)"
+                  stroke="#ec4899"
+                  strokeWidth={1.4 / stageScale}
+                  dash={[5 / stageScale, 4 / stageScale]}
+                  listening={false}
+                />,
+              );
+            }
+
+            return nodes;
           })()}
 
           {/* Overlap / DRC Violation Highlights */}
@@ -3301,7 +3884,55 @@ export const FloorplanCanvas: React.FC = () => {
           Pixel Array {formatGridValue(pendingPixelArraySize.width, gridSize)} × {formatGridValue(pendingPixelArraySize.height, gridSize)} um · Click inside {topCellName} to place · Esc cancels
         </div>
       )}
-      {isSubCellEmpty && appMode === 'select' && !edgeAlignmentSession && (
+      {isSubCellCanvas && descendStack.length > 0 && (
+        <div className="eip-context-banner" role="status" aria-label="Edit in Place context">
+          <span className="eip-context-banner__badge">EIP</span>
+          <span className="eip-context-banner__path">
+            {rootView?.topCellName ?? 'TOP'}
+            {descendStack.map(frame => (
+              <React.Fragment key={`${frame.instanceId}-${frame.cellId}`}>
+                {' › '}
+                <strong>{frame.instanceName}</strong> ({masterCells[frame.cellId]?.cellName ?? frame.cellId})
+              </React.Fragment>
+            ))}
+          </span>
+          <button
+            type="button"
+            className={`eip-context-banner__btn${showEditInPlaceContext ? ' active' : ''}`}
+            onClick={toggleEditInPlaceContext}
+            title={showEditInPlaceContext ? 'Hide dimmed parent/top context' : 'Show dimmed parent/top context'}
+          >
+            {showEditInPlaceContext ? <FiEye /> : <FiEyeOff />}
+            <span>Context</span>
+          </button>
+          <button
+            type="button"
+            className="eip-context-banner__btn"
+            onClick={ascendToParent}
+            title="Return up one hierarchy level (Shift+B / Ctrl+B)"
+          >
+            <FiArrowUp />
+            <span>Return</span>
+          </button>
+        </div>
+      )}
+      {appMode === 'stretch' && (
+        <div className="coordinate-overlay stretch-mode-hint">
+          {stretchSession
+            ? `Stretch (S) · Move pointer to target and click to finish · dX ${formatGridValue(stretchSession.currentX - stretchSession.anchorX, gridSize)}, dY ${formatGridValue(stretchSession.currentY - stretchSession.anchorY, gridSize)} µm · Esc cancels`
+            : hasPartialSelection(partialSelection)
+              ? `Stretch (S) · ${countPartialSelectedEdges(partialSelection)} edge${countPartialSelectedEdges(partialSelection) === 1 ? '' : 's'} on ${countPartialSelectedShapes(partialSelection)} shape${countPartialSelectedShapes(partialSelection) === 1 ? '' : 's'} selected · Click-drag to stretch · Alt+Arrows nudge · Shift+drag adds edges · Esc clears`
+              : 'Stretch (S) · Drag a box across rectangle edge(s)/corner(s) to partially select, or drag any edge directly · Esc exits'}
+        </div>
+      )}
+      {appMode === 'select' && partialSelectMode && !edgeAlignmentSession && (
+        <div className="coordinate-overlay stretch-mode-hint">
+          {hasPartialSelection(partialSelection)
+            ? `Partial Select (F4) · ${countPartialSelectedEdges(partialSelection)} edge${countPartialSelectedEdges(partialSelection) === 1 ? '' : 's'} selected · Press S to stretch · Alt+Arrows nudge · Shift+drag toggles edges · Esc clears`
+            : 'Partial Select (F4) · Drag a box over rectangle edge(s)/corner(s) or click an edge, then press S to stretch'}
+        </div>
+      )}
+      {isSubCellEmpty && appMode === 'select' && !partialSelectMode && !edgeAlignmentSession && (
         <div className="coordinate-overlay">
           Empty Virtuoso cellview ({topCellName}) · Press R to draw a rectangle (e.g. text/drawing) or I to instantiate a cell
         </div>

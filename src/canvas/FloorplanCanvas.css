@@ -520,3 +520,92 @@
     bottom: 62px;
   }
 }
+
+.stretch-mode-hint {
+  top: 16px;
+  bottom: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  border-color: rgba(236, 72, 153, 0.55);
+  background: rgba(56, 16, 40, 0.9);
+  color: #fce7f3;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: calc(100% - 36px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eip-context-banner {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 10px;
+  border-radius: 980px;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(56, 189, 248, 0.42);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  color: #e2e8f0;
+  font-size: 11.5px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  max-width: calc(50% - 28px);
+}
+
+.eip-context-banner__badge {
+  padding: 2px 6px;
+  border-radius: 980px;
+  background: rgba(14, 165, 233, 0.26);
+  color: #38bdf8;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.eip-context-banner__path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #cbd5e1;
+}
+
+.eip-context-banner__path strong {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.eip-context-banner__btn {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 980px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.eip-context-banner__btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
+.eip-context-banner__btn.active {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.55);
+  color: #7dd3fc;
+}

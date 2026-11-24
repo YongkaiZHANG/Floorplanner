@@ -7,7 +7,7 @@ import { computeFloorplanMetrics, downloadCsvFile, generateFloorplanCsv } from '
 import { createCisDemoProject } from '../utils/demoProjects';
 import { formatGridValue } from '../utils/grid';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
-import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiSquare, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle, FiFolder, FiChevronDown, FiCpu, FiFileText } from 'react-icons/fi';
+import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiSquare, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle, FiFolder, FiChevronDown, FiCpu, FiFileText, FiCrop, FiMove } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import { EditingToolbar } from './EditingToolbar';
 import type { AlignmentAction } from './EditingToolbar';
@@ -16,7 +16,7 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, rootView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, rootView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
@@ -335,12 +335,28 @@ export const Topbar: React.FC = () => {
             <FiMousePointer /> <span className="topbar-label-sm">Select</span>
           </button>
           <button
+            className={`mode-btn${partialSelectMode ? ' active' : ''}`}
+            onClick={togglePartialSelectMode}
+            title="Virtuoso Partial Select (F4): box-select or click individual rectangle edges/corners, then press S to stretch"
+            aria-pressed={partialSelectMode}
+          >
+            <FiCrop /> <span className="topbar-label-md">Partial</span>
+          </button>
+          <button
             className={`mode-btn ${appMode === 'rect' ? 'active' : ''}`}
             onClick={() => setAppMode(appMode === 'rect' ? 'select' : 'rect')}
             title="Draw Rectangle on Virtuoso Layer/Purpose (R when idle, or D)"
             aria-pressed={appMode === 'rect'}
           >
             <FiSquare /> <span className="topbar-label-sm">Rect</span>
+          </button>
+          <button
+            className={`mode-btn ${appMode === 'stretch' ? 'active' : ''}`}
+            onClick={() => setAppMode(appMode === 'stretch' ? 'select' : 'stretch')}
+            title="Virtuoso Stretch (S): drag a box over rectangle edge(s)/corner(s) to partially select, then drag to stretch"
+            aria-pressed={appMode === 'stretch'}
+          >
+            <FiMove /> <span className="topbar-label-sm">Stretch</span>
           </button>
           <button 
             className={`mode-btn ${appMode === 'measure' ? 'active' : ''}`}

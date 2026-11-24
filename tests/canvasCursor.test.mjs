@@ -38,6 +38,10 @@ test('resolveCanvasCursor uses normal arrow in select mode and hand only while p
     'crosshair',
   );
   assert.equal(
+    resolveCanvasCursor({ appMode: 'stretch', edgeAlignmentActive: false, isPanning: false, isSpaceDown: false }),
+    'crosshair',
+  );
+  assert.equal(
     resolveCanvasCursor({ appMode: 'select', edgeAlignmentActive: true, isPanning: false, isSpaceDown: false }),
     'crosshair',
   );
