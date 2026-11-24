@@ -4,6 +4,8 @@ import { useStore, clampInstancePosition, computePadGroupPositions, getTransform
 import type { Instance } from '../store/useStore';
 import { getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
+import { collapseCollinearPadCandidates, labelRectsOverlap } from '../utils/autoDim';
+import type { ScreenLabelRect } from '../utils/autoDim';
 import { SCALE_FACTOR } from '../utils/canvasConstants';
 import { findOverlapViolations } from '../utils/floorplanMetrics';
 import { formatGridValue, snapToGrid } from '../utils/grid';
@@ -18,9 +20,11 @@ import { FiGrid, FiMaximize2, FiMinus, FiPlus } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
-const MIN_STAGE_SCALE = 0.001;
+const MIN_STAGE_SCALE = 1e-5;
 const MAX_STAGE_SCALE = 50;
 const MARQUEE_DRAG_THRESHOLD_PX = 3;
+const CANVAS_FONT_SANS = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif";
+const CANVAS_FONT_MONO = "ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace";
 
 export const FloorplanCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -30,6 +34,7 @@ export const FloorplanCanvas: React.FC = () => {
   const [dimensions, setDimensions] = useState({ width: 1, height: 1 });
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 }); 
   const [stageScale, setStageScale] = useState(1);
+  const [fitScale, setFitScale] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
 
   // Measure Mode State
@@ -109,13 +114,14 @@ export const FloorplanCanvas: React.FC = () => {
       const tw = topWidth * SCALE_FACTOR;
       const th = topHeight * SCALE_FACTOR;
       
-      const padding = 100;
+      const padding = 72;
       const availableWidth = Math.max(1, offsetWidth - padding * 2);
       const availableHeight = Math.max(1, offsetHeight - padding * 2);
       const scaleX = availableWidth / tw;
       const scaleY = availableHeight / th;
       const initialScale = Math.max(MIN_STAGE_SCALE, Math.min(scaleX, scaleY, 1.5));
       
+      setFitScale(initialScale);
       setStageScale(initialScale);
       setStagePos({ 
         x: offsetWidth / 2, 
@@ -830,90 +836,133 @@ export const FloorplanCanvas: React.FC = () => {
 
   const renderGapAnnotations = (selectedId: string | null, autoMode: boolean) => {
     const sf = SCALE_FACTOR;
-    const SEL_COLOR  = '#38bdf8'; // sky-blue for selected cell gaps
-    const AUTO_COLOR = '#a78bfa'; // violet for auto-dim
+    const SEL_COLOR = '#0284c7';
+    const SEL_BG = 'rgba(240, 249, 255, 0.94)';
+    const SEL_BORDER = 'rgba(14, 165, 233, 0.55)';
+    const AUTO_COLOR = '#6d28d9';
+    const AUTO_LINE = '#8b5cf6';
+    const AUTO_BG = 'rgba(245, 243, 255, 0.94)';
+    const AUTO_BORDER = 'rgba(139, 92, 246, 0.45)';
+    const placedLabelRects: ScreenLabelRect[] = [];
     const annotations: React.ReactNode[] = [];
-    const topBox: BBox = { minX: -topWidth/2, maxX: topWidth/2, minY: -topHeight/2, maxY: topHeight/2 };
+    const topBox: BBox = { minX: -topWidth / 2, maxX: topWidth / 2, minY: -topHeight / 2, maxY: topHeight / 2 };
 
-    // Renders a dimension line between two points (in um coords).
-    // perpDir: 'up' | 'down' | 'left' | 'right' — which side the label goes.
-    const renderDimLine = (
-      x1: number, y1: number,
-      x2: number, y2: number,
-      label: string, color: string, key: string,
-      perpDir: 'up' | 'down' | 'left' | 'right' = 'up',
-      interactive = false,
-    ) => {
+    type DimSpec = {
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      label: string;
+      hoverLabel?: string;
+      key: string;
+      perpDir: 'up' | 'down' | 'left' | 'right';
+      interactive: boolean;
+      variant: 'selected' | 'auto';
+    };
+
+    const renderDimSpec = (spec: DimSpec, skipCollisionCheck = false) => {
+      const { x1, y1, x2, y2, key, perpDir, interactive, variant } = spec;
       const isHoriz = Math.abs(y2 - y1) < 0.0001;
-      const isVert  = Math.abs(x2 - x1) < 0.0001;
-      const tickLen = 6 / stageScale;
-      const labelGap = 12 / stageScale;
-      const fs = 10.5 / stageScale;
-
-      // midpoint in canvas px
-      const mx = ((x1 + x2) / 2) * sf;
-      const my = ((y1 + y2) / 2) * sf;
-
-      // label offset: in canvas space, +Y is "up" (because stage scaleY=-1)
-      let lx = mx, ly = my;
-      if (perpDir === 'up')    ly = my + labelGap;
-      if (perpDir === 'down')  ly = my - labelGap;
-      if (perpDir === 'right') lx = mx + labelGap;
-      if (perpDir === 'left')  lx = mx - labelGap;
+      const isVert = Math.abs(x2 - x1) < 0.0001;
+      const tickLen = 5 / stageScale;
       const isHovered = interactive && hoveredAutoDimKey === key;
       const isMuted = interactive && hoveredAutoDimKey !== null && !isHovered;
-      const strokeWidth = (isHovered ? 1.5 : 0.9) / stageScale;
+
+      const lineColor = variant === 'selected' ? '#0ea5e9' : AUTO_LINE;
+      const textColor = variant === 'selected' ? SEL_COLOR : AUTO_COLOR;
+      const pillBg = variant === 'selected' ? SEL_BG : AUTO_BG;
+      const pillBorder = variant === 'selected' ? SEL_BORDER : AUTO_BORDER;
+      const activeLabel = isHovered && spec.hoverLabel ? spec.hoverLabel : spec.label;
+
+      const fs = (isHovered ? 11.5 : 10.5) / stageScale;
+      const padX = 6 / stageScale;
+      const padY = 3 / stageScale;
+      const textW = Math.max(28 / stageScale, activeLabel.length * fs * 0.57);
+      const pillW = textW + padX * 2;
+      const pillH = fs + padY * 2;
+
+      const mx = ((x1 + x2) / 2) * sf;
+      const my = ((y1 + y2) / 2) * sf;
+      const spanScreenPx = Math.hypot((x2 - x1) * sf, (y2 - y1) * sf) * stageScale;
+
+      let lx = mx;
+      let ly = my;
+      if (isHoriz && spanScreenPx < pillW * stageScale + 14) {
+        ly = my + (perpDir === 'down' ? -(pillH * 0.78 + 4 / stageScale) : (pillH * 0.78 + 4 / stageScale));
+      } else if (isVert && spanScreenPx < pillH * stageScale + 14) {
+        lx = mx + (perpDir === 'left' ? -(pillW * 0.56 + 6 / stageScale) : (pillW * 0.56 + 6 / stageScale));
+      }
+
+      const labelBox: ScreenLabelRect = {
+        cx: lx * stageScale,
+        cy: ly * stageScale,
+        halfWidth: (pillW * stageScale) / 2 + 4,
+        halfHeight: (pillH * stageScale) / 2 + 3,
+      };
+      const collides = !skipCollisionCheck && !isHovered && placedLabelRects.some(box => labelRectsOverlap(box, labelBox));
+      const showPill = isHovered || !collides;
+      if (showPill && !isHovered) {
+        placedLabelRects.push(labelBox);
+      }
+
+      const strokeWidth = (isHovered ? 1.8 : 1.1) / stageScale;
 
       return (
         <Group
           key={key}
           listening={interactive}
-          opacity={isMuted ? 0.14 : interactive && !isHovered ? 0.72 : 1}
+          opacity={isMuted ? 0.18 : 1}
           onMouseEnter={interactive ? () => setHoveredAutoDimKey(key) : undefined}
           onMouseLeave={interactive ? () => setHoveredAutoDimKey(null) : undefined}
         >
-          {/* Main dim line */}
           <Line
-            points={[x1*sf, y1*sf, x2*sf, y2*sf]}
-            stroke={color}
+            points={[x1 * sf, y1 * sf, x2 * sf, y2 * sf]}
+            stroke={lineColor}
             strokeWidth={strokeWidth}
-            dash={[4/stageScale, 4/stageScale]}
+            dash={[4 / stageScale, 4 / stageScale]}
             hitStrokeWidth={interactive ? 14 / stageScale : undefined}
           />
-          {/* Perpendicular end ticks */}
           {isHoriz && <>
-            <Line points={[x1*sf, y1*sf - tickLen, x1*sf, y1*sf + tickLen]} stroke={color} strokeWidth={1/stageScale} />
-            <Line points={[x2*sf, y2*sf - tickLen, x2*sf, y2*sf + tickLen]} stroke={color} strokeWidth={1/stageScale} />
+            <Line points={[x1 * sf, y1 * sf - tickLen, x1 * sf, y1 * sf + tickLen]} stroke={lineColor} strokeWidth={1.1 / stageScale} listening={false} />
+            <Line points={[x2 * sf, y2 * sf - tickLen, x2 * sf, y2 * sf + tickLen]} stroke={lineColor} strokeWidth={1.1 / stageScale} listening={false} />
           </>}
           {isVert && <>
-            <Line points={[x1*sf - tickLen, y1*sf, x1*sf + tickLen, y1*sf]} stroke={color} strokeWidth={1/stageScale} />
-            <Line points={[x2*sf - tickLen, y2*sf, x2*sf + tickLen, y2*sf]} stroke={color} strokeWidth={1/stageScale} />
+            <Line points={[x1 * sf - tickLen, y1 * sf, x1 * sf + tickLen, y1 * sf]} stroke={lineColor} strokeWidth={1.1 / stageScale} listening={false} />
+            <Line points={[x2 * sf - tickLen, y2 * sf, x2 * sf + tickLen, y2 * sf]} stroke={lineColor} strokeWidth={1.1 / stageScale} listening={false} />
           </>}
-          {/* Label — rendered with scaleY=-1 to flip text upright */}
-          <Text
-            x={lx}
-            y={ly}
-            text={label}
-            fill={color}
-            stroke="rgba(15, 23, 42, 0.78)"
-            strokeWidth={1.25 / stageScale}
-            lineJoin="round"
-            fontSize={fs}
-            fontFamily="Inter"
-            fontStyle="normal"
-            scaleY={-1}
-            offsetY={isHoriz ? -fs * 0.2 : fs * 0.5}
-            align={isHoriz ? 'center' : 'left'}
-            listening={interactive}
-          />
+          {showPill && (
+            <Group x={lx} y={ly} scaleY={-1} listening={interactive}>
+              <Rect
+                x={-pillW / 2}
+                y={-pillH / 2}
+                width={pillW}
+                height={pillH}
+                cornerRadius={pillH / 2}
+                fill={pillBg}
+                stroke={pillBorder}
+                strokeWidth={1 / stageScale}
+              />
+              <Text
+                x={-pillW / 2}
+                y={-pillH / 2}
+                width={pillW}
+                height={pillH}
+                text={activeLabel}
+                fill={textColor}
+                fontSize={fs}
+                fontFamily={CANVAS_FONT_SANS}
+                fontStyle="600"
+                align="center"
+                verticalAlign="middle"
+                listening={false}
+              />
+            </Group>
+          )}
         </Group>
       );
     };
 
-    const snapLabel = (v: number) => {
-      const snapped = Math.round(v / gridSize) * gridSize;
-      return formatGridValue(snapped, gridSize) + ' um';
-    };
+    const snapLabel = (v: number) => `${formatGridValue(v, gridSize)} µm`;
 
     type Interval = { start: number; end: number };
 
@@ -960,11 +1009,17 @@ export const FloorplanCanvas: React.FC = () => {
       const sel = instances.find(i => i.id === selectedId);
       if (sel) {
         const selBox = computeInstanceBBox(sel);
+        const selIsPad = masterCells[sel.cellId]?.kind === 'pad';
         if (selBox) {
           const others = instances
             .filter(i => i.id !== selectedId)
-            .map(i => ({ id: i.id, name: i.name, box: computeInstanceBBox(i) }))
-            .filter(x => x.box !== null) as { id: string; name: string; box: BBox }[];
+            .map(i => ({
+              id: i.id,
+              name: i.name,
+              isPad: masterCells[i.cellId]?.kind === 'pad',
+              box: computeInstanceBBox(i),
+            }))
+            .filter(x => x.box !== null) as { id: string; name: string; isPad: boolean; box: BBox }[];
 
           type Direction = 'right' | 'left' | 'top' | 'bottom';
 
@@ -973,7 +1028,7 @@ export const FloorplanCanvas: React.FC = () => {
             const projectionStart = horizontal ? selBox.minY : selBox.minX;
             const projectionEnd = horizontal ? selBox.maxY : selBox.maxX;
 
-            const instanceCandidates = others.flatMap(other => {
+            const rawInstanceCandidates = others.flatMap(other => {
               const ob = other.box;
               let distance: number;
 
@@ -986,16 +1041,27 @@ export const FloorplanCanvas: React.FC = () => {
 
               const overlapStart = Math.max(
                 projectionStart,
-                horizontal ? ob.minY : ob.minX
+                horizontal ? ob.minY : ob.minX,
               );
               const overlapEnd = Math.min(
                 projectionEnd,
-                horizontal ? ob.maxY : ob.maxX
+                horizontal ? ob.maxY : ob.maxX,
               );
               if (overlapEnd - overlapStart <= 0.0001) return [];
 
-              return [{ ...other, distance, overlap: { start: overlapStart, end: overlapEnd }, occludes: true, relationship: 'gap' as const }];
+              return [{
+                ...other,
+                distance,
+                overlap: { start: overlapStart, end: overlapEnd },
+                occludes: true,
+                relationship: 'gap' as const,
+              }];
             });
+
+            // Collapse collinear equal-distance pads into a single clearance dimension when an IP is selected
+            const instanceCandidates = selIsPad
+              ? rawInstanceCandidates
+              : collapseCollinearPadCandidates(rawInstanceCandidates);
 
             const pixelCandidates = pixelArray?.visible ? (() => {
               const pixelBox: BBox = {
@@ -1016,6 +1082,7 @@ export const FloorplanCanvas: React.FC = () => {
               return [{
                 id: 'pixel-array',
                 name: 'Pixel Array',
+                isPad: false,
                 box: targetBox,
                 distance: measurement.distance,
                 overlap: { start: measurement.projectionStart, end: measurement.projectionEnd },
@@ -1036,50 +1103,46 @@ export const FloorplanCanvas: React.FC = () => {
 
               hasVisibleNeighbor = true;
               const largestVisibleSegment = visibleSegments.reduce((largest, segment) =>
-                segment.end - segment.start > largest.end - largest.start ? segment : largest
+                segment.end - segment.start > largest.end - largest.start ? segment : largest,
               );
               const projectionCenter = (largestVisibleSegment.start + largestVisibleSegment.end) / 2;
 
-              // A touching IP still occludes anything behind it, but has no positive gap to label.
               if (candidate.distance > 0.0001) {
                 const label = candidate.relationship === 'overlap'
                   ? `${snapLabel(candidate.distance)} overlap`
                   : candidate.relationship === 'inside'
-                    ? `${snapLabel(candidate.distance)} to array edge`
-                    : `${snapLabel(candidate.distance)} to ${candidate.name}`;
+                    ? `${snapLabel(candidate.distance)} to array`
+                    : `${snapLabel(candidate.distance)} → ${candidate.name}`;
                 const key = `gap-${direction}-${candidate.id}`;
 
                 if (direction === 'right') {
-                  annotations.push(renderDimLine(selBox.maxX, projectionCenter, candidate.box.minX, projectionCenter, label, SEL_COLOR, key, 'up'));
+                  annotations.push(renderDimSpec({ x1: selBox.maxX, y1: projectionCenter, x2: candidate.box.minX, y2: projectionCenter, label, key, perpDir: 'up', interactive: false, variant: 'selected' }, true));
                 } else if (direction === 'left') {
-                  annotations.push(renderDimLine(candidate.box.maxX, projectionCenter, selBox.minX, projectionCenter, label, SEL_COLOR, key, 'up'));
+                  annotations.push(renderDimSpec({ x1: candidate.box.maxX, y1: projectionCenter, x2: selBox.minX, y2: projectionCenter, label, key, perpDir: 'up', interactive: false, variant: 'selected' }, true));
                 } else if (direction === 'top') {
-                  annotations.push(renderDimLine(projectionCenter, selBox.maxY, projectionCenter, candidate.box.minY, label, SEL_COLOR, key, 'right'));
+                  annotations.push(renderDimSpec({ x1: projectionCenter, y1: selBox.maxY, x2: projectionCenter, y2: candidate.box.minY, label, key, perpDir: 'right', interactive: false, variant: 'selected' }, true));
                 } else {
-                  annotations.push(renderDimLine(projectionCenter, candidate.box.maxY, projectionCenter, selBox.minY, label, SEL_COLOR, key, 'right'));
+                  annotations.push(renderDimSpec({ x1: projectionCenter, y1: candidate.box.maxY, x2: projectionCenter, y2: selBox.minY, label, key, perpDir: 'right', interactive: false, variant: 'selected' }, true));
                 }
               }
 
-              // Nearer IPs hide farther IPs only across the projection they actually cover.
-              // The pixel array is translucent and may overlap IPs, so it never hides IP relationships.
               if (candidate.occludes) covered = addCoveredInterval(covered, candidate.overlap);
             });
 
-            // Keep the original chip-edge dimension when no IP overlaps this side at all.
             if (!hasVisibleNeighbor) {
               const projectionCenter = (projectionStart + projectionEnd) / 2;
               if (direction === 'right') {
                 const gap = topBox.maxX - selBox.maxX;
-                if (gap > 0.0001) annotations.push(renderDimLine(selBox.maxX, projectionCenter, topBox.maxX, projectionCenter, snapLabel(gap), SEL_COLOR, 'gap-right-boundary', 'up'));
+                if (gap > 0.0001) annotations.push(renderDimSpec({ x1: selBox.maxX, y1: projectionCenter, x2: topBox.maxX, y2: projectionCenter, label: snapLabel(gap), key: 'gap-right-boundary', perpDir: 'up', interactive: false, variant: 'selected' }, true));
               } else if (direction === 'left') {
                 const gap = selBox.minX - topBox.minX;
-                if (gap > 0.0001) annotations.push(renderDimLine(topBox.minX, projectionCenter, selBox.minX, projectionCenter, snapLabel(gap), SEL_COLOR, 'gap-left-boundary', 'up'));
+                if (gap > 0.0001) annotations.push(renderDimSpec({ x1: topBox.minX, y1: projectionCenter, x2: selBox.minX, y2: projectionCenter, label: snapLabel(gap), key: 'gap-left-boundary', perpDir: 'up', interactive: false, variant: 'selected' }, true));
               } else if (direction === 'top') {
                 const gap = topBox.maxY - selBox.maxY;
-                if (gap > 0.0001) annotations.push(renderDimLine(projectionCenter, selBox.maxY, projectionCenter, topBox.maxY, snapLabel(gap), SEL_COLOR, 'gap-top-boundary', 'right'));
+                if (gap > 0.0001) annotations.push(renderDimSpec({ x1: projectionCenter, y1: selBox.maxY, x2: projectionCenter, y2: topBox.maxY, label: snapLabel(gap), key: 'gap-top-boundary', perpDir: 'right', interactive: false, variant: 'selected' }, true));
               } else {
                 const gap = selBox.minY - topBox.minY;
-                if (gap > 0.0001) annotations.push(renderDimLine(projectionCenter, topBox.minY, projectionCenter, selBox.minY, snapLabel(gap), SEL_COLOR, 'gap-bottom-boundary', 'right'));
+                if (gap > 0.0001) annotations.push(renderDimSpec({ x1: projectionCenter, y1: topBox.minY, x2: projectionCenter, y2: selBox.minY, label: snapLabel(gap), key: 'gap-bottom-boundary', perpDir: 'right', interactive: false, variant: 'selected' }, true));
               }
             }
           };
@@ -1092,19 +1155,25 @@ export const FloorplanCanvas: React.FC = () => {
       }
     }
 
-    // A selected block already has focused dimensions. Suppress the global layer
-    // until selection is cleared so local relationships remain easy to scan.
+    // Global Auto-Dim overview: focus on IP-to-IP gaps and collapsed IP-to-pad-row clearances,
+    // excluding dense pad-to-pad clutter and culling overlapping screen-space labels.
     if (autoMode && !selectedId) {
       const allBoxes = instances
-        .map(i => ({ id: i.id, name: i.name, box: computeInstanceBBox(i) }))
-        .filter(x => x.box !== null) as { id: string; name: string; box: BBox }[];
+        .map(i => ({
+          id: i.id,
+          name: i.name,
+          isPad: masterCells[i.cellId]?.kind === 'pad',
+          box: computeInstanceBBox(i),
+        }))
+        .filter(x => x.box !== null) as { id: string; name: string; isPad: boolean; box: BBox }[];
       const seenPairs = new Set<string>();
+      const specs: DimSpec[] = [];
 
       type AutoDirection = 'right' | 'left' | 'top' | 'bottom';
-      allBoxes.forEach(source => {
+      allBoxes.filter(source => !source.isPad).forEach(source => {
         (['right', 'left', 'top', 'bottom'] as AutoDirection[]).forEach(direction => {
           const horizontal = direction === 'right' || direction === 'left';
-          const candidates = allBoxes.flatMap(target => {
+          const rawTargets = allBoxes.flatMap(target => {
             if (source.id === target.id) return [];
             const overlapStart = Math.max(
               horizontal ? source.box.minY : source.box.minX,
@@ -1116,35 +1185,55 @@ export const FloorplanCanvas: React.FC = () => {
             );
             if (overlapEnd - overlapStart <= 0.0001) return [];
 
-            let gap: number;
-            if (direction === 'right') gap = target.box.minX - source.box.maxX;
-            else if (direction === 'left') gap = source.box.minX - target.box.maxX;
-            else if (direction === 'top') gap = target.box.minY - source.box.maxY;
-            else gap = source.box.minY - target.box.maxY;
-            if (gap <= 0.0001) return [];
+            let distance: number;
+            if (direction === 'right') distance = target.box.minX - source.box.maxX;
+            else if (direction === 'left') distance = source.box.minX - target.box.maxX;
+            else if (direction === 'top') distance = target.box.minY - source.box.maxY;
+            else distance = source.box.minY - target.box.maxY;
+            if (distance <= 0.0001) return [];
 
-            return [{ target, gap, projectionCenter: (overlapStart + overlapEnd) / 2 }];
-          }).sort((a, b) => a.gap - b.gap);
+            return [{
+              id: target.id,
+              name: target.name,
+              isPad: target.isPad,
+              occludes: true,
+              box: target.box,
+              distance,
+              overlap: { start: overlapStart, end: overlapEnd },
+            }];
+          });
 
-          const nearest = candidates[0];
+          const collapsed = collapseCollinearPadCandidates(rawTargets);
+          const nearest = collapsed[0];
           if (!nearest) return;
-          const pairKey = [source.id, nearest.target.id].sort().join('|');
-          if (seenPairs.has(pairKey) || source.id === selectedId || nearest.target.id === selectedId) return;
+
+          const pairKey = nearest.isPad
+            ? `${source.id}|${direction}|${nearest.id}`
+            : [source.id, nearest.id].sort().join('|');
+          if (seenPairs.has(pairKey)) return;
           seenPairs.add(pairKey);
 
-          const label = `${source.name} ↔ ${nearest.target.name} · ${snapLabel(nearest.gap)}`;
+          const projectionCenter = (nearest.overlap.start + nearest.overlap.end) / 2;
+          const compactLabel = snapLabel(nearest.distance);
+          const hoverLabel = `${source.name} ↔ ${nearest.name} · ${compactLabel}`;
           const key = `auto-${horizontal ? 'h' : 'v'}-${pairKey}`;
+
           if (direction === 'right') {
-            annotations.push(renderDimLine(source.box.maxX, nearest.projectionCenter, nearest.target.box.minX, nearest.projectionCenter, label, AUTO_COLOR, key, 'up', true));
+            specs.push({ x1: source.box.maxX, y1: projectionCenter, x2: nearest.box.minX, y2: projectionCenter, label: compactLabel, hoverLabel, key, perpDir: 'up', interactive: true, variant: 'auto' });
           } else if (direction === 'left') {
-            annotations.push(renderDimLine(nearest.target.box.maxX, nearest.projectionCenter, source.box.minX, nearest.projectionCenter, label, AUTO_COLOR, key, 'up', true));
+            specs.push({ x1: nearest.box.maxX, y1: projectionCenter, x2: source.box.minX, y2: projectionCenter, label: compactLabel, hoverLabel, key, perpDir: 'up', interactive: true, variant: 'auto' });
           } else if (direction === 'top') {
-            annotations.push(renderDimLine(nearest.projectionCenter, source.box.maxY, nearest.projectionCenter, nearest.target.box.minY, label, AUTO_COLOR, key, 'right', true));
+            specs.push({ x1: projectionCenter, y1: source.box.maxY, x2: projectionCenter, y2: nearest.box.minY, label: compactLabel, hoverLabel, key, perpDir: 'right', interactive: true, variant: 'auto' });
           } else {
-            annotations.push(renderDimLine(nearest.projectionCenter, nearest.target.box.maxY, nearest.projectionCenter, source.box.minY, label, AUTO_COLOR, key, 'right', true));
+            specs.push({ x1: projectionCenter, y1: nearest.box.maxY, x2: projectionCenter, y2: source.box.minY, label: compactLabel, hoverLabel, key, perpDir: 'right', interactive: true, variant: 'auto' });
           }
         });
       });
+
+      // Render non-hovered dimensions first, then hovered on top so its pill is never occluded
+      specs
+        .sort((a, b) => Number(a.key === hoveredAutoDimKey) - Number(b.key === hoveredAutoDimKey))
+        .forEach(spec => annotations.push(renderDimSpec(spec)));
     }
 
     return annotations;
@@ -1223,7 +1312,7 @@ export const FloorplanCanvas: React.FC = () => {
             text={strVal}
             fill={rulerColor}
             fontSize={12 / stageScale}
-            fontFamily="monospace"
+            fontFamily={CANVAS_FONT_MONO}
             scaleY={-1}
             offsetY={-6 / stageScale} // slight vertical centering tweak
           />
@@ -1248,7 +1337,7 @@ export const FloorplanCanvas: React.FC = () => {
           text="0"
           fill={rulerColor}
           fontSize={12 / stageScale}
-          fontFamily="monospace"
+          fontFamily={CANVAS_FONT_MONO}
           scaleY={-1}
           offsetY={-6 / stageScale}
         />
@@ -1283,7 +1372,7 @@ export const FloorplanCanvas: React.FC = () => {
           fill={rulerColor}
           fontSize={12 / stageScale}
           fontStyle="normal"
-          fontFamily="monospace"
+          fontFamily={CANVAS_FONT_MONO}
           scaleY={-1}
           offsetY={-7 / stageScale}
         />
@@ -1354,7 +1443,7 @@ export const FloorplanCanvas: React.FC = () => {
             text="✕ click to delete"
             fill="#fbbf24"
             fontSize={11 / stageScale}
-            fontFamily="Inter"
+            fontFamily={CANVAS_FONT_SANS}
             scaleY={-1}
             offsetY={-5 / stageScale}
             offsetX={0}
@@ -1368,6 +1457,8 @@ export const FloorplanCanvas: React.FC = () => {
 
   const tw = topWidth * SCALE_FACTOR;
   const th = topHeight * SCALE_FACTOR;
+  const axisExtent = Math.max(tw, th, 100000) * 2;
+  const bgExtent = Math.max(tw, th, 100000) * 12;
 
   const gridLines = useMemo(() => {
     if (!showGrid || stageScale <= 0) return [];
@@ -1492,10 +1583,10 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Infinite Background for panning */}
           <Rect 
             name="bg"
-            x={-1000000} 
-            y={-1000000} 
-            width={2000000} 
-            height={2000000} 
+            x={-bgExtent} 
+            y={-bgExtent} 
+            width={bgExtent * 2} 
+            height={bgExtent * 2} 
             fill="transparent" 
           />
 
@@ -1600,7 +1691,7 @@ export const FloorplanCanvas: React.FC = () => {
                 align="center"
                 fill="#6d28d9"
                 fontSize={11 / stageScale}
-                fontFamily="Inter"
+                fontFamily={CANVAS_FONT_SANS}
                 fontStyle="bold"
                 lineHeight={1.35}
                 scaleY={-1}
@@ -1639,16 +1730,16 @@ export const FloorplanCanvas: React.FC = () => {
             }
           })()}
 
-          {/* Grid Axes (Infinite lines) */}
-          <Line points={[-100000, 0, 100000, 0]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.8} listening={false} />
-          <Line points={[0, -100000, 0, 100000]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.8} listening={false} />
+          {/* Grid Axes (span full die and beyond) */}
+          <Line points={[-axisExtent, 0, axisExtent, 0]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.7} listening={false} />
+          <Line points={[0, -axisExtent, 0, axisExtent]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.7} listening={false} />
           <Text
             text={`${topCellName} (${topWidth}um x ${topHeight}um)`}
             x={-tw / 2}
             y={th / 2 + 25 / stageScale}
             fill="#94a3b8"
             fontSize={16 / stageScale}
-            fontFamily="Inter"
+            fontFamily={CANVAS_FONT_SANS}
             scaleY={-1}
             listening={false}
           />
@@ -1661,7 +1752,7 @@ export const FloorplanCanvas: React.FC = () => {
             align="right"
             fill="#94a3b8"
             fontSize={12 / stageScale}
-            fontFamily="Inter"
+            fontFamily={CANVAS_FONT_SANS}
             scaleY={-1}
             listening={false}
           />
@@ -1672,7 +1763,7 @@ export const FloorplanCanvas: React.FC = () => {
             y={-th / 2 - 10 / stageScale}
             fill="#94a3b8"
             fontSize={12 / stageScale}
-            fontFamily="Inter"
+            fontFamily={CANVAS_FONT_SANS}
             scaleY={-1}
             listening={false}
           />
@@ -1808,7 +1899,7 @@ export const FloorplanCanvas: React.FC = () => {
                           align="center"
                           fill="rgba(10, 20, 40, 0.55)"
                           fontSize={instFS}
-                          fontFamily="Inter"
+                          fontFamily={CANVAS_FONT_SANS}
                           fontStyle="normal"
                           ellipsis={true}
                           wrap="none"
@@ -1823,7 +1914,7 @@ export const FloorplanCanvas: React.FC = () => {
                         align="center"
                         fill="rgba(10, 20, 40, 0.9)"
                         fontSize={nameFS}
-                        fontFamily="Inter"
+                        fontFamily={CANVAS_FONT_SANS}
                         fontStyle="bold"
                         ellipsis={true}
                         wrap="none"
@@ -1838,7 +1929,7 @@ export const FloorplanCanvas: React.FC = () => {
                           align="center"
                           fill="rgba(10, 20, 40, 0.6)"
                           fontSize={subFS}
-                          fontFamily="Inter"
+                          fontFamily={CANVAS_FONT_SANS}
                           fontStyle="normal"
                           ellipsis={true}
                           wrap="none"
@@ -2184,7 +2275,7 @@ export const FloorplanCanvas: React.FC = () => {
                         align="center"
                         fill="rgba(10, 20, 40, 0.9)"
                         fontSize={nameFS}
-                        fontFamily="Inter"
+                        fontFamily={CANVAS_FONT_SANS}
                         fontStyle="bold"
                         ellipsis={true}
                         wrap="none"
@@ -2198,7 +2289,7 @@ export const FloorplanCanvas: React.FC = () => {
                           align="center"
                           fill="rgba(10, 20, 40, 0.6)"
                           fontSize={subFS}
-                          fontFamily="Inter"
+                          fontFamily={CANVAS_FONT_SANS}
                           fontStyle="normal"
                           ellipsis={true}
                           wrap="none"
@@ -2253,7 +2344,7 @@ export const FloorplanCanvas: React.FC = () => {
           onClick={fitView}
           title="Fit top cell to viewport (F)"
         >
-          <FiMaximize2 /> {Math.round(stageScale * 100)}%
+          <FiMaximize2 /> {Math.max(1, Math.round((stageScale / fitScale) * 100))}%
         </button>
         <button
           type="button"

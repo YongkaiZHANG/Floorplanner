@@ -120,7 +120,7 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
       svg += `    <line x1="${gx}" y1="${y}" x2="${gx}" y2="${y + height}" stroke="#8b5cf6" stroke-width="0.75" opacity="0.3" vector-effect="non-scaling-stroke" />\n`;
       svg += `    <line x1="${x}" y1="${gy}" x2="${x + width}" y2="${gy}" stroke="#8b5cf6" stroke-width="0.75" opacity="0.3" vector-effect="non-scaling-stroke" />\n`;
     }
-    svg += `    <text x="${x + width / 2}" y="${-(y + height / 2)}" fill="#6d28d9" font-family="Inter, sans-serif" font-size="${baseFS}" font-weight="700" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">PIXEL ARRAY · ${formatGridValue(array.width, state.gridSize)} × ${formatGridValue(array.height, state.gridSize)} um</text>\n`;
+    svg += `    <text x="${x + width / 2}" y="${-(y + height / 2)}" fill="#6d28d9" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-size="${baseFS}" font-weight="700" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">PIXEL ARRAY · ${formatGridValue(array.width, state.gridSize)} × ${formatGridValue(array.height, state.gridSize)} um</text>\n`;
     svg += `  </g>\n`;
   }
   
@@ -128,9 +128,9 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
   const labelY = -(th / 2 + baseFS * 1.5);
   const blY = -(-th / 2 - baseFS);
   
-  svg += `  <text x="${-tw / 2}" y="${labelY}" fill="#0f172a" font-family="Inter, sans-serif" font-size="${largeFS}" font-weight="700" dominant-baseline="auto" transform="scale(1, -1)">${escapeXml(state.topCellName)}  ${state.topWidth}um × ${state.topHeight}um</text>\n`;
-  svg += `  <text x="${tw / 2}" y="${labelY}" fill="#64748b" font-family="Inter, sans-serif" font-size="${baseFS}" dominant-baseline="auto" text-anchor="end" transform="scale(1, -1)">TR: (${state.topWidth / 2}, ${state.topHeight / 2})</text>\n`;
-  svg += `  <text x="${-tw / 2}" y="${blY}" fill="#64748b" font-family="Inter, sans-serif" font-size="${baseFS}" dominant-baseline="hanging" transform="scale(1, -1)">BL: (${-state.topWidth / 2}, ${-state.topHeight / 2})</text>\n`;
+  svg += `  <text x="${-tw / 2}" y="${labelY}" fill="#0f172a" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-size="${largeFS}" font-weight="700" dominant-baseline="auto" transform="scale(1, -1)">${escapeXml(state.topCellName)}  ${state.topWidth}um × ${state.topHeight}um</text>\n`;
+  svg += `  <text x="${tw / 2}" y="${labelY}" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-size="${baseFS}" dominant-baseline="auto" text-anchor="end" transform="scale(1, -1)">TR: (${state.topWidth / 2}, ${state.topHeight / 2})</text>\n`;
+  svg += `  <text x="${-tw / 2}" y="${blY}" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-size="${baseFS}" dominant-baseline="hanging" transform="scale(1, -1)">BL: (${-state.topWidth / 2}, ${-state.topHeight / 2})</text>\n`;
 
   // Instances
   const sortedInstances = [...state.instances].sort((a, b) => {
@@ -171,8 +171,8 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     svg += `    <rect width="${w}" height="${h}" fill="${escapeXml(m.color)}" fill-opacity="${m.opacity ?? 0.5}" stroke="${outlineStroke}" stroke-width="1.5"${outlineDash} vector-effect="non-scaling-stroke" />\n`;
     
     const instFS = Math.min(w * 0.15, h * 0.25, baseFS * 2);
-    svg += `    <text x="${w / 2}" y="${h / 2 - instFS * 0.6}" fill="#0f172a" font-family="Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${escapeXml(m.cellName)}</text>\n`;
-    svg += `    <text x="${w / 2}" y="${h / 2 + instFS * 0.6}" fill="#334155" font-family="Inter, sans-serif" font-weight="normal" font-size="${instFS * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${m.width}x${m.height}</text>\n`;
+    svg += `    <text x="${w / 2}" y="${h / 2 - instFS * 0.6}" fill="#0f172a" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${escapeXml(m.cellName)}</text>\n`;
+    svg += `    <text x="${w / 2}" y="${h / 2 + instFS * 0.6}" fill="#334155" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="normal" font-size="${instFS * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${m.width}x${m.height}</text>\n`;
     svg += `  </g>\n`;
   });
   
@@ -232,7 +232,7 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
   let cx = -tw / 2;
 
   // Title
-  svg += `  <text x="${cx}" y="${-curY}" fill="#0f172a" font-family="Inter, sans-serif" font-size="${largeFS}" font-weight="bold" dominant-baseline="auto" transform="scale(1, -1)">Floorplan Data Summary</text>\n`;
+  svg += `  <text x="${cx}" y="${-curY}" fill="#0f172a" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-size="${largeFS}" font-weight="bold" dominant-baseline="auto" transform="scale(1, -1)">Floorplan Data Summary</text>\n`;
   curY -= rowHeight * 1.5;
 
   // Header Background
@@ -241,7 +241,7 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
   const headers = ['Instance Name', 'Master Cell', 'X (um)', 'Y (um)', 'Orientation', 'Size (um)'];
   cx = -tw / 2;
   headers.forEach((h, i) => {
-    svg += `  <text x="${cx + baseFS}" y="${-(curY - rowHeight / 2)}" fill="#f8fafc" font-family="Inter, sans-serif" font-size="${baseFS}" font-weight="bold" dominant-baseline="middle" transform="scale(1, -1)">${h}</text>\n`;
+    svg += `  <text x="${cx + baseFS}" y="${-(curY - rowHeight / 2)}" fill="#f8fafc" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-size="${baseFS}" font-weight="bold" dominant-baseline="middle" transform="scale(1, -1)">${h}</text>\n`;
     cx += colW[i];
   });
   curY -= rowHeight;
