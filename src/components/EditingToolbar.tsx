@@ -102,7 +102,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
   return (
     <div className="editing-toolbar" ref={rootRef} aria-label="Editing controls">
       <button
-        className="editing-toolbar__button"
+        className="editing-toolbar__button editing-toolbar__button--icon"
         type="button"
         disabled={!canUndo}
         onClick={onUndo}
@@ -112,7 +112,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
         <FiCornerDownLeft />
       </button>
       <button
-        className="editing-toolbar__button"
+        className="editing-toolbar__button editing-toolbar__button--icon"
         type="button"
         disabled={!canRedo}
         onClick={onRedo}

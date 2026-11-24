@@ -360,7 +360,7 @@ export const Topbar: React.FC = () => {
             title="Virtuoso Partial Select (F4): box-select or click individual rectangle edges/corners, then press S to stretch"
             aria-pressed={partialSelectMode}
           >
-            <FiCrop /> <span className="topbar-label-md">Partial</span>
+            <FiCrop /> <span className="topbar-label-lg">Partial</span>
           </button>
           <button
             className={`mode-btn ${appMode === 'stretch' ? 'active' : ''}`}
@@ -368,7 +368,7 @@ export const Topbar: React.FC = () => {
             title="Virtuoso Stretch (S): drag a box over rectangle edge(s)/corner(s) to partially select, then drag to stretch"
             aria-pressed={appMode === 'stretch'}
           >
-            <FiMove /> <span className="topbar-label-sm">Stretch</span>
+            <FiMove /> <span className="topbar-label-lg">Stretch</span>
           </button>
           <span className="mode-toggle__sep" aria-hidden="true" />
           <button
@@ -403,7 +403,7 @@ export const Topbar: React.FC = () => {
                 title={`Orthogonal ruler lock (O): currently ${orthogonalRuler ? 'ON' : 'OFF'}`}
                 aria-pressed={orthogonalRuler}
               >
-                <FiGrid /> <span className="topbar-label-md">Ortho</span>
+                <FiGrid /> <span className="topbar-label-lg">Ortho</span>
               </button>
               <button
                 className="mode-btn mode-btn--danger"
@@ -419,7 +419,7 @@ export const Topbar: React.FC = () => {
             onClick={toggleAutoDim}
             title="Auto-Dimension: show a nearest-gap overview, then select one IP to focus only its local gaps."
           >
-            <FiGrid /> <span className="topbar-label-md">Auto-Dim</span>
+            <FiGrid /> <span className="topbar-label-lg">Auto-Dim</span>
           </button>
         </div>
       </div>

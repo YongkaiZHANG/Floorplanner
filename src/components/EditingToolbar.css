@@ -49,6 +49,11 @@
   background: var(--border-color);
 }
 
+.editing-toolbar__button--icon {
+  width: 32px;
+  padding: 0;
+}
+
 .editing-toolbar__align-trigger {
   padding: 0 10px;
 }

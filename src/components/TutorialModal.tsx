@@ -170,27 +170,25 @@ const walkthroughSteps = [
     ),
   },
   {
-    eyebrow: 'Step 05 · Verification & Virtuoso',
-    title: 'Verify DRC overlaps, review metrics, and export safely.',
+    eyebrow: 'Step 05 · Hierarchy, Verification & Virtuoso',
+    title: 'Edit in Place, check die bounds, and export clean SKILL.',
     summary:
-      'Open Summary in the top bar for live die area (mm²), IP utilization %, whitespace, per-edge pad counts, overlap DRC checks, and CSV export. Preview Cadence SKILL with optional master preservation so iterative layout updates stay non-destructive.',
+      'Press X to Descend Edit-in-Place inside any hierarchical cell (like padring or asp_top) directly in your current view. Out-of-bounds instances show live amber warnings, while bounding-box overlaps are shown calmly inside each IP’s Properties panel (non-fatal and never emitted to SKILL).',
     tips: [
-      'Red cross-hatched markers highlight any IP-IP, Pad-Pad, or IP-Pad overlap directly on the canvas.',
-      'Exported SVGs embed the complete editable project so any teammate can view or re-import them.',
+      'Content-driven cells (padring, asp_top, PAD) export only their drawn shapes and sub-instances — no synthetic prBoundary boxes.',
+      'Exported SVGs embed the complete editable project so any teammate can view or re-import them losslessly.',
     ],
     diagram: (
       <svg viewBox="0 0 360 190" className="walkthrough-svg" aria-hidden="true">
         <rect x="36" y="42" width="98" height="96" rx="5" fill="rgba(37,99,235,0.2)" stroke="#1e293b" strokeWidth="1.5" />
-        <rect x="106" y="64" width="96" height="86" rx="5" fill="rgba(249,115,22,0.2)" stroke="#1e293b" strokeWidth="1.5" />
-        <rect x="106" y="64" width="28" height="74" fill="rgba(239,68,68,0.32)" stroke="#ef4444" strokeWidth="2" strokeDasharray="4 3" />
-        <line x1="106" y1="64" x2="134" y2="138" stroke="#ef4444" strokeWidth="1.4" />
-        <line x1="134" y1="64" x2="106" y2="138" stroke="#ef4444" strokeWidth="1.4" />
+        <rect x="106" y="64" width="96" height="86" rx="5" fill="rgba(14,165,233,0.16)" stroke="#0284c7" strokeWidth="1.8" strokeDasharray="5 3" />
+        <rect x="44" y="138" width="84" height="16" fill="rgba(245,158,11,0.26)" stroke="#f59e0b" strokeWidth="1.8" strokeDasharray="4 3" />
         <rect x="226" y="42" width="102" height="108" rx="8" fill="#0f172a" stroke="#334155" strokeWidth="1.5" />
         <text x="238" y="64" fill="#38bdf8" fontSize="9" fontFamily="monospace">FPCreateFloorplan()</text>
-        <text x="238" y="82" fill="#94a3b8" fontSize="8.5" fontFamily="monospace">prBoundary OK</text>
+        <text x="238" y="82" fill="#94a3b8" fontSize="8.5" fontFamily="monospace">dbCreateRect/Label</text>
         <text x="238" y="98" fill="#4ade80" fontSize="8.5" fontFamily="monospace">Preserve Masters</text>
         <text x="238" y="114" fill="#fbbf24" fontSize="8.5" fontFamily="monospace">CSV + SVG Export</text>
-        <text x="120" y="160" textAnchor="middle" fill="#dc2626" fontSize="9.5" fontWeight="700">Live DRC Overlap</text>
+        <text x="120" y="170" textAnchor="middle" fill="#b45309" fontSize="9.5" fontWeight="700">Boundary Warning + EIP</text>
       </svg>
     ),
   },
@@ -267,8 +265,8 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose, onLoadDem
                   </article>
                   <article className="bento-card bento-card--rose">
                     <FiBarChart2 />
-                    <h4>Live DRC, Metrics &amp; CSV</h4>
-                    <p>Spot IP and pad overlaps immediately in red, review die utilization &amp; per-edge pad counts, and export CSV tables in one click.</p>
+                    <h4>Boundary Check, Metrics &amp; CSV</h4>
+                    <p>Live amber warnings when cells exceed die bounds, non-fatal overlap notices in Properties (padring-safe), area utilization, and CSV export.</p>
                   </article>
                 </div>
               </section>
@@ -277,21 +275,20 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose, onLoadDem
                 <h3>Five-step workflow</h3>
                 <ol className="tutorial-steps">
                   <li><span>1</span><div><strong>Configure Top Cell</strong><p>Set library, cell name, die size, grid, and optional seal-ring inset.</p></div></li>
-                  <li><span>2</span><div><strong>Define Masters</strong><p>Create reusable IP masters and perimeter pad cells with custom styling.</p></div></li>
-                  <li><span>3</span><div><strong>Place &amp; Arrange</strong><p>Place IPs, pad rows, and pixel arrays; drag groups or align by edges.</p></div></li>
-                  <li><span>4</span><div><strong>Measure &amp; Check</strong><p>Use ortho rulers, Auto-Dim, Summary metrics, and live overlap DRC.</p></div></li>
-                  <li><span>5</span><div><strong>Save &amp; Export</strong><p>Save locally, share editable SVGs, download CSV tables, or export SKILL.</p></div></li>
+                  <li><span>2</span><div><strong>Create &amp; Draw Cells</strong><p>Create empty Virtuoso cellviews (<code>N</code>), draw rectangles (<code>R</code>) or text labels (<code>L</code>), and build hierarchy.</p></div></li>
+                  <li><span>3</span><div><strong>Place, Descend &amp; Align</strong><p>Instantiate cells (<code>I</code>), Edit-in-Place (<code>X</code>), stretch edges (<code>F4</code>/<code>S</code>), or align to IPs &amp; die boundaries (<code>A</code>).</p></div></li>
+                  <li><span>4</span><div><strong>Measure &amp; Check</strong><p>Use ortho rulers (<code>K</code>/<code>O</code>), Auto-Dim, Summary metrics, and live boundary warnings.</p></div></li>
+                  <li><span>5</span><div><strong>Save &amp; Export</strong><p>Save locally, share editable SVGs, download CSV tables, or export clean Virtuoso SKILL.</p></div></li>
                 </ol>
               </section>
 
               <section className="tutorial-section">
                 <h3>Canvas visual legend</h3>
                 <div className="tutorial-legend">
-                  <span><i className="tutorial-dot tutorial-dot--anchor" />Amber: primary selection &amp; source edge</span>
-                  <span><i className="tutorial-dot tutorial-dot--selected" />Blue: multi-selected blocks</span>
-                  <span><i className="tutorial-dot tutorial-dot--target" />Green: alignment reference</span>
+                  <span><i className="tutorial-dot tutorial-dot--anchor" />Amber: primary selection, source edge &amp; out-of-bounds warning</span>
+                  <span><i className="tutorial-dot tutorial-dot--selected" />Blue: multi-selected blocks &amp; Edit-in-Place context</span>
+                  <span><i className="tutorial-dot tutorial-dot--target" />Green: alignment reference (IP, die boundary, ruler)</span>
                   <span><i className="tutorial-dot tutorial-dot--dimension" />Violet: Auto-Dim / Pixel Array</span>
-                  <span><i className="tutorial-dot tutorial-dot--drc" />Red hatch: DRC overlap violation</span>
                 </div>
               </section>
             </>
@@ -371,8 +368,16 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose, onLoadDem
                   <div><strong>Pixel Array inspector</strong><p>Select or double-click the Pixel Array to edit exact X, Y, Width, and Height in the Properties panel, or toggle visibility without losing its saved geometry.</p></div>
                 </article>
                 <article className="tutorial-card">
+                  <FiLayers />
+                  <div><strong>Virtuoso Edit-in-Place (X) &amp; Stretch (S)</strong><p>Select any instance and press <kbd>X</kbd> to edit its internals right inside the current view (press <kbd>Shift+B</kbd> to return). Press <kbd>F4</kbd> or <kbd>S</kbd> to partially select and stretch rectangle edges.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiAlignLeft />
+                  <div><strong>Boundary &amp; Two-Edge Alignment (A)</strong><p>Align single blocks, groups, or Edit-in-Place sub-cells directly to die boundaries from the Align menu, or press <kbd>A</kbd> to snap edges with exact directional spacing.</p></div>
+                </article>
+                <article className="tutorial-card">
                   <FiAlertTriangle />
-                  <div><strong>Live Overlap DRC &amp; CSV</strong><p>Open Summary in the top bar for die utilization, whitespace, per-edge pad counts, clickable overlap DRC violations, and one-click CSV coordinate export.</p></div>
+                  <div><strong>Boundary Warnings &amp; Non-Fatal Overlaps</strong><p>Cells extending outside the die show live amber warnings. Bounding-box overlaps (normal for <code>padring</code> or <code>asp_top</code>) appear calmly inside Properties and are not exported to SKILL.</p></div>
                 </article>
                 <article className="tutorial-card">
                   <FiMinimize2 />

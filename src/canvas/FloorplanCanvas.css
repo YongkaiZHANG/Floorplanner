@@ -32,10 +32,10 @@
 
 .viewport-hud {
   position: absolute;
-  left: 50%;
+  left: calc(var(--canvas-safe-left, 16px) + (100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px)) / 2);
   bottom: 18px;
   transform: translateX(-50%);
-  max-width: calc(100% - 32px);
+  max-width: calc(100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px) - 16px);
   z-index: 6;
   display: inline-flex;
   align-items: center;
@@ -49,6 +49,7 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 30px rgba(0, 0, 0, 0.28);
   overflow-x: auto;
   scrollbar-width: none;
+  transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .viewport-hud::-webkit-scrollbar {
@@ -103,76 +104,75 @@
   flex-shrink: 0;
 }
 
-.pixel-array-placement-hint {
+.pixel-array-placement-hint,
+.manual-pad-placement-hint,
+.measure-mode-hint,
+.text-mode-hint,
+.empty-cell-hint {
   top: auto;
   bottom: 62px;
-  left: 50%;
+  left: calc(var(--canvas-safe-left, 16px) + (100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px)) / 2);
   transform: translateX(-50%);
-  max-width: calc(100% - 40px);
+  max-width: calc(100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px) - 20px);
   overflow: hidden;
   text-overflow: ellipsis;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.pixel-array-placement-hint {
   border-color: rgba(191, 90, 242, 0.55);
   background: rgba(48, 22, 74, 0.9);
   color: #f3e8ff;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
 }
 
 .manual-pad-placement-hint {
-  top: auto;
-  bottom: 62px;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: calc(100% - 40px);
-  overflow: hidden;
-  text-overflow: ellipsis;
   border-color: rgba(41, 151, 255, 0.55);
   background: rgba(12, 34, 68, 0.9);
   color: #e0f2fe;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
 }
 
 .measure-mode-hint {
-  top: auto;
-  bottom: 62px;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: calc(100% - 40px);
-  overflow: hidden;
-  text-overflow: ellipsis;
   border-color: rgba(255, 214, 10, 0.55);
   background: rgba(44, 34, 8, 0.9);
   color: #fef08a;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
+}
+
+.text-mode-hint {
+  border-color: rgba(6, 182, 212, 0.55);
+  background: rgba(10, 34, 46, 0.9);
+  color: #cffafe;
+}
+
+.empty-cell-hint {
+  border-color: rgba(148, 163, 184, 0.38);
+  background: rgba(22, 22, 26, 0.88);
+  color: #e2e8f0;
 }
 
 .lpp-palette-bar {
   position: absolute;
   top: 14px;
-  left: 50%;
+  left: calc(var(--canvas-safe-left, 16px) + (100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px)) / 2);
   transform: translateX(-50%);
-  max-width: calc(100% - 40px);
+  max-width: calc(100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px) - 20px);
   z-index: 8;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
   border-radius: 980px;
-  background: rgba(22, 22, 24, 0.9);
+  background: rgba(22, 22, 24, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.16);
   backdrop-filter: saturate(180%) blur(22px);
   -webkit-backdrop-filter: saturate(180%) blur(22px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 28px rgba(0, 0, 0, 0.32);
   overflow-x: auto;
   scrollbar-width: none;
+  transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .lpp-palette-bar--below-eip {
@@ -181,12 +181,28 @@
 
 .lpp-palette-bar--text {
   border-radius: 16px;
-  flex-wrap: wrap;
-  justify-content: center;
-  row-gap: 6px;
-  padding: 6px 10px;
-  max-width: min(860px, calc(100% - 40px));
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 7px 10px;
+  max-width: min(820px, calc(100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px) - 20px));
   overflow-x: visible;
+}
+
+.lpp-palette-bar__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lpp-palette-bar__row--top {
+  justify-content: space-between;
+}
+
+.lpp-palette-bar__row--bottom {
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .lpp-palette-bar::-webkit-scrollbar {
@@ -370,7 +386,7 @@
 
 .autodim-legend {
   position: absolute;
-  right: 18px;
+  right: calc(var(--canvas-safe-right, 16px) + 12px);
   bottom: 18px;
   z-index: 5;
   padding: 7px 12px;
@@ -386,6 +402,7 @@
   font-size: 11.5px;
   pointer-events: none;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .autodim-legend__swatch {
@@ -405,7 +422,7 @@
 .stretch-mode-hint {
   top: auto;
   bottom: 62px;
-  left: 50%;
+  left: calc(var(--canvas-safe-left, 16px) + (100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px)) / 2);
   transform: translateX(-50%);
   border-color: rgba(236, 72, 153, 0.55);
   background: rgba(56, 16, 40, 0.9);
@@ -414,15 +431,16 @@
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
-  max-width: calc(100% - 40px);
+  max-width: calc(100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px) - 20px);
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .eip-context-banner {
   position: absolute;
   top: 14px;
-  left: 50%;
+  left: calc(var(--canvas-safe-left, 16px) + (100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px)) / 2);
   transform: translateX(-50%);
   z-index: 9;
   display: inline-flex;
@@ -437,7 +455,8 @@
   color: #e2e8f0;
   font-size: 11.5px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-  max-width: calc(100% - 88px);
+  max-width: calc(100% - var(--canvas-safe-left, 16px) - var(--canvas-safe-right, 16px) - 20px);
+  transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .eip-context-banner__badge {

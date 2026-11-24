@@ -170,6 +170,8 @@ export const FloorplanCanvas: React.FC = () => {
     placeInstanceMosaic,
     pendingManualPadGroup,
     placeManualPadGroup,
+    leftSidebarPinned,
+    rightSidebarPinned,
     setRightSidebarPinned,
     orthogonalRuler,
     showAutoDim,
@@ -2561,7 +2563,14 @@ export const FloorplanCanvas: React.FC = () => {
   );
 
   return (
-    <div className="canvas-container" ref={containerRef}>
+    <div
+      className="canvas-container"
+      ref={containerRef}
+      style={{
+        '--canvas-safe-left': `${leftSidebarPinned && windowLayoutMode !== 'split' ? 280 : 16}px`,
+        '--canvas-safe-right': `${rightSidebarPinned && windowLayoutMode !== 'split' ? 280 : 16}px`,
+      } as React.CSSProperties}
+    >
       <Stage
         width={dimensions.width}
         height={dimensions.height}
@@ -4621,171 +4630,174 @@ export const FloorplanCanvas: React.FC = () => {
         };
         return (
           <div className={`lpp-palette-bar lpp-palette-bar--text${isEditInPlace ? ' lpp-palette-bar--below-eip' : ''}`} role="toolbar" aria-label="Virtuoso Create Text Label Toolbar">
-            <div className="lpp-palette-bar__custom">
-              <input
-                ref={textInputRef}
-                type="text"
-                className="lpp-input lpp-input--text"
-                value={activeTextContent}
-                onChange={e => setActiveTextConfig({ content: e.target.value })}
-                onKeyDown={e => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    setAppMode('select');
-                  } else if (e.key === 'Enter') {
-                    e.currentTarget.blur();
-                  }
-                }}
-                placeholder="Label text…"
-                title="Text label content to place on canvas"
-                aria-label="Text label content"
-              />
-              <input
-                type="number"
-                list="text-font-size-presets"
-                min={gridSize}
-                step="any"
-                className="lpp-input lpp-input--size"
-                value={draftTextFontSize}
-                onChange={e => {
-                  const raw = e.target.value;
-                  setDraftTextFontSize(raw);
-                  const val = Number.parseFloat(raw);
-                  if (Number.isFinite(val) && val > 0) setActiveTextConfig({ fontSize: val });
-                }}
-                onBlur={() => {
-                  const val = Number.parseFloat(draftTextFontSize);
-                  if (!Number.isFinite(val) || val <= 0) {
-                    setDraftTextFontSize(String(activeTextFontSize));
-                  }
-                }}
-                onKeyDown={e => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    setAppMode('select');
-                  } else if (e.key === 'Enter') {
-                    e.currentTarget.blur();
-                  }
-                }}
-                title="Font height in µm (Virtuoso Label Height)"
-                aria-label="Font size in micrometers"
-              />
-              <datalist id="text-font-size-presets">
-                <option value="5" />
-                <option value="10" />
-                <option value="20" />
-                <option value="40" />
-                <option value="80" />
-                <option value="120" />
-              </datalist>
-              <span className="lpp-unit">µm</span>
-              <select
-                className="lpp-select"
-                value={activeTextFontFamily}
-                onChange={e => setActiveTextConfig({ fontFamily: e.target.value as LayoutTextFontFamily })}
-                title="Font family (maps to Virtuoso stick / swiss / fixed / roman in SKILL)"
-                aria-label="Font family"
-              >
-                {LAYOUT_TEXT_FONT_FAMILIES.map(f => (
-                  <option key={f.value} value={f.value}>{f.label}</option>
-                ))}
-              </select>
+            <div className="lpp-palette-bar__row lpp-palette-bar__row--top">
+              <div className="lpp-palette-bar__custom">
+                <input
+                  ref={textInputRef}
+                  type="text"
+                  className="lpp-input lpp-input--text"
+                  value={activeTextContent}
+                  onChange={e => setActiveTextConfig({ content: e.target.value })}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setAppMode('select');
+                    } else if (e.key === 'Enter') {
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  placeholder="Label text…"
+                  title="Text label content to place on canvas"
+                  aria-label="Text label content"
+                />
+                <input
+                  type="number"
+                  list="text-font-size-presets"
+                  min={gridSize}
+                  step="any"
+                  className="lpp-input lpp-input--size"
+                  value={draftTextFontSize}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    setDraftTextFontSize(raw);
+                    const val = Number.parseFloat(raw);
+                    if (Number.isFinite(val) && val > 0) setActiveTextConfig({ fontSize: val });
+                  }}
+                  onBlur={() => {
+                    const val = Number.parseFloat(draftTextFontSize);
+                    if (!Number.isFinite(val) || val <= 0) {
+                      setDraftTextFontSize(String(activeTextFontSize));
+                    }
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setAppMode('select');
+                    } else if (e.key === 'Enter') {
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  title="Font height in µm (Virtuoso Label Height)"
+                  aria-label="Font size in micrometers"
+                />
+                <datalist id="text-font-size-presets">
+                  <option value="5" />
+                  <option value="10" />
+                  <option value="20" />
+                  <option value="40" />
+                  <option value="80" />
+                  <option value="120" />
+                </datalist>
+                <span className="lpp-unit">µm</span>
+                <select
+                  className="lpp-select"
+                  value={activeTextFontFamily}
+                  onChange={e => setActiveTextConfig({ fontFamily: e.target.value as LayoutTextFontFamily })}
+                  title="Font family (maps to Virtuoso stick / swiss / fixed / roman in SKILL)"
+                  aria-label="Font family"
+                >
+                  {LAYOUT_TEXT_FONT_FAMILIES.map(f => (
+                    <option key={f.value} value={f.value}>{f.label}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={`lpp-style-btn${isBold ? ' active' : ''}`}
+                  style={{ fontWeight: 700 }}
+                  onClick={() => toggleTextStyle('bold')}
+                  title="Toggle Bold"
+                  aria-pressed={isBold}
+                >
+                  B
+                </button>
+                <button
+                  type="button"
+                  className={`lpp-style-btn${isItalic ? ' active' : ''}`}
+                  style={{ fontStyle: 'italic', fontFamily: 'Georgia, serif' }}
+                  onClick={() => toggleTextStyle('italic')}
+                  title="Toggle Italic"
+                  aria-pressed={isItalic}
+                >
+                  I
+                </button>
+                <button
+                  type="button"
+                  className="lpp-style-btn"
+                  onClick={() => setActiveTextConfig({
+                    orientation: rotateOrientationByQuarterTurns(activeTextOrientation, 1) as CadenceOrientation,
+                  })}
+                  title="Rotate text orientation (R or Right-Click canvas)"
+                >
+                  {activeTextOrientation}
+                </button>
+              </div>
               <button
                 type="button"
-                className={`lpp-style-btn${isBold ? ' active' : ''}`}
-                style={{ fontWeight: 700 }}
-                onClick={() => toggleTextStyle('bold')}
-                title="Toggle Bold"
-                aria-pressed={isBold}
+                className="lpp-close-btn"
+                onClick={() => setAppMode('select')}
+                title="Finish placing text (Esc)"
+                aria-label="Exit text label tool"
               >
-                B
+                <FiX />
               </button>
-              <button
-                type="button"
-                className={`lpp-style-btn${isItalic ? ' active' : ''}`}
-                style={{ fontStyle: 'italic', fontFamily: 'Georgia, serif' }}
-                onClick={() => toggleTextStyle('italic')}
-                title="Toggle Italic"
-                aria-pressed={isItalic}
-              >
-                I
-              </button>
-              <button
-                type="button"
-                className="lpp-style-btn"
-                onClick={() => setActiveTextConfig({
-                  orientation: rotateOrientationByQuarterTurns(activeTextOrientation, 1) as CadenceOrientation,
+            </div>
+            <div className="lpp-palette-bar__row lpp-palette-bar__row--bottom">
+              <div className="lpp-palette-bar__presets">
+                {VIRTUOSO_LAYER_PRESETS.slice(0, 6).map(preset => {
+                  const isSelected = activeTextLayer.toLowerCase() === preset.layer.toLowerCase()
+                    && activeTextPurpose.toLowerCase() === preset.purpose.toLowerCase();
+                  return (
+                    <button
+                      key={`text-lpp-${preset.layer}/${preset.purpose}`}
+                      type="button"
+                      className={`lpp-chip${isSelected ? ' active' : ''}`}
+                      onClick={() => setActiveTextConfig({ layer: preset.layer, purpose: preset.purpose, color: '' })}
+                      title={`Place text on ("${preset.layer}" "${preset.purpose}")`}
+                    >
+                      <span className="lpp-chip__swatch" style={{ backgroundColor: preset.color }} />
+                      <span>{preset.shortLabel}</span>
+                    </button>
+                  );
                 })}
-                title="Rotate text orientation (R or Right-Click canvas)"
-              >
-                {activeTextOrientation}
-              </button>
+              </div>
+              <span className="lpp-palette-bar__divider" aria-hidden="true" />
+              <div className="lpp-palette-bar__custom">
+                <input
+                  type="text"
+                  className="lpp-input"
+                  value={activeTextLayer}
+                  onChange={e => setActiveTextConfig({ layer: e.target.value })}
+                  onKeyDown={e => { if (e.key === 'Escape') setAppMode('select'); }}
+                  placeholder="Layer"
+                  title="Custom Cadence Layer Name (default: text)"
+                  aria-label="Text layer name"
+                />
+                <span className="lpp-sep">/</span>
+                <input
+                  type="text"
+                  className="lpp-input"
+                  value={activeTextPurpose}
+                  onChange={e => setActiveTextConfig({ purpose: e.target.value })}
+                  onKeyDown={e => { if (e.key === 'Escape') setAppMode('select'); }}
+                  placeholder="Purpose"
+                  title="Custom Cadence Layer Purpose (default: drawing)"
+                  aria-label="Text layer purpose"
+                />
+                <input
+                  type="color"
+                  className="lpp-color-picker"
+                  value={resolveLayerStyle(activeTextLayer, activeTextPurpose, activeTextColor).color}
+                  onChange={e => setActiveTextConfig({ color: e.target.value })}
+                  title="Custom display color for text label"
+                  aria-label="Text color"
+                />
+              </div>
             </div>
-            <span className="lpp-palette-bar__divider" aria-hidden="true" />
-            <div className="lpp-palette-bar__presets">
-              {VIRTUOSO_LAYER_PRESETS.slice(0, 6).map(preset => {
-                const isSelected = activeTextLayer.toLowerCase() === preset.layer.toLowerCase()
-                  && activeTextPurpose.toLowerCase() === preset.purpose.toLowerCase();
-                return (
-                  <button
-                    key={`text-lpp-${preset.layer}/${preset.purpose}`}
-                    type="button"
-                    className={`lpp-chip${isSelected ? ' active' : ''}`}
-                    onClick={() => setActiveTextConfig({ layer: preset.layer, purpose: preset.purpose, color: '' })}
-                    title={`Place text on ("${preset.layer}" "${preset.purpose}")`}
-                  >
-                    <span className="lpp-chip__swatch" style={{ backgroundColor: preset.color }} />
-                    <span>{preset.shortLabel}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <span className="lpp-palette-bar__divider" aria-hidden="true" />
-            <div className="lpp-palette-bar__custom">
-              <input
-                type="text"
-                className="lpp-input"
-                value={activeTextLayer}
-                onChange={e => setActiveTextConfig({ layer: e.target.value })}
-                onKeyDown={e => { if (e.key === 'Escape') setAppMode('select'); }}
-                placeholder="Layer"
-                title="Custom Cadence Layer Name (default: text)"
-                aria-label="Text layer name"
-              />
-              <span className="lpp-sep">/</span>
-              <input
-                type="text"
-                className="lpp-input"
-                value={activeTextPurpose}
-                onChange={e => setActiveTextConfig({ purpose: e.target.value })}
-                onKeyDown={e => { if (e.key === 'Escape') setAppMode('select'); }}
-                placeholder="Purpose"
-                title="Custom Cadence Layer Purpose (default: drawing)"
-                aria-label="Text layer purpose"
-              />
-              <input
-                type="color"
-                className="lpp-color-picker"
-                value={resolveLayerStyle(activeTextLayer, activeTextPurpose, activeTextColor).color}
-                onChange={e => setActiveTextConfig({ color: e.target.value })}
-                title="Custom display color for text label"
-                aria-label="Text color"
-              />
-            </div>
-            <button
-              type="button"
-              className="lpp-close-btn"
-              onClick={() => setAppMode('select')}
-              title="Finish placing text (Esc)"
-              aria-label="Exit text label tool"
-            >
-              <FiX />
-            </button>
           </div>
         );
       })()}
       {appMode === 'text' && (
-        <div className="coordinate-overlay measure-mode-hint">
+        <div className="coordinate-overlay text-mode-hint">
           Create Text (L) · Click canvas to place on {activeTextLayer || 'text'}/{activeTextPurpose || 'drawing'} ({activeTextFontSize} µm · {activeTextFontFamily}) · R or Right-Click rotates [{activeTextOrientation}] · Esc exits
         </div>
       )}
@@ -4860,7 +4872,7 @@ export const FloorplanCanvas: React.FC = () => {
         </div>
       )}
       {isSubCellEmpty && appMode === 'select' && !partialSelectMode && !edgeAlignmentSession && (
-        <div className="coordinate-overlay">
+        <div className="coordinate-overlay empty-cell-hint">
           Empty Virtuoso cellview ({topCellName}) · Press R to draw a rectangle, L to place text (text/drawing), or I to instantiate a cell
         </div>
       )}
