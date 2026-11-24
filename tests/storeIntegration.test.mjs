@@ -466,7 +466,7 @@ test('directional spacing preserves the selected and reference edge equation', (
   useStore.getState().loadProject({ ...emptyProject, topWidth: 1000, topHeight: 500 });
   useStore.getState().addMasterCell('testLib', 'spacingBlock', 150, 20, '#fff');
   const master = Object.values(useStore.getState().masterCells)[0];
-  useStore.getState().placeInstance(master.id, -300, 0);
+  useStore.getState().placeInstance(master.id, -300, 40);
   useStore.getState().placeInstance(master.id, 0, 0);
   const [source, target] = useStore.getState().instances;
 
@@ -866,4 +866,55 @@ test('locked instances resist move, rotate, nudge, align, and delete until unloc
   assert.equal(useStore.getState().instances[0].locked, undefined);
   useStore.getState().updateInstancePosition(first.id, 0, 0);
   assert.equal(useStore.getState().instances[0].x, 0);
+});
+
+test('only Pixel Array may overlap other cells; regular cells reject overlap on place, move, rotate, align, and nudge', () => {
+  useStore.getState().loadProject({ ...emptyProject, topWidth: 100, topHeight: 100, gridSize: 1 });
+  useStore.getState().addMasterCell('analog_lib', 'BLK', 20, 10, '#2563eb');
+  const master = Object.values(useStore.getState().masterCells)[0];
+
+  // Place first block at [0..20] x [0..10]
+  useStore.getState().placeInstance(master.id, 0, 0, 'R0');
+
+  // Overlapping placement is rejected
+  assert.throws(
+    () => useStore.getState().placeInstance(master.id, 10, 5, 'R0'),
+    /only Pixel Array may overlap/,
+  );
+
+  // Touching / abutting edge placement (0 gap at x = 20) IS allowed
+  useStore.getState().placeInstance(master.id, 20, 0, 'R0');
+  const [first, second] = useStore.getState().instances;
+
+  // Moving second block onto first throws
+  assert.throws(
+    () => useStore.getState().updateInstancePosition(second.id, 5, 0),
+    /only Pixel Array may overlap/,
+  );
+
+  // Nudging second block left into first aborts atomically
+  useStore.getState().setSelection([second.id]);
+  useStore.getState().nudgeSelection(-1, 0);
+  assert.equal(useStore.getState().instances[1].x, 20);
+
+  // Rotating a block so its rotated footprint collides with neighbor throws
+  useStore.getState().updateInstancePosition(second.id, 20, 0);
+  useStore.getState().placeInstance(master.id, 0, 11, 'R0'); // [0..20] x [11..21], 1 um above first
+  const third = useStore.getState().instances[2];
+  assert.throws(
+    () => useStore.getState().updateInstanceOrientation(third.id, 'R90'),
+    /only Pixel Array may overlap/,
+  );
+
+  // Aligning second left edge onto first left edge throws (would overlap)
+  assert.throws(
+    () => useStore.getState().alignInstanceEdges(second.id, first.id, 'left', 'left', 0),
+    /only Pixel Array may overlap/,
+  );
+
+  // Pixel Array CAN overlap all IP blocks freely
+  useStore.getState().startPixelArrayPlacement(60, 40);
+  useStore.getState().placePixelArray(10, 5);
+  assert.equal(useStore.getState().pixelArray?.visible, true);
+  assert.equal(useStore.getState().pixelArray?.width, 60);
 });

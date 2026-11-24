@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, clampInstancePosition, computePadGroupPositions, getTransformProps, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
+import { useStore, clampInstancePosition, computePadGroupPositions, findOverlappingInstance, getTransformProps, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
 import type { Instance } from '../store/useStore';
 import { getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment';
 import type { AlignmentEdge } from '../utils/alignment';
@@ -837,9 +837,14 @@ export const FloorplanCanvas: React.FC = () => {
     }
     const umX = node.x() / SCALE_FACTOR;
     const umY = node.y() / SCALE_FACTOR;
+    const original = instances.find(item => item.id === instanceId);
     try {
       updateInstancePosition(instanceId, umX, umY);
     } catch (error) {
+      if (original) {
+        node.x(original.x * SCALE_FACTOR);
+        node.y(original.y * SCALE_FACTOR);
+      }
       alert(error instanceof Error ? error.message : 'Unable to move the selected block.');
     }
   };
@@ -2374,6 +2379,11 @@ export const FloorplanCanvas: React.FC = () => {
                 </>
               );
             }
+            const ghostOverlap = findOverlappingInstance(
+              { x: ghostPosition.x, y: ghostPosition.y, orientation: previewOrientation, width: m.width, height: m.height },
+              instances,
+              masterCells,
+            );
             return (
               <Group
                 x={ghostPosition.x * SCALE_FACTOR}
@@ -2381,17 +2391,17 @@ export const FloorplanCanvas: React.FC = () => {
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
-                opacity={0.5}
+                opacity={ghostOverlap ? 0.72 : 0.5}
                 listening={false}
               >
                 <Rect
                   width={m.width * SCALE_FACTOR}
                   height={m.height * SCALE_FACTOR}
-                  fill={m.color}
-                  stroke="#f8fafc"
-                  strokeWidth={2 / stageScale}
+                  fill={ghostOverlap ? '#ef4444' : m.color}
+                  stroke={ghostOverlap ? '#dc2626' : '#f8fafc'}
+                  strokeWidth={(ghostOverlap ? 2.5 : 2) / stageScale}
                   dash={[5 / stageScale, 5 / stageScale]}
-                  opacity={0.5}
+                  opacity={ghostOverlap ? 0.55 : 0.5}
                 />
                 {(() => {
                   const w = m.width * SCALE_FACTOR;

@@ -242,6 +242,109 @@
   padding-right: 4px;
 }
 
+.virtuoso-lib-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.virtuoso-lib-folder {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+
+.virtuoso-lib-folder__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.045);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.virtuoso-lib-folder__toggle {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.virtuoso-lib-folder__icon {
+  color: #64d2ff;
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.virtuoso-lib-folder__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.virtuoso-lib-folder__count {
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.virtuoso-lib-folder__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.virtuoso-lib-cells {
+  list-style: none;
+  margin: 0;
+  padding: 6px 6px 6px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+
+.virtuoso-lib-cells::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 6px;
+  bottom: 8px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.cell-item--tree {
+  padding: 7px 8px;
+  border-radius: 9px;
+  background-color: rgba(255, 255, 255, 0.035);
+}
+
+.virtuoso-lib-empty {
+  padding: 8px 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
 .lib-mini-btn {
   border: 0;
   background: transparent;

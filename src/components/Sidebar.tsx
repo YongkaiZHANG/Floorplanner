@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
 import type { Cell, PadSide, PendingInstanceArray } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiEdit3, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2 } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiEdit3, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
 import { wouldCreateHierarchyCycle } from '../utils/hierarchy';
@@ -39,7 +39,7 @@ export const Sidebar: React.FC = () => {
   const [isHovered, setIsHovered] = useState(false);
   const hoverTimeout = useRef<number | null>(null);
   
-  const [selectedLibraryFilter, setSelectedLibraryFilter] = useState<string>('ALL');
+  const [collapsedLibs, setCollapsedLibs] = useState<Record<string, boolean>>({});
   const [showNewLibModal, setShowNewLibModal] = useState(false);
   const [newLibraryDraft, setNewLibraryDraft] = useState('');
 
@@ -125,18 +125,24 @@ export const Sidebar: React.FC = () => {
       .sort((a, b) => a.libName.localeCompare(b.libName) || a.cellName.localeCompare(b.cellName))
   ), [masterCells, activeCellId, effectiveCellViews, instLibFilter]);
 
-  const visibleMasterCells = useMemo(() => (
-    Object.values(masterCells)
-      .filter(cell => selectedLibraryFilter === 'ALL' || cell.libName === selectedLibraryFilter)
-      .sort((a, b) => a.libName.localeCompare(b.libName) || a.cellName.localeCompare(b.cellName))
-  ), [masterCells, selectedLibraryFilter]);
-
-  const countCellsInLib = (lib: string) => {
-    let count = rootLibName === lib ? 1 : 0;
-    for (const cell of Object.values(masterCells)) {
-      if (cell.libName === lib) count += 1;
+  const cellsByLibrary = useMemo(() => {
+    const grouped = new Map<string, Cell[]>();
+    for (const lib of availableLibraries) {
+      grouped.set(lib, []);
     }
-    return count;
+    for (const cell of Object.values(masterCells)) {
+      const list = grouped.get(cell.libName) ?? [];
+      list.push(cell);
+      grouped.set(cell.libName, list);
+    }
+    for (const list of grouped.values()) {
+      list.sort((a, b) => a.cellName.localeCompare(b.cellName));
+    }
+    return grouped;
+  }, [availableLibraries, masterCells]);
+
+  const toggleLibExpanded = (lib: string) => {
+    setCollapsedLibs(prev => ({ ...prev, [lib]: !prev[lib] }));
   };
 
   const handleCreateLibrarySubmit = (event: React.FormEvent) => {
@@ -148,7 +154,7 @@ export const Sidebar: React.FC = () => {
     }
     try {
       createLibrary(trimmed);
-      setSelectedLibraryFilter(trimmed);
+      setCollapsedLibs(prev => ({ ...prev, [trimmed]: false }));
       setNewLibName(trimmed);
       setNewLibraryDraft('');
       setShowNewLibModal(false);
@@ -162,7 +168,6 @@ export const Sidebar: React.FC = () => {
     if (!next || next.trim() === lib) return;
     try {
       renameLibrary(lib, next.trim());
-      if (selectedLibraryFilter === lib) setSelectedLibraryFilter(next.trim());
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to rename library.');
     }
@@ -172,7 +177,6 @@ export const Sidebar: React.FC = () => {
     if (!confirm(`Delete empty library "${lib}"?`)) return;
     try {
       deleteLibrary(lib);
-      if (selectedLibraryFilter === lib) setSelectedLibraryFilter('ALL');
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to delete library.');
     }
@@ -193,9 +197,7 @@ export const Sidebar: React.FC = () => {
         setEditingCellId(null);
       } else {
         addMasterCell(resolvedLib, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle, openCellAfterCreate);
-        if (selectedLibraryFilter !== 'ALL' && selectedLibraryFilter !== resolvedLib) {
-          setSelectedLibraryFilter(resolvedLib);
-        }
+        setCollapsedLibs(prev => ({ ...prev, [resolvedLib]: false }));
       }
       setShowCreateModal(false);
       setNewCellName('');
@@ -263,9 +265,9 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  const openCreateModal = () => {
+  const openCreateModal = (presetLib?: string) => {
     setEditingCellId(null);
-    setNewLibName(selectedLibraryFilter !== 'ALL' ? selectedLibraryFilter : topLibName);
+    setNewLibName(presetLib ?? topLibName);
     setNewCellName('');
     setNewOpacity('50');
     setNewOutlineStyle('solid');
@@ -352,10 +354,10 @@ export const Sidebar: React.FC = () => {
   const padEndCoordinate = padStartCoordinate + padSpan;
 
   useEffect(() => {
-    if (showCreateModal && !editingCellId) {
-      setNewLibName(selectedLibraryFilter !== 'ALL' ? selectedLibraryFilter : topLibName);
+    if (showCreateModal && !editingCellId && !newLibName.trim()) {
+      setNewLibName(topLibName);
     }
-  }, [showCreateModal, editingCellId, selectedLibraryFilter, topLibName]);
+  }, [showCreateModal, editingCellId, newLibName, topLibName]);
 
   useEffect(() => {
     if (!showInstantiateModal) return;
@@ -419,7 +421,194 @@ export const Sidebar: React.FC = () => {
       <div className="sidebar glass-panel">
         <div className="sidebar-section">
           <div className="section-header">
-            <h3 className="section-title"><FiLayers /> {activeCellId ? 'Active Cell View' : 'Top Cell'}</h3>
+            <h3 className="section-title"><FiFolder /> Library Manager</h3>
+            <div className="section-actions">
+              <button
+                className="icon-btn"
+                type="button"
+                onClick={() => {
+                  setNewLibraryDraft('');
+                  setShowNewLibModal(true);
+                }}
+                title="New Library (File → New → Library)"
+              >
+                <FiFolderPlus />
+              </button>
+              <button className="icon-btn" type="button" onClick={() => openCreateModal()} title="New Cell View (N)">
+                <FiPlus />
+              </button>
+            </div>
+          </div>
+
+          <div className="virtuoso-lib-tree" role="tree" aria-label="Virtuoso Libraries and Cells">
+            {availableLibraries.map(lib => {
+              const libCells = cellsByLibrary.get(lib) ?? [];
+              const hasTopCell = rootLibName === lib;
+              const totalCells = libCells.length + (hasTopCell ? 1 : 0);
+              const isCollapsed = Boolean(collapsedLibs[lib]);
+              return (
+                <div key={lib} className="virtuoso-lib-folder" role="treeitem" aria-expanded={!isCollapsed}>
+                  <div className="virtuoso-lib-folder__header">
+                    <button
+                      type="button"
+                      className="virtuoso-lib-folder__toggle"
+                      onClick={() => toggleLibExpanded(lib)}
+                      title={`${isCollapsed ? 'Expand' : 'Collapse'} library ${lib}`}
+                    >
+                      {isCollapsed ? <FiChevronRight /> : <FiChevronDown />}
+                      <FiFolder className="virtuoso-lib-folder__icon" />
+                      <span className="virtuoso-lib-folder__name" title={lib}>{lib}</span>
+                      <span className="virtuoso-lib-folder__count">{totalCells}</span>
+                    </button>
+                    <div className="virtuoso-lib-folder__actions">
+                      <button
+                        type="button"
+                        className="lib-mini-btn"
+                        onClick={() => openCreateModal(lib)}
+                        title={`New Cell View inside ${lib}`}
+                      >
+                        <FiPlus />
+                      </button>
+                      <button
+                        type="button"
+                        className="lib-mini-btn"
+                        onClick={() => handleRenameLibrary(lib)}
+                        title={`Rename library ${lib}`}
+                      >
+                        <FiEdit2 />
+                      </button>
+                      {totalCells === 0 && (
+                        <button
+                          type="button"
+                          className="lib-mini-btn lib-mini-btn--danger"
+                          onClick={() => handleDeleteLibrary(lib)}
+                          title={`Delete empty library ${lib}`}
+                        >
+                          <FiTrash2 />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {!isCollapsed && (
+                    <ul className="virtuoso-lib-cells" role="group">
+                      {hasTopCell && (
+                        <li
+                          className={`cell-item cell-item--tree static${activeCellId === null ? ' cell-item--open' : ''}`}
+                          onDoubleClick={() => openCellView(null)}
+                          title={`Double-click to open ${rootLibName}/${rootCellName}/layout`}
+                        >
+                          <div className="cell-item__info">
+                            <div className="cell-swatch cell-swatch--dashed">
+                              <i style={{ backgroundColor: '#2997ff', opacity: 0.7 }} />
+                            </div>
+                            <div className="cell-item__text">
+                              <div className="cell-item__title-row">
+                                <span className="cell-name" title={`${rootLibName}/${rootCellName}`}>{rootCellName}</span>
+                                <span className="top-pill">TOP</span>
+                              </div>
+                              <div className="cell-item__meta">
+                                <span className="size-badge">{rootWidth.toFixed(1)}×{rootHeight.toFixed(1)} µm</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="cell-item__actions">
+                            <button
+                              className={`icon-btn${activeCellId === null ? ' icon-btn--active' : ''}`}
+                              onClick={() => openCellView(null)}
+                              title="Open Top Cell layout view"
+                            >
+                              <FiEdit3 />
+                            </button>
+                            <button
+                              className="icon-btn"
+                              onClick={() => {
+                                if (activeCellId !== null) openCellView(null);
+                                setEditTopLibName(rootLibName);
+                                setEditTopCellName(rootCellName);
+                                setEditTopWidth(rootWidth.toString());
+                                setEditTopHeight(rootHeight.toString());
+                                setEditPadInset((rootView?.padInset ?? padInset).toString());
+                                setShowEditTopModal(true);
+                              }}
+                              title="Top Cell Properties"
+                            >
+                              <FiSettings />
+                            </button>
+                          </div>
+                        </li>
+                      )}
+                      {libCells.map(cell => {
+                        const isOpenView = activeCellId === cell.id;
+                        const subCount = isOpenView
+                          ? instances.length
+                          : (cellViews[cell.id]?.instances.length ?? 0);
+                        const blocksCycle = wouldCreateHierarchyCycle(activeCellId, cell.id, effectiveCellViews);
+                        return (
+                          <li
+                            key={cell.id}
+                            className={`cell-item cell-item--tree static${isOpenView ? ' cell-item--open' : ''}`}
+                            onDoubleClick={() => openCellView(cell.id)}
+                            title={`Double-click to open ${cell.libName}/${cell.cellName}/layout`}
+                          >
+                            <div className="cell-item__info">
+                              <div
+                                className={`cell-swatch cell-swatch--${cell.outlineStyle ?? 'solid'}`}
+                              >
+                                <i style={{ backgroundColor: cell.color, opacity: cell.opacity ?? 0.5 }} />
+                              </div>
+                              <div className="cell-item__text">
+                                <div className="cell-item__title-row">
+                                  <span className="cell-name" title={`${cell.libName}/${cell.cellName}`}>{cell.cellName}</span>
+                                  {subCount > 0 && (
+                                    <span className="subcount-badge" title={`${subCount} sub-instance${subCount === 1 ? '' : 's'} inside this cell`}>
+                                      {subCount} sub
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="cell-item__meta">
+                                  <span className="size-badge">{cell.width.toFixed(1)}×{cell.height.toFixed(1)} µm</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="cell-item__actions">
+                              <button
+                                className={`icon-btn${isOpenView ? ' icon-btn--active' : ''}`}
+                                onClick={() => openCellView(cell.id)}
+                                title={`Open ${cell.cellName} layout view`}
+                              >
+                                <FiEdit3 />
+                              </button>
+                              <button className="icon-btn" onClick={() => openEditModal(cell)} title="Cell Properties">
+                                <FiSettings />
+                              </button>
+                              <button
+                                className="icon-btn"
+                                style={{ color: blocksCycle ? 'var(--text-tertiary)' : '#2997ff', opacity: blocksCycle ? 0.35 : 1 }}
+                                disabled={blocksCycle}
+                                onClick={() => handleStartPlacement(cell.id)}
+                                title={blocksCycle ? 'Cannot instantiate inside itself (would create a hierarchy cycle)' : `Instantiate ${cell.cellName} in ${topCellName}`}
+                              >
+                                <FiCrosshair />
+                              </button>
+                            </div>
+                          </li>
+                        );
+                      })}
+                      {totalCells === 0 && (
+                        <li className="virtuoso-lib-empty">Empty library · click + to add a cell</li>
+                      )}
+                    </ul>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="sidebar-section">
+          <div className="section-header">
+            <h3 className="section-title"><FiLayers /> Active View Tools</h3>
             <div className="section-actions">
               <button className="icon-btn" onClick={() => {
                 setEditTopLibName(topLibName);
@@ -428,7 +617,7 @@ export const Sidebar: React.FC = () => {
                 setEditTopHeight(topHeight.toString());
                 setEditPadInset(padInset.toString());
                 setShowEditTopModal(true);
-              }} title={activeCellId ? 'Edit Active Cell View' : 'Edit Top Cell'}>
+              }} title="Edit Active Cell View Properties">
                 <FiSettings />
               </button>
             </div>
@@ -453,9 +642,9 @@ export const Sidebar: React.FC = () => {
                 type="button"
                 className="return-top-btn"
                 onClick={() => openCellView(null)}
-                title={`Return to Top Cell (${rootView?.topLibName ?? topLibName}/${rootView?.topCellName ?? 'top'})`}
+                title={`Return to Top Cell (${rootLibName}/${rootCellName})`}
               >
-                <FiArrowUpLeft /> Back to {rootView?.topCellName ?? 'Top Cell'}
+                <FiArrowUpLeft /> Back to {rootCellName}
               </button>
             )}
           </div>
@@ -476,7 +665,7 @@ export const Sidebar: React.FC = () => {
               {pixelArray?.visible ? <FiEyeOff /> : <FiEye />}
               <span>
                 <strong>{pixelArray?.visible ? 'Disable Pixel Array' : 'Enable Pixel Array'}</strong>
-                <small>{pixelArray ? `${pixelArray.width} × ${pixelArray.height} um · position kept when hidden` : 'Define its size, then click to place'}</small>
+                <small>{pixelArray ? `${pixelArray.width} × ${pixelArray.height} µm · only overlap-capable cell` : 'Only cell allowed to overlap other blocks'}</small>
               </span>
             </button>
             {pixelArray && (
@@ -488,191 +677,6 @@ export const Sidebar: React.FC = () => {
               </div>
             )}
           </div>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="section-header">
-            <h3 className="section-title"><FiFolder /> Library Manager</h3>
-            <div className="section-actions">
-              <button
-                className="icon-btn"
-                type="button"
-                onClick={() => {
-                  setNewLibraryDraft('');
-                  setShowNewLibModal(true);
-                }}
-                title="New Library (File → New → Library)"
-              >
-                <FiFolderPlus />
-              </button>
-              <button className="icon-btn" type="button" onClick={openCreateModal} title="New Cell View (N)">
-                <FiPlus />
-              </button>
-            </div>
-          </div>
-
-          <div className="lib-browser" role="tablist" aria-label="Virtuoso Libraries">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={selectedLibraryFilter === 'ALL'}
-              className={`lib-chip${selectedLibraryFilter === 'ALL' ? ' active' : ''}`}
-              onClick={() => setSelectedLibraryFilter('ALL')}
-            >
-              <span>All</span>
-              <small>{Object.keys(masterCells).length + 1}</small>
-            </button>
-            {availableLibraries.map(lib => {
-              const count = countCellsInLib(lib);
-              const isSelected = selectedLibraryFilter === lib;
-              return (
-                <div key={lib} className={`lib-chip-wrap${isSelected ? ' active' : ''}`}>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={isSelected}
-                    className={`lib-chip${isSelected ? ' active' : ''}`}
-                    onClick={() => setSelectedLibraryFilter(lib)}
-                    title={`Filter Library Manager to ${lib}`}
-                  >
-                    <span>{lib}</span>
-                    <small>{count}</small>
-                  </button>
-                  {isSelected && (
-                    <span className="lib-chip-actions">
-                      <button
-                        type="button"
-                        className="lib-mini-btn"
-                        onClick={() => handleRenameLibrary(lib)}
-                        title={`Rename library ${lib}`}
-                      >
-                        <FiEdit2 />
-                      </button>
-                      {count === 0 && (
-                        <button
-                          type="button"
-                          className="lib-mini-btn lib-mini-btn--danger"
-                          onClick={() => handleDeleteLibrary(lib)}
-                          title={`Delete empty library ${lib}`}
-                        >
-                          <FiTrash2 />
-                        </button>
-                      )}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          <ul className="cell-list">
-            {(selectedLibraryFilter === 'ALL' || selectedLibraryFilter === rootLibName) && (
-              <li
-                className={`cell-item static${activeCellId === null ? ' cell-item--open' : ''}`}
-                onDoubleClick={() => openCellView(null)}
-                title="Double-click to open Top Cell layout view"
-              >
-                <div className="cell-item__info">
-                  <div className="cell-swatch cell-swatch--dashed">
-                    <i style={{ backgroundColor: '#2997ff', opacity: 0.7 }} />
-                  </div>
-                  <div className="cell-item__text">
-                    <div className="cell-item__title-row">
-                      <span className="cell-name" title={`${rootLibName}/${rootCellName}`}>{rootCellName}</span>
-                      <span className="top-pill">TOP</span>
-                    </div>
-                    <div className="cell-item__meta">
-                      <span className="size-badge">{rootWidth.toFixed(1)}×{rootHeight.toFixed(1)}</span>
-                      <span className="lib-badge" title={rootLibName}>{rootLibName}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="cell-item__actions">
-                  <button
-                    className={`icon-btn${activeCellId === null ? ' icon-btn--active' : ''}`}
-                    onClick={() => openCellView(null)}
-                    title="Open Top Cell layout view"
-                  >
-                    <FiEdit3 />
-                  </button>
-                  <button
-                    className="icon-btn"
-                    onClick={() => {
-                      if (activeCellId !== null) openCellView(null);
-                      setEditTopLibName(rootLibName);
-                      setEditTopCellName(rootCellName);
-                      setEditTopWidth(rootWidth.toString());
-                      setEditTopHeight(rootHeight.toString());
-                      setEditPadInset((rootView?.padInset ?? padInset).toString());
-                      setShowEditTopModal(true);
-                    }}
-                    title="Top Cell Properties"
-                  >
-                    <FiSettings />
-                  </button>
-                </div>
-              </li>
-            )}
-            {visibleMasterCells.map(cell => {
-              const isOpenView = activeCellId === cell.id;
-              const subCount = isOpenView
-                ? instances.length
-                : (cellViews[cell.id]?.instances.length ?? 0);
-              const blocksCycle = wouldCreateHierarchyCycle(activeCellId, cell.id, effectiveCellViews);
-              return (
-                <li
-                  key={cell.id}
-                  className={`cell-item static${isOpenView ? ' cell-item--open' : ''}`}
-                  onDoubleClick={() => openCellView(cell.id)}
-                  title={`Double-click to open ${cell.libName}/${cell.cellName}/layout`}
-                >
-                  <div className="cell-item__info">
-                    <div
-                      className={`cell-swatch cell-swatch--${cell.outlineStyle ?? 'solid'}`}
-                    >
-                      <i style={{ backgroundColor: cell.color, opacity: cell.opacity ?? 0.5 }} />
-                    </div>
-                    <div className="cell-item__text">
-                      <span className="cell-name" title={`${cell.libName}/${cell.cellName}`}>{cell.cellName}</span>
-                      <div className="cell-item__meta">
-                        <span className="size-badge">{cell.width.toFixed(1)}×{cell.height.toFixed(1)}</span>
-                        <span className="lib-badge" title={cell.libName}>{cell.libName}</span>
-                        {subCount > 0 && (
-                          <span className="subcount-badge" title={`${subCount} sub-instance${subCount === 1 ? '' : 's'} inside this cell`}>
-                            {subCount} sub
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="cell-item__actions">
-                    <button
-                      className={`icon-btn${isOpenView ? ' icon-btn--active' : ''}`}
-                      onClick={() => openCellView(cell.id)}
-                      title={`Open ${cell.cellName} layout view`}
-                    >
-                      <FiEdit3 />
-                    </button>
-                    <button className="icon-btn" onClick={() => openEditModal(cell)} title="Cell Properties">
-                      <FiSettings />
-                    </button>
-                    <button
-                      className="icon-btn"
-                      style={{ color: blocksCycle ? 'var(--text-tertiary)' : '#2997ff', opacity: blocksCycle ? 0.35 : 1 }}
-                      disabled={blocksCycle}
-                      onClick={() => handleStartPlacement(cell.id)}
-                      title={blocksCycle ? 'Cannot instantiate inside itself (would create a hierarchy cycle)' : `Instantiate ${cell.cellName} in ${topCellName}`}
-                    >
-                      <FiCrosshair />
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-            {visibleMasterCells.length === 0 && selectedLibraryFilter !== 'ALL' && selectedLibraryFilter !== rootLibName && (
-              <p className="empty-text">Empty library. Click + to create a Cell View in {selectedLibraryFilter}.</p>
-            )}
-          </ul>
         </div>
 
         <div className="sidebar-section">

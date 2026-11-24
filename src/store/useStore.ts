@@ -943,6 +943,84 @@ const alignmentPositionPatch = (
   };
 };
 
+const OVERLAP_EPSILON = 1e-9;
+
+export const boundsOverlap = (
+  a: { left: number; right: number; bottom: number; top: number },
+  b: { left: number; right: number; bottom: number; top: number },
+): boolean => (
+  Math.min(a.right, b.right) - Math.max(a.left, b.left) > OVERLAP_EPSILON
+  && Math.min(a.top, b.top) - Math.max(a.bottom, b.bottom) > OVERLAP_EPSILON
+);
+
+/**
+ * Finds the first existing instance whose physical footprint strictly overlaps
+ * `candidate` (touching/abutting edges with zero interior area are allowed).
+ * Pixel Array is intentionally exempt because it is the only cell allowed to overlap.
+ */
+export const findOverlappingInstance = (
+  candidate: { id?: string; x: number; y: number; orientation: string; width: number; height: number },
+  instances: readonly Instance[],
+  masterCells: Record<string, Cell>,
+  ignoreIds?: ReadonlySet<string>,
+): Instance | null => {
+  const candidateBounds = getPhysicalBounds({
+    id: candidate.id ?? '__candidate__',
+    x: candidate.x,
+    y: candidate.y,
+    orientation: candidate.orientation,
+    width: candidate.width,
+    height: candidate.height,
+  });
+  for (const existing of instances) {
+    if (candidate.id && existing.id === candidate.id) continue;
+    if (ignoreIds?.has(existing.id)) continue;
+    const master = masterCells[existing.cellId];
+    if (!master) continue;
+    const existingBounds = getPhysicalBounds({
+      ...existing,
+      width: master.width,
+      height: master.height,
+    });
+    if (boundsOverlap(candidateBounds, existingBounds)) {
+      return existing;
+    }
+  }
+  return null;
+};
+
+/**
+ * Ensures none of the instances in `movedIds` overlap each other or any stationary
+ * instance. Pixel Array is intentionally exempt (only Pixel Array may overlap).
+ */
+const assertMovedInstancesDoNotOverlap = (
+  instances: readonly Instance[],
+  masterCells: Record<string, Cell>,
+  movedIds: ReadonlySet<string>,
+  actionLabel: string,
+) => {
+  const boxes = instances.flatMap(inst => {
+    const master = masterCells[inst.cellId];
+    if (!master) return [];
+    return [{
+      inst,
+      bounds: getPhysicalBounds({ ...inst, width: master.width, height: master.height }),
+    }];
+  });
+  for (let i = 0; i < boxes.length; i += 1) {
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      const a = boxes[i];
+      const b = boxes[j];
+      if (!movedIds.has(a.inst.id) && !movedIds.has(b.inst.id)) continue;
+      if (boundsOverlap(a.bounds, b.bounds)) {
+        throw new RangeError(
+          `Cannot ${actionLabel}: ${a.inst.name} overlaps ${b.inst.name} (only Pixel Array may overlap other cells).`,
+        );
+      }
+    }
+  }
+};
+
 const isPadTouchingPerimeter = (
   bounds: { left: number; right: number; bottom: number; top: number },
   topWidth: number,
@@ -1005,6 +1083,7 @@ const alignmentGroupPositionPatch = (
     }
     return { ...instance, x: checked.x, y: checked.y };
   });
+  assertMovedInstancesDoNotOverlap(instances, state.masterCells, sourceSet, 'align');
   return { instances, pixelArray: state.pixelArray };
 };
 
@@ -1576,6 +1655,25 @@ export const useStore = create<ProjectState>((set) => ({
       }
     }
 
+    if (Math.abs(w - existing.width) > 1e-9 || Math.abs(h - existing.height) > 1e-9) {
+      const affectedActive = new Set(instances.filter(i => editingActiveView || i.cellId === id).map(i => i.id));
+      if (affectedActive.size > 0) {
+        assertMovedInstancesDoNotOverlap(instances, masterCells, affectedActive, `resize ${cellName}`);
+      }
+      if (rootView) {
+        const affectedRoot = new Set(rootView.instances.filter(i => i.cellId === id).map(i => i.id));
+        if (affectedRoot.size > 0) {
+          assertMovedInstancesDoNotOverlap(rootView.instances, masterCells, affectedRoot, `resize ${cellName}`);
+        }
+      }
+      for (const [viewCellId, view] of Object.entries(nextCellViews)) {
+        const affectedView = new Set(view.instances.filter(i => viewCellId === id || i.cellId === id).map(i => i.id));
+        if (affectedView.size > 0) {
+          assertMovedInstancesDoNotOverlap(view.instances, masterCells, affectedView, `resize ${cellName}`);
+        }
+      }
+    }
+
     return commitProjectPatch(state, `Edit ${libName}/${cellName}`, {
       masterCells,
       instances,
@@ -1681,6 +1779,17 @@ export const useStore = create<ProjectState>((set) => ({
       ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, effectiveOrientation, state.padInset)
       : clampInstancePosition(targetX, targetY, effectiveOrientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
 
+    const blocker = findOverlappingInstance(
+      { x: clamped.x, y: clamped.y, orientation: effectiveOrientation, width: master.width, height: master.height },
+      state.instances,
+      state.masterCells,
+    );
+    if (blocker) {
+      throw new RangeError(
+        `Cannot place ${master.cellName} here: overlaps ${blocker.name} (only Pixel Array may overlap other cells).`,
+      );
+    }
+
     const usedNames = new Set(state.instances.map(i => i.name));
     const trimmedCustom = customName?.trim() ?? '';
     let resolvedName: string;
@@ -1743,6 +1852,17 @@ export const useStore = create<ProjectState>((set) => ({
         const placed = master.kind === 'pad'
           ? snapPadToNearestEdge(reqX, reqY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset)
           : clampInstancePosition(reqX, reqY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+
+        const blocker = findOverlappingInstance(
+          { x: placed.x, y: placed.y, orientation, width: master.width, height: master.height },
+          instances,
+          state.masterCells,
+        );
+        if (blocker) {
+          throw new RangeError(
+            `Cannot place ${rows}×${cols} ${master.cellName} mosaic: overlaps ${blocker.name} (only Pixel Array may overlap other cells).`,
+          );
+        }
 
         let name: string;
         if (prefix) {
@@ -1865,6 +1985,16 @@ export const useStore = create<ProjectState>((set) => ({
     const masterCells = { ...state.masterCells, [master.id]: master };
     const instances = [...state.instances];
     for (const position of positions) {
+      const blocker = findOverlappingInstance(
+        { x: position.x, y: position.y, orientation, width: master.width, height: master.height },
+        instances,
+        masterCells,
+      );
+      if (blocker) {
+        throw new RangeError(
+          `Cannot place ${cellName} pad row: overlaps ${blocker.name} (only Pixel Array may overlap other cells).`,
+        );
+      }
       const instance: Instance = {
         id: uuidv4(),
         cellId: master.id,
@@ -1978,6 +2108,16 @@ export const useStore = create<ProjectState>((set) => ({
     });
     const instances = [...state.instances];
     for (const position of positions) {
+      const blocker = findOverlappingInstance(
+        { x: position.x, y: position.y, orientation: snapped.orientation, width: master.width, height: master.height },
+        instances,
+        state.masterCells,
+      );
+      if (blocker) {
+        throw new RangeError(
+          `Cannot place ${master.cellName} pad group: overlaps ${blocker.name} (only Pixel Array may overlap other cells).`,
+        );
+      }
       instances.push({
         id: uuidv4(), cellId: master.id, name: getNextInstanceName(instances),
         ...position, orientation: snapped.orientation,
@@ -2099,22 +2239,30 @@ export const useStore = create<ProjectState>((set) => ({
         }
         const master = state.masterCells[inst.cellId];
         if (!master) return inst;
-        if (master.kind === 'pad') {
-          const position = snapPadToNearestEdge(
-            x,
-            y,
-            master.width,
-            master.height,
-            state.topWidth,
-            state.topHeight,
-            state.gridSize,
-            inst.orientation,
-            state.padInset,
+        const nextPos = master.kind === 'pad'
+          ? snapPadToNearestEdge(
+              x,
+              y,
+              master.width,
+              master.height,
+              state.topWidth,
+              state.topHeight,
+              state.gridSize,
+              inst.orientation,
+              state.padInset,
+            )
+          : clampInstancePosition(x, y, inst.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+        const blocker = findOverlappingInstance(
+          { id: inst.id, x: nextPos.x, y: nextPos.y, orientation: inst.orientation, width: master.width, height: master.height },
+          state.instances,
+          state.masterCells,
+        );
+        if (blocker) {
+          throw new RangeError(
+            `Cannot move ${inst.name} here: overlaps ${blocker.name} (only Pixel Array may overlap other cells).`,
           );
-          return { ...inst, x: position.x, y: position.y };
         }
-        const clamped = clampInstancePosition(x, y, inst.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
-        return { ...inst, x: clamped.x, y: clamped.y };
+        return { ...inst, x: nextPos.x, y: nextPos.y };
       }
       return inst;
     });
@@ -2160,6 +2308,7 @@ export const useStore = create<ProjectState>((set) => ({
       }
       return { ...inst, x: checked.x, y: checked.y };
     });
+    assertMovedInstancesDoNotOverlap(instances, state.masterCells, idSet, 'move selection');
     return commitProjectPatch(state, `Move ${instanceIds.length} block${instanceIds.length === 1 ? '' : 's'}`, { instances });
   }),
 
@@ -2213,6 +2362,16 @@ export const useStore = create<ProjectState>((set) => ({
         const clamped = master.kind === 'pad'
           ? snapPadToNearestEdge(centeredX, centeredY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset)
           : clampInstancePosition(centeredX, centeredY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+        const blocker = findOverlappingInstance(
+          { id: inst.id, x: clamped.x, y: clamped.y, orientation, width: master.width, height: master.height },
+          state.instances,
+          state.masterCells,
+        );
+        if (blocker) {
+          throw new RangeError(
+            `Cannot orient ${inst.name} to ${orientation}: overlaps ${blocker.name} (only Pixel Array may overlap other cells).`,
+          );
+        }
         return { ...inst, orientation, x: clamped.x, y: clamped.y };
       }
       return inst;
@@ -2325,6 +2484,11 @@ export const useStore = create<ProjectState>((set) => ({
       }
     });
     if (error) return state; // Cancel nudge if any block hits bounds or leaves perimeter
+    try {
+      assertMovedInstancesDoNotOverlap(instances, state.masterCells, selectedIds, 'nudge');
+    } catch {
+      return state; // Cancel nudge atomically if any block would overlap another cell
+    }
     return commitProjectPatch(state, `Nudge ${state.selectedInstanceIds.length} block${state.selectedInstanceIds.length === 1 ? '' : 's'}`, { instances });
   }),
 
@@ -2356,26 +2520,44 @@ export const useStore = create<ProjectState>((set) => ({
         name: getNextInstanceName(instances),
       };
       
-      try {
-        const x = item.x + offset;
-        const y = item.y - offset; // y points up, so -offset moves it down visually
-        const clamped = master.kind === 'pad'
-          ? snapPadToNearestEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset)
-          : clampInstancePosition(x, y, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
-        newInst.x = clamped.x;
-        newInst.y = clamped.y;
-      } catch {
-        // Fallback to original spot clamped
+      const bounds = getPhysicalBounds({ ...item, width: master.width, height: master.height });
+      const stepX = Math.max(offset, bounds.right - bounds.left + offset);
+      const stepY = Math.max(offset, bounds.top - bounds.bottom + offset);
+      const candidateOffsets: Array<[number, number]> = [
+        [stepX, 0],
+        [0, -stepY],
+        [-stepX, 0],
+        [0, stepY],
+        [stepX, -stepY],
+        [-stepX, -stepY],
+        [stepX, stepY],
+        [-stepX, stepY],
+        [stepX * 2, 0],
+        [0, -stepY * 2],
+      ];
+
+      let placedPos: { x: number; y: number } | null = null;
+      for (const [dx, dy] of candidateOffsets) {
         try {
           const clamped = master.kind === 'pad'
-            ? snapPadToNearestEdge(item.x, item.y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset)
-            : clampInstancePosition(item.x, item.y, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
-          newInst.x = clamped.x;
-          newInst.y = clamped.y;
+            ? snapPadToNearestEdge(item.x + dx, item.y + dy, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset)
+            : clampInstancePosition(item.x + dx, item.y + dy, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+          const blocker = findOverlappingInstance(
+            { x: clamped.x, y: clamped.y, orientation: item.orientation, width: master.width, height: master.height },
+            instances,
+            state.masterCells,
+          );
+          if (!blocker) {
+            placedPos = clamped;
+            break;
+          }
         } catch {
-          continue; // if it totally fails, skip
+          // Try next candidate spot
         }
       }
+      if (!placedPos) continue;
+      newInst.x = placedPos.x;
+      newInst.y = placedPos.y;
       
       instances.push(newInst);
       newSelectedIds.push(newInst.id);
@@ -2447,6 +2629,7 @@ export const useStore = create<ProjectState>((set) => ({
       }
       return { ...instance, x: position.x, y: position.y };
     });
+    assertMovedInstancesDoNotOverlap(instances, state.masterCells, selectedIds, `align ${operation.replace('-', ' ')}`);
     return commitProjectPatch(state, `Align ${operation.replace('-', ' ')}`, { instances });
   }),
 
@@ -2644,6 +2827,7 @@ export const useStore = create<ProjectState>((set) => ({
       }
       return { ...instance, x: position.x, y: position.y };
     });
+    assertMovedInstancesDoNotOverlap(instances, state.masterCells, selectedIds, `distribute ${axis}`);
     return commitProjectPatch(state, `Distribute ${axis}`, { instances });
   }),
   
