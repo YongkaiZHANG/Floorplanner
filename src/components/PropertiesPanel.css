@@ -253,6 +253,21 @@
   color: #ffd60a;
 }
 
+.properties-panel .input-field {
+  padding: 7px 9px;
+}
+
+.properties-panel input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.properties-panel input[type='number']::-webkit-inner-spin-button,
+.properties-panel input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .locked-banner {
   margin-bottom: 12px;
   padding: 8px 10px;
@@ -262,17 +277,4 @@
   color: #ffd60a;
   font-size: 11.5px;
   line-height: 1.4;
-}
-
-.btn-danger {
-  width: 100%;
-  justify-content: center;
-  background-color: transparent;
-  color: #ef4444;
-  border-color: #ef4444;
-}
-
-.btn-danger:hover {
-  background-color: #ef4444;
-  color: white;
 }

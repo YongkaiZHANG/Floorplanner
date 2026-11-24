@@ -203,7 +203,7 @@
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  width: 270px;
+  width: min(276px, calc(100vw - 24px));
   padding: 8px;
   border-radius: 13px;
   background: rgba(26, 26, 30, 0.97);
@@ -212,6 +212,11 @@
   -webkit-backdrop-filter: saturate(180%) blur(24px);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
   z-index: 220;
+}
+
+.virtuoso-open-dropdown--right {
+  left: auto;
+  right: 0;
 }
 
 .virtuoso-open-search {

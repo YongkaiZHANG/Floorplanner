@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { isCellEmpty, rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
 import type { Cell, PadSide, PendingInstanceArray } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiExternalLink, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight, FiArrowDownCircle, FiSquare } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiExternalLink, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight, FiArrowDownCircle, FiSquare, FiType } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
 import { wouldCreateHierarchyCycle } from '../utils/hierarchy';
@@ -624,7 +624,7 @@ export const Sidebar: React.FC = () => {
                                 <span className="top-pill">TOP</span>
                               </div>
                               <div className="cell-item__meta">
-                                <span className="size-badge">{rootWidth.toFixed(1)}×{rootHeight.toFixed(1)} µm</span>
+                                <span className="size-badge">{formatGridValue(rootWidth, gridSize)}×{formatGridValue(rootHeight, gridSize)} µm</span>
                               </div>
                             </div>
                           </div>
@@ -698,9 +698,14 @@ export const Sidebar: React.FC = () => {
                               <div className="cell-item__text">
                                 <div className="cell-item__title-row">
                                   <span className="cell-name" title={`${cell.libName}/${cell.cellName}`}>{cell.cellName}</span>
+                                </div>
+                                <div className="cell-item__meta">
+                                  <span className="size-badge">
+                                    {cellIsEmpty ? 'empty' : `${formatGridValue(cell.width, gridSize)}×${formatGridValue(cell.height, gridSize)} µm`}
+                                  </span>
                                   {rectCount > 0 && (
-                                    <span className="subcount-badge" title={`${rectCount} drawn rectangle${rectCount === 1 ? '' : 's'}`}>
-                                      {rectCount} rect{rectCount === 1 ? '' : 's'}
+                                    <span className="subcount-badge" title={`${rectCount} drawn shape${rectCount === 1 ? '' : 's'} / text label${rectCount === 1 ? '' : 's'}`}>
+                                      {rectCount} obj
                                     </span>
                                   )}
                                   {subCount > 0 && (
@@ -708,11 +713,6 @@ export const Sidebar: React.FC = () => {
                                       {subCount} sub
                                     </span>
                                   )}
-                                </div>
-                                <div className="cell-item__meta">
-                                  <span className="size-badge">
-                                    {cellIsEmpty ? 'empty' : `${cell.width.toFixed(1)}×${cell.height.toFixed(1)} µm`}
-                                  </span>
                                 </div>
                               </div>
                             </div>
@@ -778,7 +778,7 @@ export const Sidebar: React.FC = () => {
               <div className="size-badge">
                 {activeCellId && (topWidth <= 0 || topHeight <= 0)
                   ? 'empty cellview'
-                  : `${topWidth.toFixed(1)} × ${topHeight.toFixed(1)} µm`}
+                  : `${formatGridValue(topWidth, gridSize)} × ${formatGridValue(topHeight, gridSize)} µm`}
               </div>
               {!activeCellId && padInset > 0 && (
                 <div className="lib-badge" title="Seal-ring / pad inset margin">
@@ -801,6 +801,10 @@ export const Sidebar: React.FC = () => {
             <FiSquare />
             <span><strong>Draw Rectangle (LPP)</strong><small>Draw on text/drawing, M1, prBoundary… (R/D)</small></span>
           </button>
+          <button className="edge-pad-action" type="button" onClick={() => setAppMode('text')}>
+            <FiType />
+            <span><strong>Create Text Label (L)</strong><small>Place styled text on text/drawing or custom layer</small></span>
+          </button>
           {!activeCellId && (
             <button className="edge-pad-action" type="button" onClick={() => {
               setPadLibName(topLibName);
@@ -820,7 +824,7 @@ export const Sidebar: React.FC = () => {
               {pixelArray?.visible ? <FiEyeOff /> : <FiEye />}
               <span>
                 <strong>{pixelArray?.visible ? 'Disable Pixel Array' : 'Enable Pixel Array'}</strong>
-                <small>{pixelArray ? `${pixelArray.width} × ${pixelArray.height} µm · excluded from overlap DRC` : 'Optical sensor region · excluded from overlap DRC'}</small>
+                <small>{pixelArray ? `${formatGridValue(pixelArray.width, gridSize)} × ${formatGridValue(pixelArray.height, gridSize)} µm · optical sensor overlay` : 'Optical sensor region overlay'}</small>
               </span>
             </button>
             {pixelArray && (
@@ -869,78 +873,115 @@ export const Sidebar: React.FC = () => {
             </div>
           )}
           <ul className="instance-list">
-            {instances.filter(inst => {
-              const master = masterCells[inst.cellId];
-              if (!master) return false;
-              const isPad = master.kind === 'pad';
-              if (instanceFilter === 'ip' && isPad) return false;
-              if (instanceFilter === 'pad' && !isPad) return false;
-              const q = instanceQuery.trim().toLowerCase();
-              if (!q) return true;
-              return inst.name.toLowerCase().includes(q) || master.cellName.toLowerCase().includes(q);
-            }).map(inst => {
-              const master = masterCells[inst.cellId];
-              if (!master) return null;
-              return (
-                <li 
-                  key={inst.id}
-                  className={`instance-item ${selectedInstanceIds.includes(inst.id) ? 'active' : ''}`}
-                  onClick={(event) => setSelectedInstance(inst.id, event.shiftKey)}
-                  onDoubleClick={() => descendIntoInstance(inst.id)}
-                  title="Click to select · Double-click to descend into cell view"
-                >
-                  <div className="inst-header">
-                    <FiTarget className="inst-icon" />
-                    <span className="inst-name">{inst.name}</span>
-                    <span className="inst-master">({master.cellName})</span>
-                    {inst.locked && (
-                      <span className="inst-lock-badge" title="Locked">
-                        <FiLock />
-                      </span>
-                    )}
+            {(() => {
+              const filtered = instances.filter(inst => {
+                const master = masterCells[inst.cellId];
+                if (!master) return false;
+                const isPad = master.kind === 'pad';
+                if (instanceFilter === 'ip' && isPad) return false;
+                if (instanceFilter === 'pad' && !isPad) return false;
+                const q = instanceQuery.trim().toLowerCase();
+                if (!q) return true;
+                return inst.name.toLowerCase().includes(q) || master.cellName.toLowerCase().includes(q);
+              });
+              if (instances.length === 0) {
+                return <p className="empty-text">No instances placed yet.</p>;
+              }
+              if (filtered.length === 0) {
+                return (
+                  <div className="empty-filter-state">
+                    <p>No instances match the current filter.</p>
+                    <button
+                      type="button"
+                      className="text-action"
+                      onClick={() => {
+                        setInstanceQuery('');
+                        setInstanceFilter('all');
+                      }}
+                    >
+                      Reset filter
+                    </button>
                   </div>
-                  <div className="inst-pos">
-                    {formatGridValue(inst.x, gridSize)} : {formatGridValue(inst.y, gridSize)} [{inst.orientation}]
-                  </div>
-                </li>
-              );
-            })}
-            {instances.length === 0 && (
-              <p className="empty-text">No instances placed yet.</p>
-            )}
+                );
+              }
+              return filtered.map(inst => {
+                const master = masterCells[inst.cellId];
+                if (!master) return null;
+                return (
+                  <li 
+                    key={inst.id}
+                    className={`instance-item ${selectedInstanceIds.includes(inst.id) ? 'active' : ''}`}
+                    onClick={(event) => setSelectedInstance(inst.id, event.shiftKey)}
+                    onDoubleClick={() => descendIntoInstance(inst.id)}
+                    title="Click to select · Double-click to descend into cell view (X)"
+                  >
+                    <div className="inst-header">
+                      <FiTarget className="inst-icon" />
+                      <span className="inst-name">{inst.name}</span>
+                      <span className="inst-master">({master.cellName})</span>
+                      {inst.locked && (
+                        <span className="inst-lock-badge" title="Locked">
+                          <FiLock />
+                        </span>
+                      )}
+                    </div>
+                    <div className="inst-pos">
+                      {formatGridValue(inst.x, gridSize)} : {formatGridValue(inst.y, gridSize)} [{inst.orientation}]
+                    </div>
+                  </li>
+                );
+              });
+            })()}
           </ul>
         </div>
 
         {shapes.length > 0 && (
           <div className="sidebar-section">
             <div className="section-header">
-              <h3 className="section-title"><FiSquare /> {topCellName} Shapes</h3>
+              <h3 className="section-title"><FiSquare /> {topCellName} Shapes &amp; Text</h3>
               <span className="lib-badge">{shapes.length}</span>
             </div>
             <ul className="instance-list">
               {shapes.map(shape => {
                 const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                const isText = shape.kind === 'text';
                 return (
                   <li
                     key={shape.id}
                     className={`instance-item${selectedShapeId === shape.id ? ' active' : ''}`}
                     onClick={() => setSelectedShape(shape.id)}
-                    title="Click to select rectangle and inspect/edit in Properties"
+                    title={isText ? 'Click to select text label and inspect/edit in Properties' : 'Click to select rectangle and inspect/edit in Properties'}
                   >
                     <div className="inst-header">
-                      <span
-                        className="inst-icon"
-                        style={{
-                          display: 'inline-block',
-                          width: 10,
-                          height: 10,
-                          borderRadius: 2,
-                          backgroundColor: style.color,
-                          flexShrink: 0,
-                        }}
-                      />
-                      <span className="inst-name">{shape.layer}/{shape.purpose}</span>
-                      {shape.label?.trim() && <span className="inst-master">({shape.label.trim()})</span>}
+                      {isText ? (
+                        <span
+                          className="shape-text-glyph"
+                          style={{ backgroundColor: style.color }}
+                          aria-hidden="true"
+                        >
+                          T
+                        </span>
+                      ) : (
+                        <span
+                          className="inst-icon"
+                          style={{
+                            display: 'inline-block',
+                            width: 10,
+                            height: 10,
+                            borderRadius: 2,
+                            backgroundColor: style.color,
+                            flexShrink: 0,
+                          }}
+                        />
+                      )}
+                      <span className="inst-name">
+                        {isText ? (shape.label?.trim() || 'Text') : `${shape.layer}/${shape.purpose}`}
+                      </span>
+                      {isText ? (
+                        <span className="inst-master">({shape.layer}/{shape.purpose})</span>
+                      ) : (
+                        shape.label?.trim() && <span className="inst-master">({shape.label.trim()})</span>
+                      )}
                       {shape.locked && (
                         <span className="inst-lock-badge" title="Locked">
                           <FiLock />
@@ -948,7 +989,9 @@ export const Sidebar: React.FC = () => {
                       )}
                     </div>
                     <div className="inst-pos">
-                      ({formatGridValue(shape.x, gridSize)}, {formatGridValue(shape.y, gridSize)}) · {formatGridValue(shape.width, gridSize)}×{formatGridValue(shape.height, gridSize)} µm
+                      {isText
+                        ? `(${formatGridValue(shape.x, gridSize)}, ${formatGridValue(shape.y, gridSize)}) · ${formatGridValue(shape.fontSize ?? shape.height, gridSize)} µm [${shape.orientation ?? 'R0'}]`
+                        : `(${formatGridValue(shape.x, gridSize)}, ${formatGridValue(shape.y, gridSize)}) · ${formatGridValue(shape.width, gridSize)}×${formatGridValue(shape.height, gridSize)} µm`}
                     </div>
                   </li>
                 );
@@ -1257,7 +1300,7 @@ export const Sidebar: React.FC = () => {
                     {eligibleInstantiateCells.length === 0 && <option value="" disabled>No non-empty eligible cells in this library</option>}
                     {eligibleInstantiateCells.map(cell => (
                       <option key={cell.id} value={cell.id}>
-                        {cell.libName} / {cell.cellName} ({cell.width} × {cell.height} µm)
+                        {cell.libName} / {cell.cellName} ({formatGridValue(cell.width, gridSize)} × {formatGridValue(cell.height, gridSize)} µm)
                       </option>
                     ))}
                   </select>
@@ -1472,7 +1515,7 @@ export const Sidebar: React.FC = () => {
                     <input type="checkbox" checked={padAutoOrient} onChange={event => setPadAutoOrient(event.target.checked)} />
                     Auto by edge ({resolvedPadOrientation})
                   </label>
-                ) : <small>Top R0 · Right R270 · Bottom R180 · Left R90</small>}
+                ) : <small className="field-help">Top R0 · Right R270 · Bottom R180 · Left R90</small>}
               </div>
               <div className="form-group pad-fit-hint">
                 <span className="label">Placed footprint</span>

@@ -297,8 +297,16 @@
 }
 
 .lpp-input--size {
-  width: 54px;
+  width: 58px;
   text-align: right;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.lpp-input--size::-webkit-inner-spin-button,
+.lpp-input--size::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .lpp-select {

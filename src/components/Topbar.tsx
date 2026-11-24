@@ -339,7 +339,8 @@ export const Topbar: React.FC = () => {
   };
 
   return (
-    <div className="topbar glass-panel">
+    <>
+      <div className="topbar glass-panel">
       <div className="topbar-left">
         <div className="logo">
           <div className="logo-icon"></div>
@@ -639,6 +640,7 @@ export const Topbar: React.FC = () => {
           </button>
         </>}
       </div>
+      </div>
 
       {showConfig && (
         <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowConfig(false); }}>
@@ -889,6 +891,6 @@ export const Topbar: React.FC = () => {
         </div>
       )}
       <ToastViewport messages={toasts} onDismiss={id => setToasts(current => current.filter(toast => toast.id !== id))} />
-    </div>
+    </>
   );
 };

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getTransformProps, useStore } from '../store/useStore';
 import type { Cell, Instance, LayoutShape, PixelArray } from '../store/useStore';
+import { formatGridValue } from '../utils/grid';
 import { resolveLayerStyle, resolveTextFontFamilyCss } from '../utils/layoutLayers';
 import { FloorplanCanvas } from '../canvas/FloorplanCanvas';
 import {
@@ -44,6 +45,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
     topCellName,
     topWidth,
     topHeight,
+    gridSize,
     libraries,
     masterCells,
     instances,
@@ -64,6 +66,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
   } = useStore();
 
   const [openPickerVisible, setOpenPickerVisible] = useState(false);
+  const [pickerAlignRight, setPickerAlignRight] = useState(false);
   const [pickerQuery, setPickerQuery] = useState('');
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -168,9 +171,9 @@ export const VirtuosoCellViewBar: React.FC = () => {
             const cell = isRoot ? rootCellName : (tabMaster?.cellName ?? '');
             const tabColor = isRoot ? '#2997ff' : (tabMaster?.color ?? '#3b82f6');
             const dims = isRoot
-              ? `${rootWidth.toFixed(1)} × ${rootHeight.toFixed(1)} µm`
+              ? `${formatGridValue(rootWidth, gridSize)} × ${formatGridValue(rootHeight, gridSize)} µm`
               : tabMaster && tabMaster.width > 0 && tabMaster.height > 0
-                ? `${tabMaster.width.toFixed(1)} × ${tabMaster.height.toFixed(1)} µm`
+                ? `${formatGridValue(tabMaster.width, gridSize)} × ${formatGridValue(tabMaster.height, gridSize)} µm`
                 : 'empty';
             return (
               <div
@@ -233,6 +236,8 @@ export const VirtuosoCellViewBar: React.FC = () => {
             className="virtuoso-open-btn"
             onClick={() => {
               setPickerQuery('');
+              const rect = pickerRef.current?.getBoundingClientRect();
+              setPickerAlignRight(Boolean(rect && rect.left + 290 > window.innerWidth));
               setOpenPickerVisible(open => !open);
             }}
             aria-expanded={openPickerVisible}
@@ -243,7 +248,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
             <FiChevronDown />
           </button>
           {openPickerVisible && (
-            <div className="virtuoso-open-dropdown" role="menu">
+            <div className={`virtuoso-open-dropdown${pickerAlignRight ? ' virtuoso-open-dropdown--right' : ''}`} role="menu">
               <div className="virtuoso-open-search">
                 <FiSearch className="virtuoso-open-search__icon" />
                 <input
@@ -289,7 +294,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
                               {rootCellName}
                               {openViewIds.includes(null) && <em className="virtuoso-open-dot" title="Already open" />}
                             </span>
-                            <small>TOP · {rootWidth}×{rootHeight}</small>
+                            <small>TOP · {formatGridValue(rootWidth, gridSize)}×{formatGridValue(rootHeight, gridSize)}</small>
                           </button>
                           <button
                             type="button"
@@ -319,7 +324,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
                               {cell.cellName}
                               {openViewIds.includes(cell.id) && <em className="virtuoso-open-dot" title="Already open" />}
                             </span>
-                            <small>{cell.width > 0 && cell.height > 0 ? `${cell.width}×${cell.height}` : 'empty'}</small>
+                            <small>{cell.width > 0 && cell.height > 0 ? `${formatGridValue(cell.width, gridSize)}×${formatGridValue(cell.height, gridSize)}` : 'empty'}</small>
                           </button>
                           <button
                             type="button"

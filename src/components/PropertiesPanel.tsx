@@ -870,7 +870,7 @@ export const PropertiesPanel: React.FC = () => {
               </div>
               <div className="prop-row">
                 <span className="prop-label">Size (um)</span>
-                <span className="prop-value">{masterCell.width.toFixed(3)} x {masterCell.height.toFixed(3)}</span>
+                <span className="prop-value">{formatGridValue(masterCell.width, gridSize)} × {formatGridValue(masterCell.height, gridSize)}</span>
               </div>
               {masterCell.kind === 'pad' && (
                 <div className="prop-row">
