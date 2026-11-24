@@ -3,7 +3,7 @@ import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
 import { useStore, computePadGroupPositions, findOverlappingInstance, getTransformProps, isCellEmpty, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
 import type { Instance } from '../store/useStore';
 import { getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment';
-import type { AlignmentEdge } from '../utils/alignment';
+import type { AlignmentEdge, CadenceOrientation } from '../utils/alignment';
 import { collapseCollinearPadCandidates, labelRectsOverlap } from '../utils/autoDim';
 import type { ScreenLabelRect } from '../utils/autoDim';
 import { SCALE_FACTOR } from '../utils/canvasConstants';
@@ -16,8 +16,15 @@ import {
   computeActiveToBaseTransform,
   invertCadenceTransform,
 } from '../utils/hierarchy';
-import { normalizeRectFromPoints, resolveLayerStyle, VIRTUOSO_LAYER_PRESETS } from '../utils/layoutLayers';
-import type { LayoutShape } from '../utils/layoutLayers';
+import {
+  estimateTextBoxSize,
+  LAYOUT_TEXT_FONT_FAMILIES,
+  normalizeRectFromPoints,
+  resolveLayerStyle,
+  resolveTextFontFamilyCss,
+  VIRTUOSO_LAYER_PRESETS,
+} from '../utils/layoutLayers';
+import type { LayoutShape, LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers';
 import { getIpPixelArrayEdgeMeasurements } from '../utils/pixelArrayDimensions';
 import { resolveOrthogonalRulerEnd } from '../utils/ruler';
 import type { SnapEdgeAxis } from '../utils/ruler';
@@ -140,6 +147,15 @@ export const FloorplanCanvas: React.FC = () => {
     activeDrawColor,
     setActiveDrawLpp,
     setActiveDrawLabel,
+    activeTextContent,
+    activeTextFontSize,
+    activeTextFontFamily,
+    activeTextFontStyle,
+    activeTextOrientation,
+    activeTextLayer,
+    activeTextPurpose,
+    activeTextColor,
+    setActiveTextConfig,
     addShape,
     updateShape,
     batchUpdateShapes,
@@ -305,6 +321,22 @@ export const FloorplanCanvas: React.FC = () => {
     partialSelectionRef.current = next;
     setPartialSelection(next);
   }, []);
+
+  const textInputRef = useRef<HTMLInputElement>(null);
+  const [draftTextFontSize, setDraftTextFontSize] = useState(() => String(activeTextFontSize));
+
+  useEffect(() => {
+    setDraftTextFontSize(String(activeTextFontSize));
+  }, [activeTextFontSize]);
+
+  useEffect(() => {
+    if (appMode === 'text') {
+      requestAnimationFrame(() => {
+        textInputRef.current?.focus();
+        textInputRef.current?.select();
+      });
+    }
+  }, [appMode]);
 
   useEffect(() => {
     if (appMode !== 'rect') {
@@ -623,20 +655,52 @@ export const FloorplanCanvas: React.FC = () => {
           }
           break;
         case 'l':
-          e.preventDefault();
-          if (state.selectedShapeId) {
-            state.toggleShapeLock(state.selectedShapeId);
-          } else if (state.selectedInstanceIds.length > 0) {
-            state.toggleInstanceLock(state.selectedInstanceIds);
+          if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            if (e.shiftKey) {
+              if (state.selectedShapeId) {
+                state.toggleShapeLock(state.selectedShapeId);
+              } else if (state.selectedInstanceIds.length > 0) {
+                state.toggleInstanceLock(state.selectedInstanceIds);
+              }
+            } else {
+              // Cadence Virtuoso bindkey: L activates Create Label / Text tool
+              setAppMode(state.appMode === 'text' ? 'select' : 'text');
+            }
           }
           break;
         case 'r':
           e.preventDefault();
+          if (state.appMode === 'text') {
+            state.setActiveTextConfig({
+              orientation: rotateOrientationByQuarterTurns(
+                state.activeTextOrientation,
+                e.shiftKey ? -1 : 1,
+              ) as CadenceOrientation,
+            });
+            break;
+          }
           if (state.appMode === 'place' && state.placementMasterId) {
             state.setPlacementOrientation(
               rotateOrientationByQuarterTurns(state.placementOrientation, e.shiftKey ? -1 : 1),
             );
             break;
+          }
+          if (state.selectedShapeId) {
+            const shape = state.shapes.find(item => item.id === state.selectedShapeId);
+            if (shape?.kind === 'text') {
+              try {
+                state.updateShape(shape.id, {
+                  orientation: rotateOrientationByQuarterTurns(
+                    shape.orientation ?? 'R0',
+                    e.shiftKey ? -1 : 1,
+                  ) as CadenceOrientation,
+                });
+              } catch (error) {
+                alert(error instanceof Error ? error.message : 'Unable to rotate the selected text label.');
+              }
+              break;
+            }
           }
           if (state.selectedInstanceId) {
             const instance = state.instances.find(item => item.id === state.selectedInstanceId);
@@ -675,6 +739,8 @@ export const FloorplanCanvas: React.FC = () => {
             setAppMode('select');
           } else if (state.edgeAlignmentSession) {
             state.cancelEdgeAlignment();
+          } else if (state.appMode === 'text') {
+            setAppMode('select');
           } else if (state.appMode === 'rect') {
             if (rectDraftRef.current) {
               rectDraftRef.current = null;
@@ -2381,6 +2447,32 @@ export const FloorplanCanvas: React.FC = () => {
           const sh = shape.height * SCALE_FACTOR;
           const sx = shape.x * SCALE_FACTOR;
           const sy = shape.y * SCALE_FACTOR;
+          if (shape.kind === 'text') {
+            const fontPx = (shape.fontSize ?? shape.height) * SCALE_FACTOR;
+            const st = getTransformProps(shape.orientation ?? 'R0');
+            return (
+              <Group
+                key={`sub-shape-${shape.id}`}
+                x={sx}
+                y={sy}
+                rotation={st.rotation}
+                scaleX={st.scaleX}
+                scaleY={st.scaleY}
+              >
+                <Group x={0} y={fontPx} scaleY={-1}>
+                  <Text
+                    text={shape.label ?? ''}
+                    x={0}
+                    y={0}
+                    fill={style.color}
+                    fontSize={fontPx}
+                    fontFamily={resolveTextFontFamilyCss(shape.fontFamily)}
+                    fontStyle={shape.fontStyle ?? 'normal'}
+                  />
+                </Group>
+              </Group>
+            );
+          }
           return (
             <Group key={`sub-shape-${shape.id}`}>
               <Rect
@@ -2555,6 +2647,39 @@ export const FloorplanCanvas: React.FC = () => {
             } catch (error) {
               alert(error instanceof Error ? error.message : 'Unable to place the selected cell.');
             }
+          } else if (appMode === 'text' && editMapped) {
+            const textStr = activeTextContent.trim();
+            if (!textStr) {
+              textInputRef.current?.focus();
+              return;
+            }
+            const targetPos = snapPointToGrid(editMapped.x, editMapped.y, activeSnapStep);
+            const size = estimateTextBoxSize(
+              textStr,
+              activeTextFontSize,
+              activeTextFontFamily,
+              activeTextFontStyle,
+              gridSize,
+            );
+            try {
+              addShape({
+                kind: 'text',
+                layer: activeTextLayer.trim() || 'text',
+                purpose: activeTextPurpose.trim() || 'drawing',
+                x: targetPos.x,
+                y: targetPos.y,
+                width: size.width,
+                height: size.height,
+                label: textStr,
+                fontSize: activeTextFontSize,
+                fontFamily: activeTextFontFamily,
+                fontStyle: activeTextFontStyle,
+                orientation: activeTextOrientation,
+                ...(activeTextColor ? { color: activeTextColor } : {}),
+              });
+            } catch (error) {
+              alert(error instanceof Error ? error.message : 'Unable to place text label.');
+            }
           } else if (appMode === 'pixel-array' && pendingPixelArraySize && editMapped) {
             placePixelArray(editMapped.x, editMapped.y);
           } else if (appMode === 'select' && !edgeAlignmentSession && (e.target === e.target.getStage() || e.target.name() === 'bg' || e.target.name() === 'overlay')) {
@@ -2572,6 +2697,13 @@ export const FloorplanCanvas: React.FC = () => {
           }
         }}
         onContextMenu={(e) => {
+          if (appMode === 'text') {
+            e.evt.preventDefault();
+            setActiveTextConfig({
+              orientation: rotateOrientationByQuarterTurns(activeTextOrientation, e.evt.shiftKey ? 1 : -1) as CadenceOrientation,
+            });
+            return;
+          }
           if (appMode === 'place' && placementMasterId) {
             e.evt.preventDefault();
             setPlacementOrientation(rotateOrientationByQuarterTurns(placementOrientation, e.evt.shiftKey ? 1 : -1));
@@ -2757,6 +2889,32 @@ export const FloorplanCanvas: React.FC = () => {
                 )}
                 {parentShapes.map(shape => {
                   const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                  if (shape.kind === 'text') {
+                    const fontPx = (shape.fontSize ?? shape.height) * SCALE_FACTOR;
+                    const st = getTransformProps(shape.orientation ?? 'R0');
+                    return (
+                      <Group
+                        key={`eip-shape-${shape.id}`}
+                        x={shape.x * SCALE_FACTOR}
+                        y={shape.y * SCALE_FACTOR}
+                        rotation={st.rotation}
+                        scaleX={st.scaleX}
+                        scaleY={st.scaleY}
+                      >
+                        <Group x={0} y={fontPx} scaleY={-1}>
+                          <Text
+                            text={shape.label ?? ''}
+                            x={0}
+                            y={0}
+                            fill={style.color}
+                            fontSize={fontPx}
+                            fontFamily={resolveTextFontFamilyCss(shape.fontFamily)}
+                            fontStyle={shape.fontStyle ?? 'normal'}
+                          />
+                        </Group>
+                      </Group>
+                    );
+                  }
                   return (
                     <Rect
                       key={`eip-shape-${shape.id}`}
@@ -3042,7 +3200,7 @@ export const FloorplanCanvas: React.FC = () => {
                 onDragMove={(e) => handleDragMove(e, inst.id)}
                 onDragEnd={(e) => handleDragEnd(e, inst.id)}
                 onClick={(e) => {
-                  if (appMode === 'rect' || appMode === 'stretch' || partialSelectMode) return;
+                  if (appMode === 'rect' || appMode === 'text' || appMode === 'stretch' || partialSelectMode) return;
                   e.cancelBubble = true;
                   if (appMode === 'select' && !edgeAlignmentSession) {
                     setSelectedInstance(inst.id, e.evt.shiftKey);
@@ -3228,8 +3386,117 @@ export const FloorplanCanvas: React.FC = () => {
             );
           })}
 
-          {/* Drawn Layout Shapes (Virtuoso Rectangles on LPPs like text/drawing, prBoundary/drawing, M1/drawing) */}
+          {/* Drawn Layout Shapes (Virtuoso Rectangles & Text Labels on LPPs like text/drawing, prBoundary/drawing, M1/drawing) */}
           {shapes.map((shape: LayoutShape) => {
+            const isSelected = selectedShapeId === shape.id;
+            const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+            const canDragShape = appMode === 'select' && !partialSelectMode && !edgeAlignmentSession && !shape.locked;
+
+            if (shape.kind === 'text') {
+              const sx = shape.x * SCALE_FACTOR;
+              const sy = shape.y * SCALE_FACTOR;
+              const sw = shape.width * SCALE_FACTOR;
+              const sh = shape.height * SCALE_FACTOR;
+              const fontPx = (shape.fontSize ?? shape.height) * SCALE_FACTOR;
+              const st = getTransformProps(shape.orientation ?? 'R0');
+              return (
+                <Group
+                  key={shape.id}
+                  x={sx}
+                  y={sy}
+                  rotation={st.rotation}
+                  scaleX={st.scaleX}
+                  scaleY={st.scaleY}
+                  draggable={canDragShape}
+                  dragBoundFunc={snapScreenDragPosForEdit}
+                  onClick={event => {
+                    if (appMode === 'rect' || appMode === 'text' || appMode === 'stretch' || partialSelectMode) return;
+                    event.cancelBubble = true;
+                    if (appMode === 'select' && !edgeAlignmentSession) {
+                      setSelectedShape(shape.id);
+                    }
+                  }}
+                  onDblClick={event => {
+                    if (appMode !== 'select' || partialSelectMode) return;
+                    event.cancelBubble = true;
+                    setSelectedShape(shape.id);
+                    setRightSidebarPinned(true);
+                  }}
+                  onContextMenu={event => {
+                    event.evt.preventDefault();
+                    event.cancelBubble = true;
+                    if (appMode !== 'select' || edgeAlignmentSession || shape.locked) return;
+                    setSelectedShape(shape.id);
+                    try {
+                      updateShape(shape.id, {
+                        orientation: rotateOrientationByQuarterTurns(
+                          shape.orientation ?? 'R0',
+                          event.evt.shiftKey ? 1 : -1,
+                        ) as CadenceOrientation,
+                      });
+                    } catch (error) {
+                      alert(error instanceof Error ? error.message : 'Unable to rotate text label.');
+                    }
+                  }}
+                  onDragEnd={event => {
+                    const nextX = snapToGrid(event.target.x() / SCALE_FACTOR, gridSize);
+                    const nextY = snapToGrid(event.target.y() / SCALE_FACTOR, gridSize);
+                    try {
+                      updateShape(shape.id, { x: nextX, y: nextY });
+                    } catch (error) {
+                      event.target.x(shape.x * SCALE_FACTOR);
+                      event.target.y(shape.y * SCALE_FACTOR);
+                      alert(error instanceof Error ? error.message : 'Unable to move text label.');
+                    }
+                  }}
+                >
+                  {/* Transparent hit box so clicking & dragging the text is effortless */}
+                  <Rect x={0} y={0} width={sw} height={sh} fill="transparent" />
+                  <Group x={0} y={fontPx} scaleY={-1} listening={false}>
+                    <Text
+                      text={shape.label ?? ''}
+                      x={0}
+                      y={0}
+                      fill={style.color}
+                      fontSize={fontPx}
+                      fontFamily={resolveTextFontFamilyCss(shape.fontFamily)}
+                      fontStyle={shape.fontStyle ?? 'normal'}
+                    />
+                  </Group>
+                  {isSelected && (
+                    <>
+                      <Rect
+                        x={-2 / stageScale}
+                        y={-2 / stageScale}
+                        width={sw + 4 / stageScale}
+                        height={sh + 4 / stageScale}
+                        fillEnabled={false}
+                        stroke="#f59e0b"
+                        strokeWidth={1.6 / stageScale}
+                        dash={[5 / stageScale, 4 / stageScale]}
+                        listening={false}
+                      />
+                      <Line points={[-5 / stageScale, 0, 5 / stageScale, 0]} stroke="#f59e0b" strokeWidth={1.5 / stageScale} listening={false} />
+                      <Line points={[0, -5 / stageScale, 0, 5 / stageScale]} stroke="#f59e0b" strokeWidth={1.5 / stageScale} listening={false} />
+                    </>
+                  )}
+                  {shape.locked && (
+                    <Rect
+                      x={-2 / stageScale}
+                      y={-2 / stageScale}
+                      width={sw + 4 / stageScale}
+                      height={sh + 4 / stageScale}
+                      fillEnabled={false}
+                      stroke="#eab308"
+                      strokeWidth={1.5 / stageScale}
+                      dash={[3 / stageScale, 3 / stageScale]}
+                      listening={false}
+                    />
+                  )}
+                </Group>
+              );
+            }
+
             const preview = shapeResizePreview && shapeResizePreview.id === shape.id ? shapeResizePreview : null;
             const curX = preview ? preview.x : shape.x;
             const curY = preview ? preview.y : shape.y;
@@ -3239,9 +3506,6 @@ export const FloorplanCanvas: React.FC = () => {
             const sy = curY * SCALE_FACTOR;
             const sw = curW * SCALE_FACTOR;
             const sh = curH * SCALE_FACTOR;
-            const isSelected = selectedShapeId === shape.id;
-            const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
-            const canDragShape = appMode === 'select' && !partialSelectMode && !edgeAlignmentSession && !shape.locked;
             const tagText = shape.label?.trim()
               ? `${shape.label.trim()}\n${shape.layer}/${shape.purpose}`
               : `${shape.layer}/${shape.purpose}`;
@@ -3304,7 +3568,7 @@ export const FloorplanCanvas: React.FC = () => {
                   draggable={canDragShape}
                   dragBoundFunc={snapScreenDragPosForEdit}
                   onClick={event => {
-                    if (appMode === 'rect' || appMode === 'stretch' || partialSelectMode) return;
+                    if (appMode === 'rect' || appMode === 'text' || appMode === 'stretch' || partialSelectMode) return;
                     event.cancelBubble = true;
                     if (appMode === 'select' && !edgeAlignmentSession) {
                       setSelectedShape(shape.id);
@@ -3940,6 +4204,42 @@ export const FloorplanCanvas: React.FC = () => {
               </Group>
             );
           })()}
+          {/* Live Ghost Text Label Preview (Create Text mode L) */}
+          {appMode === 'text' && snappedMousePos && (() => {
+            const editCursorPos = isEditInPlace
+              ? snapBaseToEditPoint(snappedMousePos.x, snappedMousePos.y).edit
+              : snappedMousePos;
+            const ghostPos = snapPointToGrid(editCursorPos.x, editCursorPos.y, activeSnapStep);
+            const ghostText = activeTextContent.trim() || 'LABEL';
+            const ghostStyle = resolveLayerStyle(activeTextLayer, activeTextPurpose, activeTextColor);
+            const fontPx = Math.max(gridSize, activeTextFontSize) * SCALE_FACTOR;
+            const gt = getTransformProps(activeTextOrientation);
+            return (
+              <Group
+                x={ghostPos.x * SCALE_FACTOR}
+                y={ghostPos.y * SCALE_FACTOR}
+                rotation={gt.rotation}
+                scaleX={gt.scaleX}
+                scaleY={gt.scaleY}
+                opacity={0.72}
+                listening={false}
+              >
+                <Line points={[-6 / stageScale, 0, 6 / stageScale, 0]} stroke={ghostStyle.color} strokeWidth={1.4 / stageScale} />
+                <Line points={[0, -6 / stageScale, 0, 6 / stageScale]} stroke={ghostStyle.color} strokeWidth={1.4 / stageScale} />
+                <Group x={0} y={fontPx} scaleY={-1}>
+                  <Text
+                    text={ghostText}
+                    x={0}
+                    y={0}
+                    fill={ghostStyle.color}
+                    fontSize={fontPx}
+                    fontFamily={resolveTextFontFamilyCss(activeTextFontFamily)}
+                    fontStyle={activeTextFontStyle}
+                  />
+                </Group>
+              </Group>
+            );
+          })()}
           </Group>
 
           {/* Always-upright Base-space overlays (selection pills, EIP shape tags, draft/stretch readouts, rulers, gap dims, reticle) */}
@@ -4005,6 +4305,7 @@ export const FloorplanCanvas: React.FC = () => {
 
           {/* Upright shape labels during Edit-in-Place (never upside-down on R180 or mirrored on MX/MY) */}
           {isEditInPlace && shapes.map((shape: LayoutShape) => {
+            if (shape.kind === 'text') return null;
             const preview = shapeResizePreview && shapeResizePreview.id === shape.id ? shapeResizePreview : null;
             const curX = preview ? preview.x : shape.x;
             const curY = preview ? preview.y : shape.y;
@@ -4281,6 +4582,191 @@ export const FloorplanCanvas: React.FC = () => {
           </button>
         </div>
       )}
+      {appMode === 'text' && (() => {
+        const isBold = activeTextFontStyle.includes('bold');
+        const isItalic = activeTextFontStyle.includes('italic');
+        const toggleTextStyle = (part: 'bold' | 'italic') => {
+          const nextBold = part === 'bold' ? !isBold : isBold;
+          const nextItalic = part === 'italic' ? !isItalic : isItalic;
+          const nextStyle: LayoutTextFontStyle = nextBold && nextItalic
+            ? 'bold italic'
+            : nextBold
+              ? 'bold'
+              : nextItalic
+                ? 'italic'
+                : 'normal';
+          setActiveTextConfig({ fontStyle: nextStyle });
+        };
+        return (
+          <div className="lpp-palette-bar" role="toolbar" aria-label="Virtuoso Create Text Label Toolbar">
+            <div className="lpp-palette-bar__custom">
+              <input
+                ref={textInputRef}
+                type="text"
+                className="lpp-input lpp-input--text"
+                value={activeTextContent}
+                onChange={e => setActiveTextConfig({ content: e.target.value })}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setAppMode('select');
+                  } else if (e.key === 'Enter') {
+                    e.currentTarget.blur();
+                  }
+                }}
+                placeholder="Label text…"
+                title="Text label content to place on canvas"
+                aria-label="Text label content"
+              />
+              <input
+                type="number"
+                list="text-font-size-presets"
+                min={gridSize}
+                step="any"
+                className="lpp-input lpp-input--size"
+                value={draftTextFontSize}
+                onChange={e => {
+                  const raw = e.target.value;
+                  setDraftTextFontSize(raw);
+                  const val = Number.parseFloat(raw);
+                  if (Number.isFinite(val) && val > 0) setActiveTextConfig({ fontSize: val });
+                }}
+                onBlur={() => {
+                  const val = Number.parseFloat(draftTextFontSize);
+                  if (!Number.isFinite(val) || val <= 0) {
+                    setDraftTextFontSize(String(activeTextFontSize));
+                  }
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setAppMode('select');
+                  } else if (e.key === 'Enter') {
+                    e.currentTarget.blur();
+                  }
+                }}
+                title="Font height in µm (Virtuoso Label Height)"
+                aria-label="Font size in micrometers"
+              />
+              <datalist id="text-font-size-presets">
+                <option value="5" />
+                <option value="10" />
+                <option value="20" />
+                <option value="40" />
+                <option value="80" />
+                <option value="120" />
+              </datalist>
+              <span className="lpp-unit">µm</span>
+              <select
+                className="lpp-select"
+                value={activeTextFontFamily}
+                onChange={e => setActiveTextConfig({ fontFamily: e.target.value as LayoutTextFontFamily })}
+                title="Font family (maps to Virtuoso stick / swiss / fixed / roman in SKILL)"
+                aria-label="Font family"
+              >
+                {LAYOUT_TEXT_FONT_FAMILIES.map(f => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className={`lpp-style-btn${isBold ? ' active' : ''}`}
+                style={{ fontWeight: 700 }}
+                onClick={() => toggleTextStyle('bold')}
+                title="Toggle Bold"
+                aria-pressed={isBold}
+              >
+                B
+              </button>
+              <button
+                type="button"
+                className={`lpp-style-btn${isItalic ? ' active' : ''}`}
+                style={{ fontStyle: 'italic', fontFamily: 'Georgia, serif' }}
+                onClick={() => toggleTextStyle('italic')}
+                title="Toggle Italic"
+                aria-pressed={isItalic}
+              >
+                I
+              </button>
+              <button
+                type="button"
+                className="lpp-style-btn"
+                onClick={() => setActiveTextConfig({
+                  orientation: rotateOrientationByQuarterTurns(activeTextOrientation, 1) as CadenceOrientation,
+                })}
+                title="Rotate text orientation (R or Right-Click canvas)"
+              >
+                {activeTextOrientation}
+              </button>
+            </div>
+            <span className="lpp-palette-bar__divider" aria-hidden="true" />
+            <div className="lpp-palette-bar__presets">
+              {VIRTUOSO_LAYER_PRESETS.slice(0, 6).map(preset => {
+                const isSelected = activeTextLayer.toLowerCase() === preset.layer.toLowerCase()
+                  && activeTextPurpose.toLowerCase() === preset.purpose.toLowerCase();
+                return (
+                  <button
+                    key={`text-lpp-${preset.layer}/${preset.purpose}`}
+                    type="button"
+                    className={`lpp-chip${isSelected ? ' active' : ''}`}
+                    onClick={() => setActiveTextConfig({ layer: preset.layer, purpose: preset.purpose, color: '' })}
+                    title={`Place text on ("${preset.layer}" "${preset.purpose}")`}
+                  >
+                    <span className="lpp-chip__swatch" style={{ backgroundColor: preset.color }} />
+                    <span>{preset.shortLabel}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <span className="lpp-palette-bar__divider" aria-hidden="true" />
+            <div className="lpp-palette-bar__custom">
+              <input
+                type="text"
+                className="lpp-input"
+                value={activeTextLayer}
+                onChange={e => setActiveTextConfig({ layer: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Escape') setAppMode('select'); }}
+                placeholder="Layer"
+                title="Custom Cadence Layer Name (default: text)"
+                aria-label="Text layer name"
+              />
+              <span className="lpp-sep">/</span>
+              <input
+                type="text"
+                className="lpp-input"
+                value={activeTextPurpose}
+                onChange={e => setActiveTextConfig({ purpose: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Escape') setAppMode('select'); }}
+                placeholder="Purpose"
+                title="Custom Cadence Layer Purpose (default: drawing)"
+                aria-label="Text layer purpose"
+              />
+              <input
+                type="color"
+                className="lpp-color-picker"
+                value={resolveLayerStyle(activeTextLayer, activeTextPurpose, activeTextColor).color}
+                onChange={e => setActiveTextConfig({ color: e.target.value })}
+                title="Custom display color for text label"
+                aria-label="Text color"
+              />
+            </div>
+            <button
+              type="button"
+              className="lpp-close-btn"
+              onClick={() => setAppMode('select')}
+              title="Finish placing text (Esc)"
+              aria-label="Exit text label tool"
+            >
+              <FiX />
+            </button>
+          </div>
+        );
+      })()}
+      {appMode === 'text' && (
+        <div className="coordinate-overlay measure-mode-hint">
+          Create Text (L) · Click canvas to place on {activeTextLayer || 'text'}/{activeTextPurpose || 'drawing'} ({activeTextFontSize} µm · {activeTextFontFamily}) · R or Right-Click rotates [{activeTextOrientation}] · Esc exits
+        </div>
+      )}
       {appMode === 'measure' && (
         <div className="coordinate-overlay measure-mode-hint">
           Measure Mode · Click two snapped points · Press O for Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc cancels
@@ -4353,7 +4839,7 @@ export const FloorplanCanvas: React.FC = () => {
       )}
       {isSubCellEmpty && appMode === 'select' && !partialSelectMode && !edgeAlignmentSession && (
         <div className="coordinate-overlay">
-          Empty Virtuoso cellview ({topCellName}) · Press R to draw a rectangle (e.g. text/drawing) or I to instantiate a cell
+          Empty Virtuoso cellview ({topCellName}) · Press R to draw a rectangle, L to place text (text/drawing), or I to instantiate a cell
         </div>
       )}
       {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && (

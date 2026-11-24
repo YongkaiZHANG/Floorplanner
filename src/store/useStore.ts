@@ -1,17 +1,17 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import { alignInstanceToCoordinate, alignInstanceToTarget, alignInstances, distributeInstances, getAlignmentEdgeAxis, getEdgeCoordinate, getPhysicalBounds } from '../utils/alignment.ts';
-import type { AlignmentEdge, AlignmentOperation, DistributionAxis } from '../utils/alignment.ts';
+import type { AlignmentEdge, AlignmentOperation, CadenceOrientation, DistributionAxis } from '../utils/alignment.ts';
 import type { ProjectSnapshot } from './projectDocument.ts';
 import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
 import type { ProjectHistory } from './projectHistory.ts';
 import { snapToGrid } from '../utils/grid.ts';
 import { wouldCreateHierarchyCycle } from '../utils/hierarchy.ts';
 import type { CellViewContent, CellViewCoordinateMode } from '../utils/hierarchy.ts';
-import { computeCellContentBounds } from '../utils/layoutLayers.ts';
-import type { LayoutShape } from '../utils/layoutLayers.ts';
+import { computeCellContentBounds, estimateTextBoxSize } from '../utils/layoutLayers.ts';
+import type { LayoutShape, LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers.ts';
 
-export type { LayoutShape } from '../utils/layoutLayers.ts';
+export type { LayoutShape, LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers.ts';
 
 export type Instance = {
   id: string;
@@ -65,7 +65,7 @@ export type PixelArray = {
 };
 
 export type PixelArraySize = Pick<PixelArray, 'width' | 'height'>;
-export type AppMode = 'select' | 'measure' | 'place' | 'pixel-array' | 'rect' | 'stretch';
+export type AppMode = 'select' | 'measure' | 'place' | 'pixel-array' | 'rect' | 'stretch' | 'text';
 
 export type DescendContextFrame = {
   /** Parent cellview ID where the descended instance lives (`null` = root top cell). */
@@ -197,6 +197,15 @@ export type ProjectState = {
   activeDrawPurpose: string;
   activeDrawLabel: string;
   activeDrawColor: string;
+  /** Active Virtuoso Create Label (L) tool settings (default layer: text/drawing). */
+  activeTextContent: string;
+  activeTextFontSize: number;
+  activeTextFontFamily: LayoutTextFontFamily;
+  activeTextFontStyle: LayoutTextFontStyle;
+  activeTextOrientation: CadenceOrientation;
+  activeTextLayer: string;
+  activeTextPurpose: string;
+  activeTextColor: string;
   showCreateModal: boolean;
   showInstantiateModal: boolean;
   leftSidebarPinned: boolean;
@@ -248,6 +257,16 @@ export type ProjectState = {
   deleteMasterCell: (id: string) => void;
   setActiveDrawLpp: (layer: string, purpose: string, color?: string) => void;
   setActiveDrawLabel: (label: string) => void;
+  setActiveTextConfig: (patch: {
+    content?: string;
+    fontSize?: number;
+    fontFamily?: LayoutTextFontFamily;
+    fontStyle?: LayoutTextFontStyle;
+    orientation?: CadenceOrientation;
+    layer?: string;
+    purpose?: string;
+    color?: string;
+  }) => void;
   setSelectedShape: (id: string | null) => void;
   addShape: (shape: Omit<LayoutShape, 'id'>) => string;
   updateShape: (id: string, patch: Partial<Omit<LayoutShape, 'id'>>) => void;
@@ -1596,6 +1615,14 @@ export const useStore = create<ProjectState>((set) => ({
   activeDrawPurpose: 'drawing',
   activeDrawLabel: '',
   activeDrawColor: '',
+  activeTextContent: 'LABEL',
+  activeTextFontSize: 20,
+  activeTextFontFamily: 'stick',
+  activeTextFontStyle: 'normal',
+  activeTextOrientation: 'R0',
+  activeTextLayer: 'text',
+  activeTextPurpose: 'drawing',
+  activeTextColor: '',
   showCreateModal: false,
   showInstantiateModal: false,
   leftSidebarPinned: false,
@@ -1670,6 +1697,7 @@ export const useStore = create<ProjectState>((set) => ({
     edgeAlignmentSession: null,
     ...(mode === 'pixel-array' ? {} : { pendingPixelArraySize: null }),
     ...(mode === 'place' ? {} : { pendingManualPadGroup: null }),
+    ...(mode === 'text' || mode === 'rect' ? { partialSelectMode: false } : {}),
   }),
   setTopDimensions: (w, h) => set((state) => {
     if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
@@ -2355,6 +2383,23 @@ export const useStore = create<ProjectState>((set) => ({
 
   setActiveDrawLabel: (label) => set({ activeDrawLabel: label }),
 
+  setActiveTextConfig: (patch) => set((state) => ({
+    ...(patch.content !== undefined ? { activeTextContent: patch.content } : {}),
+    ...(patch.fontSize !== undefined && Number.isFinite(patch.fontSize) && patch.fontSize > 0
+      ? { activeTextFontSize: patch.fontSize }
+      : {}),
+    ...(patch.fontFamily !== undefined ? { activeTextFontFamily: patch.fontFamily } : {}),
+    ...(patch.fontStyle !== undefined ? { activeTextFontStyle: patch.fontStyle } : {}),
+    ...(patch.orientation !== undefined ? { activeTextOrientation: patch.orientation } : {}),
+    ...(patch.layer !== undefined ? { activeTextLayer: patch.layer } : {}),
+    ...(patch.purpose !== undefined ? { activeTextPurpose: patch.purpose } : {}),
+    ...(patch.color !== undefined ? { activeTextColor: patch.color } : {}),
+    ...(patch.layer === undefined && patch.purpose === undefined ? {} : {
+      activeTextLayer: (patch.layer ?? state.activeTextLayer),
+      activeTextPurpose: (patch.purpose ?? state.activeTextPurpose),
+    }),
+  })),
+
   setSelectedShape: (id) => set((state) => {
     if (!id || !state.shapes.some(shape => shape.id === id)) {
       return { selectedShapeId: null };
@@ -2373,34 +2418,76 @@ export const useStore = create<ProjectState>((set) => ({
     set((state) => {
       const layer = rawShape.layer.trim() || 'text';
       const purpose = rawShape.purpose.trim() || 'drawing';
-      if (!Number.isFinite(rawShape.x) || !Number.isFinite(rawShape.y) ||
-          !Number.isFinite(rawShape.width) || !Number.isFinite(rawShape.height)) {
-        throw new RangeError('Rectangle coordinates and dimensions must be finite numbers.');
+      const isText = rawShape.kind === 'text';
+      if (!Number.isFinite(rawShape.x) || !Number.isFinite(rawShape.y)) {
+        throw new RangeError('Shape coordinates must be finite numbers.');
       }
       const x = snapToGrid(rawShape.x, state.gridSize);
       const y = snapToGrid(rawShape.y, state.gridSize);
-      const width = snapToGrid(rawShape.width, state.gridSize);
-      const height = snapToGrid(rawShape.height, state.gridSize);
-      if (width <= 1e-12 || height <= 1e-12) {
-        throw new RangeError('Rectangle width and height must be positive.');
+
+      let shape: LayoutShape;
+      let actionLabel: string;
+      if (isText) {
+        const text = (rawShape.label ?? '').trim();
+        if (!text) {
+          throw new Error('Text label cannot be empty.');
+        }
+        const rawSize = rawShape.fontSize ?? rawShape.height;
+        if (!Number.isFinite(rawSize) || rawSize <= 0) {
+          throw new RangeError('Font size must be a positive finite number.');
+        }
+        const fontSize = Math.max(state.gridSize, snapToGrid(rawSize, state.gridSize));
+        const fontFamily: LayoutTextFontFamily = rawShape.fontFamily ?? 'stick';
+        const fontStyle: LayoutTextFontStyle = rawShape.fontStyle ?? 'normal';
+        const orientation: CadenceOrientation = rawShape.orientation ?? 'R0';
+        const box = estimateTextBoxSize(text, fontSize, fontFamily, fontStyle, state.gridSize);
+        shape = {
+          id,
+          kind: 'text',
+          layer,
+          purpose,
+          x: Object.is(x, -0) ? 0 : x,
+          y: Object.is(y, -0) ? 0 : y,
+          width: box.width,
+          height: box.height,
+          label: text,
+          fontSize,
+          fontFamily,
+          fontStyle,
+          orientation,
+          ...(rawShape.color?.trim() ? { color: rawShape.color.trim() } : {}),
+          ...(rawShape.locked ? { locked: true } : {}),
+        };
+        actionLabel = `Place text "${text}" (${layer}/${purpose})`;
+      } else {
+        if (!Number.isFinite(rawShape.width) || !Number.isFinite(rawShape.height)) {
+          throw new RangeError('Rectangle coordinates and dimensions must be finite numbers.');
+        }
+        const width = snapToGrid(rawShape.width, state.gridSize);
+        const height = snapToGrid(rawShape.height, state.gridSize);
+        if (width <= 1e-12 || height <= 1e-12) {
+          throw new RangeError('Rectangle width and height must be positive.');
+        }
+        shape = {
+          id,
+          layer,
+          purpose,
+          x: Object.is(x, -0) ? 0 : x,
+          y: Object.is(y, -0) ? 0 : y,
+          width,
+          height,
+          ...(rawShape.color?.trim() ? { color: rawShape.color.trim() } : {}),
+          ...(rawShape.label?.trim() ? { label: rawShape.label.trim() } : {}),
+          ...(rawShape.locked ? { locked: true } : {}),
+        };
+        actionLabel = `Draw ${layer}/${purpose} rect`;
       }
-      const shape: LayoutShape = {
-        id,
-        layer,
-        purpose,
-        x: Object.is(x, -0) ? 0 : x,
-        y: Object.is(y, -0) ? 0 : y,
-        width,
-        height,
-        ...(rawShape.color?.trim() ? { color: rawShape.color.trim() } : {}),
-        ...(rawShape.label?.trim() ? { label: rawShape.label.trim() } : {}),
-        ...(rawShape.locked ? { locked: true } : {}),
-      };
+
       const shapes = [...state.shapes, shape];
       const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
       const shouldSwitchToOrigin = Boolean(state.activeCellId) && (state.activeCoordinateMode === 'origin' || state.instances.length === 0);
       return {
-        ...commitProjectPatch(state, `Draw ${layer}/${purpose} rect`, {
+        ...commitProjectPatch(state, actionLabel, {
           shapes,
           ...(shouldSwitchToOrigin ? { activeCoordinateMode: 'origin' as CellViewCoordinateMode } : {}),
           ...(boundsSync ?? {}),
@@ -2424,36 +2511,80 @@ export const useStore = create<ProjectState>((set) => ({
     const nextPurpose = patch.purpose !== undefined ? (patch.purpose.trim() || existing.purpose) : existing.purpose;
     const rawX = patch.x !== undefined ? patch.x : existing.x;
     const rawY = patch.y !== undefined ? patch.y : existing.y;
-    const rawW = patch.width !== undefined ? patch.width : existing.width;
-    const rawH = patch.height !== undefined ? patch.height : existing.height;
-    if (!Number.isFinite(rawX) || !Number.isFinite(rawY) || !Number.isFinite(rawW) || !Number.isFinite(rawH)) {
-      throw new RangeError('Rectangle coordinates and dimensions must be finite numbers.');
+    if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) {
+      throw new RangeError('Shape coordinates must be finite numbers.');
     }
     const x = snapToGrid(rawX, state.gridSize);
     const y = snapToGrid(rawY, state.gridSize);
-    const width = snapToGrid(rawW, state.gridSize);
-    const height = snapToGrid(rawH, state.gridSize);
-    if (width <= 1e-12 || height <= 1e-12) {
-      throw new RangeError('Rectangle width and height must be positive.');
-    }
     const nextColor = patch.color !== undefined ? patch.color.trim() : existing.color;
-    const nextLabel = patch.label !== undefined ? patch.label.trim() : existing.label;
     const nextLocked = patch.locked !== undefined ? patch.locked : existing.locked;
-    const updated: LayoutShape = {
-      id: existing.id,
-      layer: nextLayer,
-      purpose: nextPurpose,
-      x: Object.is(x, -0) ? 0 : x,
-      y: Object.is(y, -0) ? 0 : y,
-      width,
-      height,
-      ...(nextColor ? { color: nextColor } : {}),
-      ...(nextLabel ? { label: nextLabel } : {}),
-      ...(nextLocked ? { locked: true } : {}),
-    };
+
+    let updated: LayoutShape;
+    let actionLabel: string;
+    if (existing.kind === 'text') {
+      const nextLabel = patch.label !== undefined ? patch.label.trim() : (existing.label ?? '');
+      if (!nextLabel) {
+        throw new Error('Text label cannot be empty.');
+      }
+      const rawFontSize = patch.fontSize !== undefined
+        ? patch.fontSize
+        : (patch.height !== undefined ? patch.height : (existing.fontSize ?? existing.height));
+      if (!Number.isFinite(rawFontSize) || rawFontSize <= 0) {
+        throw new RangeError('Font size must be a positive finite number.');
+      }
+      const fontSize = Math.max(state.gridSize, snapToGrid(rawFontSize, state.gridSize));
+      const fontFamily: LayoutTextFontFamily = patch.fontFamily ?? existing.fontFamily ?? 'stick';
+      const fontStyle: LayoutTextFontStyle = patch.fontStyle ?? existing.fontStyle ?? 'normal';
+      const orientation: CadenceOrientation = patch.orientation ?? existing.orientation ?? 'R0';
+      const box = estimateTextBoxSize(nextLabel, fontSize, fontFamily, fontStyle, state.gridSize);
+      updated = {
+        id: existing.id,
+        kind: 'text',
+        layer: nextLayer,
+        purpose: nextPurpose,
+        x: Object.is(x, -0) ? 0 : x,
+        y: Object.is(y, -0) ? 0 : y,
+        width: box.width,
+        height: box.height,
+        label: nextLabel,
+        fontSize,
+        fontFamily,
+        fontStyle,
+        orientation,
+        ...(nextColor ? { color: nextColor } : {}),
+        ...(nextLocked ? { locked: true } : {}),
+      };
+      actionLabel = `Edit text "${nextLabel}"`;
+    } else {
+      const rawW = patch.width !== undefined ? patch.width : existing.width;
+      const rawH = patch.height !== undefined ? patch.height : existing.height;
+      if (!Number.isFinite(rawW) || !Number.isFinite(rawH)) {
+        throw new RangeError('Rectangle coordinates and dimensions must be finite numbers.');
+      }
+      const width = snapToGrid(rawW, state.gridSize);
+      const height = snapToGrid(rawH, state.gridSize);
+      if (width <= 1e-12 || height <= 1e-12) {
+        throw new RangeError('Rectangle width and height must be positive.');
+      }
+      const nextLabel = patch.label !== undefined ? patch.label.trim() : existing.label;
+      updated = {
+        id: existing.id,
+        layer: nextLayer,
+        purpose: nextPurpose,
+        x: Object.is(x, -0) ? 0 : x,
+        y: Object.is(y, -0) ? 0 : y,
+        width,
+        height,
+        ...(nextColor ? { color: nextColor } : {}),
+        ...(nextLabel ? { label: nextLabel } : {}),
+        ...(nextLocked ? { locked: true } : {}),
+      };
+      actionLabel = `Edit ${nextLayer}/${nextPurpose} rect`;
+    }
+
     const shapes = state.shapes.map(s => (s.id === id ? updated : s));
     const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
-    return commitProjectPatch(state, `Edit ${nextLayer}/${nextPurpose} rect`, {
+    return commitProjectPatch(state, actionLabel, {
       shapes,
       ...(boundsSync ?? {}),
     });

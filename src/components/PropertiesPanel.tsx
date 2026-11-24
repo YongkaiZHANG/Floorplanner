@@ -4,7 +4,14 @@ import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff
 import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
 import { findBoundaryViolations, findOverlapViolations } from '../utils/floorplanMetrics';
-import { resolveLayerStyle, VIRTUOSO_LAYER_PRESETS } from '../utils/layoutLayers';
+import {
+  LAYOUT_TEXT_FONT_FAMILIES,
+  LAYOUT_TEXT_FONT_STYLES,
+  resolveLayerStyle,
+  VIRTUOSO_LAYER_PRESETS,
+} from '../utils/layoutLayers';
+import type { LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers';
+import type { CadenceOrientation } from '../utils/alignment';
 
 const ORIENTATIONS = ['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'];
 
@@ -73,6 +80,7 @@ export const PropertiesPanel: React.FC = () => {
   const [draftShapeLayer, setDraftShapeLayer] = React.useState('text');
   const [draftShapePurpose, setDraftShapePurpose] = React.useState('drawing');
   const [draftShapeLabel, setDraftShapeLabel] = React.useState('');
+  const [draftShapeFontSize, setDraftShapeFontSize] = React.useState('20');
   const [draftShapeX1, setDraftShapeX1] = React.useState('0');
   const [draftShapeY1, setDraftShapeY1] = React.useState('0');
   const [draftShapeX2, setDraftShapeX2] = React.useState('0');
@@ -90,6 +98,7 @@ export const PropertiesPanel: React.FC = () => {
     setDraftShapeLayer(selectedShape.layer);
     setDraftShapePurpose(selectedShape.purpose);
     setDraftShapeLabel(selectedShape.label ?? '');
+    setDraftShapeFontSize(formatGridValue(selectedShape.fontSize ?? selectedShape.height, gridSize));
     setDraftShapeX1(formatGridValue(selectedShape.x, gridSize));
     setDraftShapeY1(formatGridValue(selectedShape.y, gridSize));
     setDraftShapeX2(formatGridValue(selectedShape.x + selectedShape.width, gridSize));
@@ -232,10 +241,42 @@ export const PropertiesPanel: React.FC = () => {
       updateShape(selectedShape.id, {
         layer: draftShapeLayer.trim() || selectedShape.layer,
         purpose: draftShapePurpose.trim() || selectedShape.purpose,
-        label: draftShapeLabel,
+        label: selectedShape.kind === 'text'
+          ? (draftShapeLabel.trim() || selectedShape.label || 'LABEL')
+          : draftShapeLabel,
       });
     } catch (error) {
+      setDraftShapeLabel(selectedShape.label ?? '');
       alert(error instanceof Error ? error.message : 'Unable to update shape layer/purpose.');
+    }
+  };
+
+  const commitTextGeometry = () => {
+    if (skipNextBlurCommitRef.current) {
+      skipNextBlurCommitRef.current = false;
+      return;
+    }
+    if (!selectedShape || selectedShape.kind !== 'text') return;
+    const nextX = Number.parseFloat(draftShapeX1);
+    const nextY = Number.parseFloat(draftShapeY1);
+    const nextFontSize = Number.parseFloat(draftShapeFontSize);
+    if (!Number.isFinite(nextX) || !Number.isFinite(nextY) || !Number.isFinite(nextFontSize) || nextFontSize <= 0) {
+      setDraftShapeX1(formatGridValue(selectedShape.x, gridSize));
+      setDraftShapeY1(formatGridValue(selectedShape.y, gridSize));
+      setDraftShapeFontSize(formatGridValue(selectedShape.fontSize ?? selectedShape.height, gridSize));
+      return;
+    }
+    try {
+      updateShape(selectedShape.id, {
+        x: nextX,
+        y: nextY,
+        fontSize: nextFontSize,
+      });
+    } catch (error) {
+      setDraftShapeX1(formatGridValue(selectedShape.x, gridSize));
+      setDraftShapeY1(formatGridValue(selectedShape.y, gridSize));
+      setDraftShapeFontSize(formatGridValue(selectedShape.fontSize ?? selectedShape.height, gridSize));
+      alert(error instanceof Error ? error.message : 'Unable to update text label.');
     }
   };
 
@@ -321,7 +362,7 @@ export const PropertiesPanel: React.FC = () => {
         {showingShape && selectedShape ? (
           <>
             <div className="panel-header">
-              <h3 className="section-title">Rectangle Shape</h3>
+              <h3 className="section-title">{selectedShape.kind === 'text' ? 'Text Label' : 'Rectangle Shape'}</h3>
               <span className="selection-count">{selectedShape.layer}/{selectedShape.purpose}</span>
             </div>
 
@@ -329,7 +370,22 @@ export const PropertiesPanel: React.FC = () => {
               <h4 className="sub-title">Layer / Purpose (Virtuoso LPP)</h4>
               {selectedShape.locked && (
                 <div className="locked-banner">
-                  Locked — unlock (L) to edit or delete this shape.
+                  Locked — unlock (Shift+L) to edit or delete this {selectedShape.kind === 'text' ? 'text label' : 'shape'}.
+                </div>
+              )}
+              {selectedShape.kind === 'text' && (
+                <div className="form-group" style={{ marginBottom: '10px' }}>
+                  <label className="label">Text Content</label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={draftShapeLabel}
+                    disabled={Boolean(selectedShape.locked)}
+                    placeholder="e.g. VDD, PAD_IN"
+                    onChange={e => setDraftShapeLabel(e.target.value)}
+                    onBlur={commitShapeMeta}
+                    onKeyDown={handleShapeMetaKeyDown}
+                  />
                 </div>
               )}
               <div className="form-group" style={{ marginBottom: '10px' }}>
@@ -386,19 +442,21 @@ export const PropertiesPanel: React.FC = () => {
                   />
                 </div>
               </div>
-              <div className="form-group" style={{ marginTop: '10px' }}>
-                <label className="label">Optional Label (text/drawing)</label>
-                <input
-                  type="text"
-                  className="input-field"
-                  value={draftShapeLabel}
-                  disabled={Boolean(selectedShape.locked)}
-                  placeholder="e.g. CORE_REGION"
-                  onChange={e => setDraftShapeLabel(e.target.value)}
-                  onBlur={commitShapeMeta}
-                  onKeyDown={handleShapeMetaKeyDown}
-                />
-              </div>
+              {selectedShape.kind !== 'text' && (
+                <div className="form-group" style={{ marginTop: '10px' }}>
+                  <label className="label">Optional Label (text/drawing)</label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={draftShapeLabel}
+                    disabled={Boolean(selectedShape.locked)}
+                    placeholder="e.g. CORE_REGION"
+                    onChange={e => setDraftShapeLabel(e.target.value)}
+                    onBlur={commitShapeMeta}
+                    onKeyDown={handleShapeMetaKeyDown}
+                  />
+                </div>
+              )}
               <div className="form-row" style={{ marginTop: '10px', alignItems: 'center' }}>
                 <div className="form-group">
                   <label className="label">Display Color</label>
@@ -419,80 +477,240 @@ export const PropertiesPanel: React.FC = () => {
               </div>
             </div>
 
-            <div className="prop-section">
-              <h4 className="sub-title">bBox Coordinates (um)</h4>
-              <div className="prop-row">
-                <span className="prop-label">Size (W × H)</span>
-                <span className="prop-value">
-                  {formatGridValue(selectedShape.width, gridSize)} × {formatGridValue(selectedShape.height, gridSize)} µm
-                </span>
+            {selectedShape.kind === 'text' ? (
+              <>
+                <div className="prop-section">
+                  <h4 className="sub-title">Typography</h4>
+                  <div className="form-group" style={{ marginBottom: '10px' }}>
+                    <label className="label">Font Size / Height (um)</label>
+                    <input
+                      type="number"
+                      step={gridSize}
+                      min={gridSize}
+                      className="input-field"
+                      value={draftShapeFontSize}
+                      disabled={Boolean(selectedShape.locked)}
+                      onChange={e => setDraftShapeFontSize(e.target.value)}
+                      onBlur={commitTextGeometry}
+                      onKeyDown={event => {
+                        if (event.key === 'Enter') event.currentTarget.blur();
+                        if (event.key === 'Escape') {
+                          skipNextBlurCommitRef.current = true;
+                          setDraftShapeFontSize(formatGridValue(selectedShape.fontSize ?? selectedShape.height, gridSize));
+                          event.currentTarget.blur();
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label className="label">Font Family</label>
+                      <select
+                        className="input-field"
+                        value={selectedShape.fontFamily ?? 'stick'}
+                        disabled={Boolean(selectedShape.locked)}
+                        onChange={e => {
+                          try {
+                            updateShape(selectedShape.id, { fontFamily: e.target.value as LayoutTextFontFamily });
+                          } catch {
+                            // ignore locked
+                          }
+                        }}
+                      >
+                        {LAYOUT_TEXT_FONT_FAMILIES.map(f => (
+                          <option key={f.value} value={f.value}>{f.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label className="label">Style</label>
+                      <select
+                        className="input-field"
+                        value={selectedShape.fontStyle ?? 'normal'}
+                        disabled={Boolean(selectedShape.locked)}
+                        onChange={e => {
+                          try {
+                            updateShape(selectedShape.id, { fontStyle: e.target.value as LayoutTextFontStyle });
+                          } catch {
+                            // ignore locked
+                          }
+                        }}
+                      >
+                        {LAYOUT_TEXT_FONT_STYLES.map(s => (
+                          <option key={s.value} value={s.value}>{s.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="prop-section">
+                  <h4 className="sub-title">Origin &amp; Orientation (Virtuoso)</h4>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label className="label">X (um)</label>
+                      <input
+                        type="number"
+                        step={gridSize}
+                        className="input-field"
+                        value={draftShapeX1}
+                        disabled={Boolean(selectedShape.locked)}
+                        onChange={e => setDraftShapeX1(e.target.value)}
+                        onBlur={commitTextGeometry}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter') event.currentTarget.blur();
+                          if (event.key === 'Escape') {
+                            skipNextBlurCommitRef.current = true;
+                            setDraftShapeX1(formatGridValue(selectedShape.x, gridSize));
+                            event.currentTarget.blur();
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="label">Y (um)</label>
+                      <input
+                        type="number"
+                        step={gridSize}
+                        className="input-field"
+                        value={draftShapeY1}
+                        disabled={Boolean(selectedShape.locked)}
+                        onChange={e => setDraftShapeY1(e.target.value)}
+                        onBlur={commitTextGeometry}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter') event.currentTarget.blur();
+                          if (event.key === 'Escape') {
+                            skipNextBlurCommitRef.current = true;
+                            setDraftShapeY1(formatGridValue(selectedShape.y, gridSize));
+                            event.currentTarget.blur();
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="form-group transform-orientation">
+                    <label className="label">Orientation</label>
+                    <select
+                      className="input-field"
+                      value={selectedShape.orientation ?? 'R0'}
+                      disabled={Boolean(selectedShape.locked)}
+                      onChange={e => {
+                        try {
+                          updateShape(selectedShape.id, { orientation: e.target.value as CadenceOrientation });
+                        } catch {
+                          // ignore locked
+                        }
+                      }}
+                    >
+                      {ORIENTATIONS.map(ort => (
+                        <option key={ort} value={ort}>{ort}</option>
+                      ))}
+                    </select>
+                    <div className="rotation-actions">
+                      <button
+                        className="btn"
+                        type="button"
+                        disabled={Boolean(selectedShape.locked)}
+                        onClick={() => updateShape(selectedShape.id, {
+                          orientation: rotateOrientationByQuarterTurns(selectedShape.orientation ?? 'R0', -1) as CadenceOrientation,
+                        })}
+                        title="Rotate 90° clockwise"
+                      >
+                        <FiRotateCw /> −90°
+                      </button>
+                      <button
+                        className="btn"
+                        type="button"
+                        disabled={Boolean(selectedShape.locked)}
+                        onClick={() => updateShape(selectedShape.id, {
+                          orientation: rotateOrientationByQuarterTurns(selectedShape.orientation ?? 'R0', 1) as CadenceOrientation,
+                        })}
+                        title="Rotate 90° counter-clockwise"
+                      >
+                        <FiRotateCcw /> +90°
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="prop-section">
+                <h4 className="sub-title">bBox Coordinates (um)</h4>
+                <div className="prop-row">
+                  <span className="prop-label">Size (W × H)</span>
+                  <span className="prop-value">
+                    {formatGridValue(selectedShape.width, gridSize)} × {formatGridValue(selectedShape.height, gridSize)} µm
+                  </span>
+                </div>
+                <div className="form-row" style={{ marginTop: '8px' }}>
+                  <div className="form-group">
+                    <label className="label">Left X1</label>
+                    <input
+                      type="number"
+                      step={gridSize}
+                      className="input-field"
+                      value={draftShapeX1}
+                      disabled={Boolean(selectedShape.locked)}
+                      onChange={e => setDraftShapeX1(e.target.value)}
+                      onBlur={commitShapeBox}
+                      onKeyDown={handleShapeBoxKeyDown}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Bottom Y1</label>
+                    <input
+                      type="number"
+                      step={gridSize}
+                      className="input-field"
+                      value={draftShapeY1}
+                      disabled={Boolean(selectedShape.locked)}
+                      onChange={e => setDraftShapeY1(e.target.value)}
+                      onBlur={commitShapeBox}
+                      onKeyDown={handleShapeBoxKeyDown}
+                    />
+                  </div>
+                </div>
+                <div className="form-row" style={{ marginTop: '10px' }}>
+                  <div className="form-group">
+                    <label className="label">Right X2</label>
+                    <input
+                      type="number"
+                      step={gridSize}
+                      className="input-field"
+                      value={draftShapeX2}
+                      disabled={Boolean(selectedShape.locked)}
+                      onChange={e => setDraftShapeX2(e.target.value)}
+                      onBlur={commitShapeBox}
+                      onKeyDown={handleShapeBoxKeyDown}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Top Y2</label>
+                    <input
+                      type="number"
+                      step={gridSize}
+                      className="input-field"
+                      value={draftShapeY2}
+                      disabled={Boolean(selectedShape.locked)}
+                      onChange={e => setDraftShapeY2(e.target.value)}
+                      onBlur={commitShapeBox}
+                      onKeyDown={handleShapeBoxKeyDown}
+                    />
+                  </div>
+                </div>
               </div>
-              <div className="form-row" style={{ marginTop: '8px' }}>
-                <div className="form-group">
-                  <label className="label">Left X1</label>
-                  <input
-                    type="number"
-                    step={gridSize}
-                    className="input-field"
-                    value={draftShapeX1}
-                    disabled={Boolean(selectedShape.locked)}
-                    onChange={e => setDraftShapeX1(e.target.value)}
-                    onBlur={commitShapeBox}
-                    onKeyDown={handleShapeBoxKeyDown}
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="label">Bottom Y1</label>
-                  <input
-                    type="number"
-                    step={gridSize}
-                    className="input-field"
-                    value={draftShapeY1}
-                    disabled={Boolean(selectedShape.locked)}
-                    onChange={e => setDraftShapeY1(e.target.value)}
-                    onBlur={commitShapeBox}
-                    onKeyDown={handleShapeBoxKeyDown}
-                  />
-                </div>
-              </div>
-              <div className="form-row" style={{ marginTop: '10px' }}>
-                <div className="form-group">
-                  <label className="label">Right X2</label>
-                  <input
-                    type="number"
-                    step={gridSize}
-                    className="input-field"
-                    value={draftShapeX2}
-                    disabled={Boolean(selectedShape.locked)}
-                    onChange={e => setDraftShapeX2(e.target.value)}
-                    onBlur={commitShapeBox}
-                    onKeyDown={handleShapeBoxKeyDown}
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="label">Top Y2</label>
-                  <input
-                    type="number"
-                    step={gridSize}
-                    className="input-field"
-                    value={draftShapeY2}
-                    disabled={Boolean(selectedShape.locked)}
-                    onChange={e => setDraftShapeY2(e.target.value)}
-                    onBlur={commitShapeBox}
-                    onKeyDown={handleShapeBoxKeyDown}
-                  />
-                </div>
-              </div>
-            </div>
+            )}
 
             <div className="prop-section prop-actions-stack">
               <button
                 className={`btn lock-toggle-btn${selectedShape.locked ? ' is-locked' : ''}`}
                 type="button"
                 onClick={() => toggleShapeLock(selectedShape.id)}
-                title="Lock or unlock shape (L)"
+                title="Lock or unlock shape (Shift+L)"
               >
-                {selectedShape.locked ? <><FiUnlock /> Unlock Shape</> : <><FiLock /> Lock Shape</>}
+                {selectedShape.locked
+                  ? <><FiUnlock /> Unlock {selectedShape.kind === 'text' ? 'Text' : 'Shape'}</>
+                  : <><FiLock /> Lock {selectedShape.kind === 'text' ? 'Text' : 'Shape'}</>}
               </button>
               <button
                 className="btn btn-danger"
@@ -506,7 +724,7 @@ export const PropertiesPanel: React.FC = () => {
                   }
                 }}
               >
-                <FiTrash2 /> Delete Rectangle
+                <FiTrash2 /> Delete {selectedShape.kind === 'text' ? 'Text Label' : 'Rectangle'}
               </button>
             </div>
           </>
@@ -691,7 +909,7 @@ export const PropertiesPanel: React.FC = () => {
               <h4 className="sub-title">Transform (Virtuoso)</h4>
               {selectedInstance.locked && (
                 <div className="locked-banner">
-                  Locked — unlock (L) to move, rotate, align, or delete this block.
+                  Locked — unlock (Shift+L) to move, rotate, align, or delete this block.
                 </div>
               )}
               <div className="form-row">
@@ -807,7 +1025,7 @@ export const PropertiesPanel: React.FC = () => {
                 className={`btn lock-toggle-btn${selectedInstance.locked ? ' is-locked' : ''}`}
                 type="button"
                 onClick={() => toggleInstanceLock(selectedInstanceIds.length > 0 ? selectedInstanceIds : [selectedInstance.id])}
-                title="Lock or unlock selection (L)"
+                title="Lock or unlock selection (Shift+L)"
               >
                 {selectedInstance.locked ? <><FiUnlock /> Unlock {selectedInstanceIds.length > 1 ? 'Selection' : 'Instance'}</> : <><FiLock /> Lock {selectedInstanceIds.length > 1 ? 'Selection' : 'Instance'}</>}
               </button>

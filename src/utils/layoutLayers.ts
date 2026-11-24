@@ -1,9 +1,29 @@
 import type { Cell, Instance, PixelArray } from '../store/useStore.ts';
+import type { CadenceOrientation } from './alignment.ts';
 import { getPhysicalBounds } from './alignment.ts';
 import { snapToGrid } from './grid.ts';
 
+export type LayoutTextFontFamily = 'stick' | 'mono' | 'sans' | 'serif';
+export type LayoutTextFontStyle = 'normal' | 'bold' | 'italic' | 'bold italic';
+
+export const LAYOUT_TEXT_FONT_FAMILIES: ReadonlyArray<{ value: LayoutTextFontFamily; label: string; skillFont: 'stick' | 'fixed' | 'swiss' | 'roman' }> = [
+  { value: 'stick', label: 'Stick (CAD)', skillFont: 'stick' },
+  { value: 'sans', label: 'Sans', skillFont: 'swiss' },
+  { value: 'mono', label: 'Mono', skillFont: 'fixed' },
+  { value: 'serif', label: 'Serif', skillFont: 'roman' },
+] as const;
+
+export const LAYOUT_TEXT_FONT_STYLES: ReadonlyArray<{ value: LayoutTextFontStyle; label: string }> = [
+  { value: 'normal', label: 'Regular' },
+  { value: 'bold', label: 'Bold' },
+  { value: 'italic', label: 'Italic' },
+  { value: 'bold italic', label: 'Bold Italic' },
+] as const;
+
 export type LayoutShape = {
   id: string;
+  /** `'rect'` (default when omitted) or `'text'` (standalone Virtuoso text label / dbCreateLabel). */
+  kind?: 'rect' | 'text';
   /** Cadence Virtuoso layer name (e.g. 'text', 'prBoundary', 'M1', 'M2', 'PO', 'OD'). */
   layer: string;
   /** Cadence Virtuoso purpose name (e.g. 'drawing', 'pin', 'label', 'net', 'boundary'). */
@@ -12,16 +32,72 @@ export type LayoutShape = {
   x: number;
   /** Lower-left Y coordinate in the cellview's local (0, 0) frame (um), grid-snapped. */
   y: number;
-  /** Width in um (> 0, grid-snapped). */
+  /** Width in um (> 0, grid-snapped). For text labels, estimated text bounding width. */
   width: number;
-  /** Height in um (> 0, grid-snapped). */
+  /** Height in um (> 0, grid-snapped). For text labels, physical font height in um. */
   height: number;
   /** Optional custom display color override. */
   color?: string;
-  /** Optional text label rendered centered on the rectangle and exported via dbCreateLabel. */
+  /** For rect: optional centered label. For text: the displayed label string. */
   label?: string;
+  /** For text labels: font height in um (matches Virtuoso Create Label Height). */
+  fontSize?: number;
+  /** For text labels: font family preset ('stick' | 'mono' | 'sans' | 'serif'). */
+  fontFamily?: LayoutTextFontFamily;
+  /** For text labels: font weight/style ('normal' | 'bold' | 'italic' | 'bold italic'). */
+  fontStyle?: LayoutTextFontStyle;
+  /** For text labels: Cadence orientation ('R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'). */
+  orientation?: CadenceOrientation;
   /** Locked shapes resist canvas drag, resize, and deletion until unlocked. */
   locked?: boolean;
+};
+
+export const isTextShape = (shape: Pick<LayoutShape, 'kind'>): boolean => shape.kind === 'text';
+
+export const resolveTextFontFamilyCss = (family: LayoutTextFontFamily = 'stick'): string => {
+  switch (family) {
+    case 'sans':
+      return "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', sans-serif";
+    case 'mono':
+      return "'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace";
+    case 'serif':
+      return "Georgia, 'Times New Roman', Cambria, serif";
+    case 'stick':
+    default:
+      return "'SF Mono', 'Consolas', 'Courier New', ui-monospace, monospace";
+  }
+};
+
+export const resolveTextSkillFont = (family: LayoutTextFontFamily = 'stick'): 'stick' | 'fixed' | 'swiss' | 'roman' => (
+  LAYOUT_TEXT_FONT_FAMILIES.find(item => item.value === family)?.skillFont ?? 'stick'
+);
+
+/**
+ * Estimates the physical bounding width & height (in um) of a Virtuoso text label
+ * so hit-testing, selection frames, and cell auto-bounds tightly fit the drawn text.
+ */
+export const estimateTextBoxSize = (
+  text: string,
+  fontSize: number,
+  fontFamily: LayoutTextFontFamily = 'stick',
+  fontStyle: LayoutTextFontStyle = 'normal',
+  gridSize = 0.005,
+): { width: number; height: number } => {
+  const safeHeight = Math.max(gridSize, snapToGrid(fontSize, gridSize));
+  const lines = text.split(/\r?\n/);
+  const longestChars = Math.max(1, ...lines.map(line => line.length));
+  const charRatio = fontFamily === 'sans'
+    ? 0.58
+    : fontFamily === 'serif'
+      ? 0.56
+      : 0.62;
+  const boldFactor = fontStyle.includes('bold') ? 1.07 : 1;
+  const rawWidth = Math.max(safeHeight * 0.6, longestChars * safeHeight * charRatio * boldFactor);
+  const rawHeight = lines.length > 1 ? safeHeight * (1 + (lines.length - 1) * 1.2) : safeHeight;
+  return {
+    width: Math.max(gridSize, snapToGrid(rawWidth, gridSize)),
+    height: Math.max(gridSize, snapToGrid(rawHeight, gridSize)),
+  };
 };
 
 export type LayerPreset = {
@@ -35,6 +111,7 @@ export type LayerPreset = {
 
 export const VIRTUOSO_LAYER_PRESETS: readonly LayerPreset[] = [
   { layer: 'text', purpose: 'drawing', shortLabel: 'text/drw', color: '#06b6d4', fillOpacity: 0.22, strokeDash: 'solid' },
+  { layer: 'text', purpose: 'label', shortLabel: 'text/lbl', color: '#0891b2', fillOpacity: 0.2, strokeDash: 'solid' },
   { layer: 'prBoundary', purpose: 'drawing', shortLabel: 'prBnd/drw', color: '#6366f1', fillOpacity: 0.12, strokeDash: 'dashed' },
   { layer: 'M1', purpose: 'drawing', shortLabel: 'M1/drw', color: '#2563eb', fillOpacity: 0.3, strokeDash: 'solid' },
   { layer: 'M2', purpose: 'drawing', shortLabel: 'M2/drw', color: '#ef4444', fillOpacity: 0.28, strokeDash: 'solid' },
@@ -141,7 +218,19 @@ export const computeCellContentBounds = (
   };
 
   for (const shape of shapes) {
-    include(shape.x, shape.y, shape.x + shape.width, shape.y + shape.height);
+    if (shape.orientation && shape.orientation !== 'R0') {
+      const bounds = getPhysicalBounds({
+        id: shape.id,
+        x: shape.x,
+        y: shape.y,
+        width: shape.width,
+        height: shape.height,
+        orientation: shape.orientation,
+      });
+      include(bounds.left, bounds.bottom, bounds.right, bounds.top);
+    } else {
+      include(shape.x, shape.y, shape.x + shape.width, shape.y + shape.height);
+    }
   }
 
   for (const inst of instances) {

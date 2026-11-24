@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getTransformProps, useStore } from '../store/useStore';
 import type { Cell, Instance, LayoutShape, PixelArray } from '../store/useStore';
-import { resolveLayerStyle } from '../utils/layoutLayers';
+import { resolveLayerStyle, resolveTextFontFamilyCss } from '../utils/layoutLayers';
 import { FloorplanCanvas } from '../canvas/FloorplanCanvas';
 import {
   FiArrowUp,
@@ -593,6 +593,29 @@ const CompanionCellViewWindow: React.FC<{
             )}
             {view.shapes.map(shape => {
               const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+              if (shape.kind === 'text') {
+                const fontSize = shape.fontSize ?? shape.height;
+                const st = getTransformProps(shape.orientation ?? 'R0');
+                return (
+                  <g
+                    key={shape.id}
+                    transform={`translate(${shape.x} ${shape.y}) rotate(${st.rotation}) scale(${st.scaleX} ${st.scaleY})`}
+                  >
+                    <text
+                      x={0}
+                      y={-fontSize * 0.15}
+                      fill={style.color}
+                      fontFamily={resolveTextFontFamilyCss(shape.fontFamily)}
+                      fontSize={fontSize}
+                      fontWeight={shape.fontStyle?.includes('bold') ? 'bold' : 'normal'}
+                      fontStyle={shape.fontStyle?.includes('italic') ? 'italic' : 'normal'}
+                      transform="scale(1, -1)"
+                    >
+                      {shape.label ?? ''}
+                    </text>
+                  </g>
+                );
+              }
               return (
                 <rect
                   key={shape.id}
@@ -684,6 +707,29 @@ const CompanionCellViewWindow: React.FC<{
                       <g transform={childTransform}>
                         {childShapes.map(shape => {
                           const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                          if (shape.kind === 'text') {
+                            const fontSize = shape.fontSize ?? shape.height;
+                            const st = getTransformProps(shape.orientation ?? 'R0');
+                            return (
+                              <g
+                                key={shape.id}
+                                transform={`translate(${shape.x} ${shape.y}) rotate(${st.rotation}) scale(${st.scaleX} ${st.scaleY})`}
+                              >
+                                <text
+                                  x={0}
+                                  y={-fontSize * 0.15}
+                                  fill={style.color}
+                                  fontFamily={resolveTextFontFamilyCss(shape.fontFamily)}
+                                  fontSize={fontSize}
+                                  fontWeight={shape.fontStyle?.includes('bold') ? 'bold' : 'normal'}
+                                  fontStyle={shape.fontStyle?.includes('italic') ? 'italic' : 'normal'}
+                                  transform="scale(1, -1)"
+                                >
+                                  {shape.label ?? ''}
+                                </text>
+                              </g>
+                            );
+                          }
                           return (
                             <rect
                               key={shape.id}

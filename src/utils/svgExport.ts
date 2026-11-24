@@ -2,7 +2,8 @@ import type { ProjectSnapshot } from '../store/projectDocument.ts';
 import { getProjectSnapshot, useStore } from '../store/useStore.ts';
 import { SCALE_FACTOR } from './canvasConstants.ts';
 import { formatGridValue } from './grid.ts';
-import { resolveLayerStyle } from './layoutLayers.ts';
+import { resolveLayerStyle, resolveTextFontFamilyCss } from './layoutLayers.ts';
+import type { LayoutShape } from './layoutLayers.ts';
 
 const escapeXml = (value: string): string => value
   .replace(/&/g, '&amp;')
@@ -193,6 +194,19 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
       const shapeOffsetX = childView?.coordinateMode === 'centered' ? w / 2 : 0;
       const shapeOffsetY = childView?.coordinateMode === 'centered' ? h / 2 : 0;
       childShapes.forEach(shape => {
+        if (shape.kind === 'text') {
+          const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+          const sx = shape.x * sf + shapeOffsetX;
+          const sy = shape.y * sf + shapeOffsetY;
+          const fontPx = (shape.fontSize ?? shape.height) * sf;
+          const textContent = (shape.label ?? '').trim();
+          if (!textContent) return;
+          const fontWeight = shape.fontStyle?.includes('bold') ? 'bold' : 'normal';
+          const fontStyleAttr = shape.fontStyle?.includes('italic') ? ' font-style="italic"' : '';
+          const fontFamily = escapeXml(resolveTextFontFamilyCss(shape.fontFamily));
+          svg += `    <g transform="translate(${sx} ${sy})"><text x="0" y="${-fontPx * 0.15}" fill="${escapeXml(style.color)}" font-family="${fontFamily}" font-size="${fontPx}" font-weight="${fontWeight}"${fontStyleAttr} dominant-baseline="alphabetic" transform="scale(1, -1)">${escapeXml(textContent)}</text></g>\n`;
+          return;
+        }
         const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
         const sx = shape.x * sf + shapeOffsetX;
         const sy = shape.y * sf + shapeOffsetY;
@@ -240,8 +254,37 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     svg += `  </g>\n`;
   });
 
+  const renderSvgTextShape = (shape: LayoutShape, offsetX = 0, offsetY = 0, indent = '  ') => {
+    const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+    const sx = shape.x * sf + offsetX;
+    const sy = shape.y * sf + offsetY;
+    const fontPx = (shape.fontSize ?? shape.height) * sf;
+    const textContent = (shape.label ?? '').trim();
+    if (!textContent) return '';
+    let sRot = 0;
+    let sScaleX = 1;
+    let sScaleY = 1;
+    switch (shape.orientation ?? 'R0') {
+      case 'R90': sRot = 90; break;
+      case 'R180': sRot = 180; break;
+      case 'R270': sRot = 270; break;
+      case 'MX': sScaleY = -1; break;
+      case 'MY': sScaleX = -1; break;
+      case 'MXR90': sScaleY = -1; sRot = 90; break;
+      case 'MYR90': sScaleX = -1; sRot = 90; break;
+    }
+    const fontWeight = shape.fontStyle?.includes('bold') ? 'bold' : 'normal';
+    const fontStyleAttr = shape.fontStyle?.includes('italic') ? ' font-style="italic"' : '';
+    const fontFamily = escapeXml(resolveTextFontFamilyCss(shape.fontFamily));
+    return `${indent}<g transform="translate(${sx} ${sy}) rotate(${sRot}) scale(${sScaleX} ${sScaleY})"><text x="0" y="${-fontPx * 0.15}" fill="${escapeXml(style.color)}" font-family="${fontFamily}" font-size="${fontPx}" font-weight="${fontWeight}"${fontStyleAttr} dominant-baseline="alphabetic" transform="scale(1, -1)">${escapeXml(textContent)}</text></g>\n`;
+  };
+
   // Top-level drawn shapes
   (state.shapes ?? []).forEach((shape) => {
+    if (shape.kind === 'text') {
+      svg += renderSvgTextShape(shape, 0, 0, '  ');
+      return;
+    }
     const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
     const sx = shape.x * sf;
     const sy = shape.y * sf;

@@ -83,14 +83,22 @@ const assertRulers = (rawRulers: unknown[]): Ruler[] => {
   });
 };
 
+const VALID_TEXT_FONT_FAMILIES = new Set(['stick', 'mono', 'sans', 'serif']);
+const VALID_TEXT_FONT_STYLES = new Set(['normal', 'bold', 'italic', 'bold italic']);
+
 const assertShapes = (rawShapes: unknown[]): LayoutShape[] => {
   const shapeIds = new Set<string>();
   return rawShapes.map((raw, index) => {
     if (!isRecord(raw) || !nonEmptyString(raw.id) || !nonEmptyString(raw.layer) ||
         !nonEmptyString(raw.purpose) || !finite(raw.x) || !finite(raw.y) ||
         !finite(raw.width) || raw.width <= 0 || !finite(raw.height) || raw.height <= 0 ||
+        (raw.kind !== undefined && raw.kind !== 'rect' && raw.kind !== 'text') ||
         (raw.color !== undefined && typeof raw.color !== 'string') ||
         (raw.label !== undefined && typeof raw.label !== 'string') ||
+        (raw.fontSize !== undefined && (!finite(raw.fontSize) || raw.fontSize <= 0)) ||
+        (raw.fontFamily !== undefined && !VALID_TEXT_FONT_FAMILIES.has(String(raw.fontFamily))) ||
+        (raw.fontStyle !== undefined && !VALID_TEXT_FONT_STYLES.has(String(raw.fontStyle))) ||
+        (raw.orientation !== undefined && !orientations.has(String(raw.orientation))) ||
         (raw.locked !== undefined && typeof raw.locked !== 'boolean')) {
       throw new Error(`Invalid layout shape at index ${index}.`);
     }

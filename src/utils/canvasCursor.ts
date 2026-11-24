@@ -22,6 +22,7 @@ export const resolveCanvasCursor = (state: CanvasCursorState): string => {
     || state.appMode === 'place'
     || state.appMode === 'pixel-array'
     || state.appMode === 'rect'
+    || state.appMode === 'text'
     || state.appMode === 'stretch'
   ) {
     return 'crosshair';

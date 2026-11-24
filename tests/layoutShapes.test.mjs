@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getPhysicalBounds } from '../src/utils/alignment.ts';
+import { resolveCanvasCursor } from '../src/utils/canvasCursor.ts';
 import { composeCadenceTransform } from '../src/utils/hierarchy.ts';
 import {
   computeCellContentBounds,
+  estimateTextBoxSize,
   normalizeRectFromPoints,
   resolveLayerStyle,
+  resolveTextSkillFont,
 } from '../src/utils/layoutLayers.ts';
+import { hitTestShapeEdgeOrCorner, selectShapeEdgesInBox } from '../src/utils/shapeStretch.ts';
 import { generateSkillCode } from '../src/utils/skillExport.ts';
 import { extractProjectFromSvg, generateSvgMarkup } from '../src/utils/svgExport.ts';
 import { parseProjectDocument, serializeProjectDocument } from '../src/store/projectDocument.ts';
@@ -558,4 +562,139 @@ test('loadProject auto-shrinks legacy saved cells with drawn shapes, keeps R180 
   );
   assert.match(skill, /"DRAWN_ONLY"/);
   assert.doesNotMatch(skill, /"120 x 80 um"/);
+});
+
+test('Virtuoso Create Text (L) supports font size, font family, bold/italic styles, text/drawing & custom layers, round-trip, SVG, and SKILL dbCreateLabel', () => {
+  assert.equal(
+    resolveCanvasCursor({ appMode: 'text', edgeAlignmentActive: false, isPanning: false, isSpaceDown: false }),
+    'crosshair',
+  );
+  assert.equal(resolveTextSkillFont('stick'), 'stick');
+  assert.equal(resolveTextSkillFont('sans'), 'swiss');
+  assert.equal(resolveTextSkillFont('mono'), 'fixed');
+  assert.equal(resolveTextSkillFont('serif'), 'roman');
+
+  useStore.getState().loadProject(baseProject);
+  useStore.getState().setAppMode('text');
+  assert.equal(useStore.getState().appMode, 'text');
+  assert.equal(useStore.getState().activeTextLayer, 'text');
+  assert.equal(useStore.getState().activeTextPurpose, 'drawing');
+
+  useStore.getState().setActiveTextConfig({
+    content: 'VDD_IO',
+    fontSize: 25,
+    fontFamily: 'sans',
+    fontStyle: 'bold italic',
+    orientation: 'R90',
+    layer: 'M1',
+    purpose: 'label',
+  });
+  assert.equal(useStore.getState().activeTextContent, 'VDD_IO');
+  assert.equal(useStore.getState().activeTextFontSize, 25);
+  assert.equal(useStore.getState().activeTextFontFamily, 'sans');
+  assert.equal(useStore.getState().activeTextFontStyle, 'bold italic');
+  assert.equal(useStore.getState().activeTextLayer, 'M1');
+  assert.equal(useStore.getState().activeTextPurpose, 'label');
+
+  // Place top-level text on custom layer M1/label
+  const sizeTop = estimateTextBoxSize('VDD_IO', 25, 'sans', 'bold italic', 1);
+  const topTextId = useStore.getState().addShape({
+    kind: 'text',
+    layer: 'M1',
+    purpose: 'label',
+    x: 100,
+    y: 200,
+    width: sizeTop.width,
+    height: sizeTop.height,
+    label: 'VDD_IO',
+    fontSize: 25,
+    fontFamily: 'sans',
+    fontStyle: 'bold italic',
+    orientation: 'R90',
+  });
+  const topText = useStore.getState().shapes.find(s => s.id === topTextId);
+  assert.equal(topText.kind, 'text');
+  assert.equal(topText.fontSize, 25);
+  assert.equal(topText.fontFamily, 'sans');
+  assert.equal(topText.fontStyle, 'bold italic');
+  assert.equal(topText.orientation, 'R90');
+
+  // Stretch / partial select safely skips text labels
+  assert.deepEqual(selectShapeEdgesInBox(useStore.getState().shapes, { minX: -500, maxX: 500, minY: -500, maxY: 500 }), {});
+  assert.equal(hitTestShapeEdgeOrCorner(useStore.getState().shapes, 100, 200, 10), null);
+
+  // Create an IP cell containing ONLY a text/drawing label -> auto-bounds sizes from text and instantiates cleanly
+  useStore.getState().createEmptyCell('xxxL_TOP', 'TEXT_ONLY_CELL', '#06b6d4', true);
+  const textCellId = useStore.getState().activeCellId;
+  const subTextId = useStore.getState().addShape({
+    kind: 'text',
+    layer: 'text',
+    purpose: 'drawing',
+    x: 0,
+    y: 0,
+    width: 10,
+    height: 10,
+    label: 'PAD_SIG',
+    fontSize: 30,
+    fontFamily: 'stick',
+    fontStyle: 'normal',
+    orientation: 'R0',
+  });
+  assert.equal(isCellEmpty(useStore.getState().masterCells[textCellId]), false);
+  assert.equal(useStore.getState().masterCells[textCellId].height, 30);
+
+  // Edit text content, font size, style, and layer -> bounding box updates automatically
+  useStore.getState().updateShape(subTextId, {
+    label: 'PAD_SIG_LONG',
+    fontSize: 40,
+    fontFamily: 'serif',
+    fontStyle: 'bold',
+    layer: 'text',
+    purpose: 'drawing',
+  });
+  const editedSub = useStore.getState().shapes.find(s => s.id === subTextId);
+  assert.equal(editedSub.fontSize, 40);
+  assert.equal(editedSub.fontFamily, 'serif');
+  assert.equal(editedSub.fontStyle, 'bold');
+  assert.equal(useStore.getState().masterCells[textCellId].height, 40);
+  assert.ok(useStore.getState().masterCells[textCellId].width > 200);
+
+  // Instantiate TEXT_ONLY_CELL in top_asic
+  useStore.getState().openCellView(null);
+  useStore.getState().placeInstance(textCellId, -200, -100, 'R0', 'I_TXT');
+
+  // Round-trip via projectDocument serialization & validation
+  const snapshot = getProjectSnapshot(useStore.getState());
+  const rawJson = serializeProjectDocument(snapshot);
+  const parsed = parseProjectDocument(rawJson);
+  assert.equal(parsed.shapes?.[0]?.kind, 'text');
+  assert.equal(parsed.shapes?.[0]?.fontFamily, 'sans');
+  assert.equal(parsed.shapes?.[0]?.fontStyle, 'bold italic');
+  assert.equal(parsed.cellViews?.[textCellId]?.shapes?.[0]?.kind, 'text');
+  assert.equal(parsed.cellViews?.[textCellId]?.shapes?.[0]?.fontSize, 40);
+
+  // Reject malformed text metadata
+  const badDoc = JSON.parse(rawJson);
+  badDoc.project.shapes[0].fontFamily = 'comic-sans';
+  assert.throws(() => parseProjectDocument(JSON.stringify(badDoc)), /Invalid layout shape/);
+
+  // SVG export emits real <text> elements with bold/italic & font-size
+  const svg = generateSvgMarkup(snapshot);
+  assert.match(svg, /font-weight="bold" font-style="italic"[^>]*>VDD_IO<\/text>/);
+  assert.match(svg, /font-weight="bold"[^>]*>PAD_SIG_LONG<\/text>/);
+
+  // SKILL export emits native dbCreateLabel on custom M1/label & text/drawing with Virtuoso fonts (swiss / roman)
+  const skill = generateSkillCode(
+    snapshot.topLibName,
+    snapshot.topCellName,
+    snapshot.topWidth,
+    snapshot.topHeight,
+    snapshot.masterCells,
+    snapshot.instances,
+    snapshot.gridSize,
+    snapshot.pixelArray,
+    { hierarchyMode: 'preserve-master', cellViews: snapshot.cellViews, topShapes: snapshot.shapes },
+  );
+  assert.match(skill, /dbCreateLabel\(cv list\("M1" "label"\) 100:200 "VDD_IO" "lowerLeft" "R90" "swiss" 25\)/);
+  assert.match(skill, /dbCreateLabel\(cv list\("text" "drawing"\) 0:0 "PAD_SIG_LONG" "lowerLeft" "R0" "roman" 40\)/);
 });

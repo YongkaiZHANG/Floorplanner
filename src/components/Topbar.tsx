@@ -7,7 +7,7 @@ import { computeFloorplanMetrics, downloadCsvFile, findBoundaryViolations, gener
 import { createCisDemoProject } from '../utils/demoProjects';
 import { formatGridValue } from '../utils/grid';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
-import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiSquare, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle, FiFolder, FiChevronDown, FiCpu, FiFileText, FiCrop, FiMove } from 'react-icons/fi';
+import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiSquare, FiType, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle, FiFolder, FiChevronDown, FiCpu, FiFileText, FiCrop, FiMove } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import { EditingToolbar } from './EditingToolbar';
 import type { AlignmentAction } from './EditingToolbar';
@@ -357,6 +357,14 @@ export const Topbar: React.FC = () => {
             aria-pressed={appMode === 'rect'}
           >
             <FiSquare /> <span className="topbar-label-sm">Rect</span>
+          </button>
+          <button
+            className={`mode-btn ${appMode === 'text' ? 'active' : ''}`}
+            onClick={() => setAppMode(appMode === 'text' ? 'select' : 'text')}
+            title="Create Text Label (L): place text on text/drawing or any custom layer with selectable font size & style"
+            aria-pressed={appMode === 'text'}
+          >
+            <FiType /> <span className="topbar-label-sm">Text</span>
           </button>
           <button
             className={`mode-btn ${appMode === 'stretch' ? 'active' : ''}`}

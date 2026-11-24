@@ -8,6 +8,7 @@ import {
   getTopologicalCellOrder,
 } from './hierarchy.ts';
 import type { CellViewContent } from './hierarchy.ts';
+import { resolveTextSkillFont } from './layoutLayers.ts';
 import type { LayoutShape } from './layoutLayers.ts';
 
 export type SkillHierarchyMode = 'zero-origin-direct' | 'wrapped' | 'local-origin';
@@ -486,12 +487,32 @@ export const generateSkillCode = (
       code += `${indent}unless(boundary error("Floorplanner: cannot create prBoundary for %s/%s.\\n" ${lib} ${cellName}))\n`;
     }
 
-    // Emit user-drawn rectangles on their Virtuoso Layer/Purpose Pairs (e.g. ("text" "drawing")).
+    // Emit user-drawn rectangles & text labels on their Virtuoso Layer/Purpose Pairs (e.g. ("text" "drawing")).
     if (viewShapes.length > 0) {
       code += `${indent}; Drawn layout shapes inside ${skillComment(cell.cellName)}\n`;
       viewShapes.forEach(shape => {
         const localMinX = viewCoordinateMode === 'origin' ? shape.x : shape.x + cell.width / 2;
         const localMinY = viewCoordinateMode === 'origin' ? shape.y : shape.y + cell.height / 2;
+        const layerStr = skillString(shape.layer);
+        const purposeStr = skillString(shape.purpose);
+        if (shape.kind === 'text') {
+          const textContent = (shape.label ?? '').trim();
+          if (!textContent) return;
+          const localOrient = shape.orientation ?? 'R0';
+          const composed = anchoredTransform
+            ? composeCadenceTransform(anchoredTransform, { x: localMinX, y: localMinY, orientation: localOrient }, 0, 0, 'origin')
+            : { x: localMinX, y: localMinY, orientation: localOrient };
+          const lx = formatCoord(composed.x, gridSize);
+          const ly = formatCoord(composed.y, gridSize);
+          const textStr = skillString(textContent);
+          const orientStr = skillString(composed.orientation);
+          const skillFont = skillString(resolveTextSkillFont(shape.fontFamily));
+          const labelH = cleanNumber(shape.fontSize ?? shape.height);
+          code += `${indent}unless(errset(dbCreateLabel(cv list(${layerStr} ${purposeStr}) ${lx}:${ly} ${textStr} "lowerLeft" ${orientStr} ${skillFont} ${labelH}) t)\n`;
+          code += `${indent}  printf("WARNING: cannot create %s/%s text label %s in %s.\\n" ${layerStr} ${purposeStr} ${textStr} ${cellName})\n`;
+          code += `${indent})\n`;
+          return;
+        }
         const localMaxX = localMinX + shape.width;
         const localMaxY = localMinY + shape.height;
         const rect = anchoredTransform
@@ -501,8 +522,6 @@ export const generateSkillCode = (
         const ry1 = formatCoord(rect.bottom, gridSize);
         const rx2 = formatCoord(rect.right, gridSize);
         const ry2 = formatCoord(rect.top, gridSize);
-        const layerStr = skillString(shape.layer);
-        const purposeStr = skillString(shape.purpose);
         code += `${indent}unless(errset(dbCreateRect(cv list(${layerStr} ${purposeStr}) list(${rx1}:${ry1} ${rx2}:${ry2})) t)\n`;
         code += `${indent}  printf("WARNING: cannot create %s/%s rectangle in %s.\\n" ${layerStr} ${purposeStr} ${cellName})\n`;
         code += `${indent})\n`;
@@ -740,12 +759,26 @@ export const generateSkillCode = (
   if (topShapes.length > 0) {
     code += `    ; Drawn layout shapes directly inside ${safeTopName}\n`;
     topShapes.forEach(shape => {
+      const layerStr = skillString(shape.layer);
+      const purposeStr = skillString(shape.purpose);
+      if (shape.kind === 'text') {
+        const textContent = (shape.label ?? '').trim();
+        if (!textContent) return;
+        const lx = formatCoord(shape.x, gridSize);
+        const ly = formatCoord(shape.y, gridSize);
+        const textStr = skillString(textContent);
+        const orientStr = skillString(shape.orientation ?? 'R0');
+        const skillFont = skillString(resolveTextSkillFont(shape.fontFamily));
+        const labelH = cleanNumber(shape.fontSize ?? shape.height);
+        code += `    unless(errset(dbCreateLabel(cv list(${layerStr} ${purposeStr}) ${lx}:${ly} ${textStr} "lowerLeft" ${orientStr} ${skillFont} ${labelH}) t)\n`;
+        code += `      printf("WARNING: cannot create %s/%s text label %s in %s.\\n" ${layerStr} ${purposeStr} ${textStr} ${topCell})\n`;
+        code += `    )\n`;
+        return;
+      }
       const rx1 = formatCoord(shape.x, gridSize);
       const ry1 = formatCoord(shape.y, gridSize);
       const rx2 = formatCoord(shape.x + shape.width, gridSize);
       const ry2 = formatCoord(shape.y + shape.height, gridSize);
-      const layerStr = skillString(shape.layer);
-      const purposeStr = skillString(shape.purpose);
       code += `    unless(errset(dbCreateRect(cv list(${layerStr} ${purposeStr}) list(${rx1}:${ry1} ${rx2}:${ry2})) t)\n`;
       code += `      printf("WARNING: cannot create %s/%s rectangle in %s.\\n" ${layerStr} ${purposeStr} ${topCell})\n`;
       code += `    )\n`;

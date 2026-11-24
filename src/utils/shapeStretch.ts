@@ -61,7 +61,7 @@ export const selectShapeEdgesInBox = (
   const result: PartialShapeSelection = {};
 
   for (const shape of shapes) {
-    if (shape.locked) continue;
+    if (shape.locked || shape.kind === 'text') continue;
     const x1 = shape.x;
     const x2 = shape.x + shape.width;
     const y1 = shape.y;
@@ -105,7 +105,7 @@ export const hitTestShapeEdgeOrCorner = (
 
   for (let i = shapes.length - 1; i >= 0; i -= 1) {
     const shape = shapes[i];
-    if (shape.locked) continue;
+    if (shape.locked || shape.kind === 'text') continue;
     const x1 = shape.x;
     const x2 = shape.x + shape.width;
     const y1 = shape.y;
