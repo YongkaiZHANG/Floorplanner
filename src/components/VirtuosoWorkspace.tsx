@@ -700,42 +700,65 @@ const CompanionCellViewWindow: React.FC<{
                           const subMaster = masterCells[sub.cellId];
                           if (!subMaster) return null;
                           const st = getTransformProps(sub.orientation);
+                          const subShapes = sub.cellId === activeCellId ? activeShapes : (cellViews[sub.cellId]?.shapes ?? []);
+                          const subHasShapes = subShapes.length > 0;
                           return (
                             <g
                               key={sub.id}
                               transform={`translate(${sub.x} ${sub.y}) rotate(${st.rotation}) scale(${st.scaleX} ${st.scaleY})`}
                             >
-                              <rect
-                                x={subMaster.originX ?? 0}
-                                y={subMaster.originY ?? 0}
-                                width={subMaster.width}
-                                height={subMaster.height}
-                                fill={subMaster.color}
-                                fillOpacity={Math.min(0.7, (subMaster.opacity ?? 0.5) * 0.85)}
-                                stroke="#0f172a"
-                                strokeWidth={0.75}
-                                strokeOpacity={0.55}
-                                vectorEffect="non-scaling-stroke"
-                              />
+                              {!subHasShapes && (
+                                <rect
+                                  x={subMaster.originX ?? 0}
+                                  y={subMaster.originY ?? 0}
+                                  width={subMaster.width}
+                                  height={subMaster.height}
+                                  fill={subMaster.color}
+                                  fillOpacity={Math.min(0.7, (subMaster.opacity ?? 0.5) * 0.85)}
+                                  stroke="#0f172a"
+                                  strokeWidth={0.75}
+                                  strokeOpacity={0.55}
+                                  vectorEffect="non-scaling-stroke"
+                                />
+                              )}
+                              {subShapes.map(shape => {
+                                const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                                return (
+                                  <rect
+                                    key={shape.id}
+                                    x={shape.x}
+                                    y={shape.y}
+                                    width={shape.width}
+                                    height={shape.height}
+                                    fill={style.color}
+                                    fillOpacity={style.fillOpacity}
+                                    stroke={style.color}
+                                    strokeWidth={0.85}
+                                    vectorEffect="non-scaling-stroke"
+                                  />
+                                );
+                              })}
                             </g>
                           );
                         })}
                       </g>
                     );
                   })()}
-                  <text
-                    x={ox + master.width / 2}
-                    y={-(oy + master.height / 2)}
-                    fill="#0f172a"
-                    fontSize={instFS}
-                    fontWeight={700}
-                    fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    transform="scale(1, -1)"
-                  >
-                    {master.cellName}
-                  </text>
+                  {!childHasContent && (
+                    <text
+                      x={ox + master.width / 2}
+                      y={-(oy + master.height / 2)}
+                      fill="#0f172a"
+                      fontSize={instFS}
+                      fontWeight={700}
+                      fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      transform="scale(1, -1)"
+                    >
+                      {master.cellName}
+                    </text>
+                  )}
                 </g>
               );
             })}

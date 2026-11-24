@@ -405,14 +405,16 @@ export const snapPadToNearestEdge = (
   gridSize: number,
   orientation = 'R0',
   padInset = 0,
+  originX = 0,
+  originY = 0,
 ) => {
   const innerW = topWidth - padInset * 2;
   const innerH = topHeight - padInset * 2;
   if (innerW <= 0 || innerH <= 0) {
     throw new RangeError('Pad inset leaves no room inside the top cell');
   }
-  const localBounds = getPhysicalBounds({ id: 'pad-preview', x: 0, y: 0, orientation, width, height });
-  const inside = clampInstancePosition(x, y, orientation, width, height, innerW, innerH, gridSize);
+  const localBounds = getPhysicalBounds({ id: 'pad-preview', x: 0, y: 0, orientation, width, height, originX, originY });
+  const inside = clampInstancePosition(x, y, orientation, width, height, innerW, innerH, gridSize, originX, originY);
   const edgeCoordinates = {
     left: -innerW / 2 - localBounds.left,
     right: innerW / 2 - localBounds.right,
@@ -448,6 +450,8 @@ export const snapPadToAutoOrientedEdge = (
   topHeight: number,
   gridSize: number,
   padInset = 0,
+  originX = 0,
+  originY = 0,
 ) => {
   const innerW = topWidth - padInset * 2;
   const innerH = topHeight - padInset * 2;
@@ -456,8 +460,8 @@ export const snapPadToAutoOrientedEdge = (
   }
   const candidates = (Object.keys(PAD_ORIENTATION_BY_SIDE) as PadSide[]).map(side => {
     const orientation = PAD_ORIENTATION_BY_SIDE[side];
-    const local = getPhysicalBounds({ id: 'auto-pad-preview', x: 0, y: 0, orientation, width, height });
-    const inside = clampInstancePosition(x, y, orientation, width, height, innerW, innerH, gridSize);
+    const local = getPhysicalBounds({ id: 'auto-pad-preview', x: 0, y: 0, orientation, width, height, originX, originY });
+    const inside = clampInstancePosition(x, y, orientation, width, height, innerW, innerH, gridSize, originX, originY);
     const target = {
       x: side === 'left'
         ? -innerW / 2 - local.left
@@ -471,7 +475,7 @@ export const snapPadToAutoOrientedEdge = (
           : inside.y,
     };
     const snapped = { x: snapToGrid(target.x, gridSize), y: snapToGrid(target.y, gridSize) };
-    const physical = getPhysicalBounds({ id: 'auto-pad-candidate', ...snapped, orientation, width, height });
+    const physical = getPhysicalBounds({ id: 'auto-pad-candidate', ...snapped, orientation, width, height, originX, originY });
     const attached = side === 'left' ? Math.abs(physical.left + innerW / 2) <= 1e-9
       : side === 'right' ? Math.abs(physical.right - innerW / 2) <= 1e-9
         : side === 'bottom' ? Math.abs(physical.bottom + innerH / 2) <= 1e-9
@@ -487,6 +491,8 @@ export const snapPadToAutoOrientedEdge = (
 type PadGroupGeometry = {
   width: number;
   height: number;
+  originX?: number;
+  originY?: number;
   count: number;
   pitch: number;
   side: PadSide;
@@ -501,12 +507,14 @@ type PadGroupGeometry = {
 
 export const computePadGroupPositions = (config: PadGroupGeometry) => {
   const padInset = config.padInset ?? 0;
+  const originX = config.originX ?? 0;
+  const originY = config.originY ?? 0;
   const innerW = config.topWidth - padInset * 2;
   const innerH = config.topHeight - padInset * 2;
   if (innerW <= 0 || innerH <= 0) {
     throw new RangeError('Pad inset leaves no room inside the top cell');
   }
-  const local = getPhysicalBounds({ id: 'pad-group-preview', x: 0, y: 0, orientation: config.orientation, width: config.width, height: config.height });
+  const local = getPhysicalBounds({ id: 'pad-group-preview', x: 0, y: 0, orientation: config.orientation, width: config.width, height: config.height, originX, originY });
   const horizontal = config.side === 'top' || config.side === 'bottom';
   const padAlong = horizontal ? local.right - local.left : local.top - local.bottom;
   if (config.pitch + 1e-9 < padAlong) {
@@ -535,7 +543,7 @@ export const computePadGroupPositions = (config: PadGroupGeometry) => {
     const targetY = horizontal
       ? config.side === 'bottom' ? -innerH / 2 - local.bottom : innerH / 2 - local.top
       : along - local.centerY;
-    const position = clampInstancePosition(targetX, targetY, config.orientation, config.width, config.height, innerW, innerH, config.gridSize);
+    const position = clampInstancePosition(targetX, targetY, config.orientation, config.width, config.height, innerW, innerH, config.gridSize, originX, originY);
     if (Math.abs(position.x - targetX) > 1e-8 || Math.abs(position.y - targetY) > 1e-8) {
       throw new RangeError('Pad group must fit inside the top cell and land exactly on the placement grid');
     }
@@ -722,7 +730,7 @@ const clampInstancesToContainer = (
     };
   }
   const position = master.kind === 'pad'
-    ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, containerW, containerH, gridSize, instance.orientation, padInset)
+    ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, containerW, containerH, gridSize, instance.orientation, padInset, master.originX ?? 0, master.originY ?? 0)
     : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, containerW, containerH, gridSize, master.originX ?? 0, master.originY ?? 0);
   return { ...instance, x: position.x, y: position.y };
 });
@@ -1847,6 +1855,8 @@ export const useStore = create<ProjectState>((set) => ({
         state.gridSize,
         instance.orientation,
         padInset,
+        master.originX ?? 0,
+        master.originY ?? 0,
       );
       return { ...instance, x: position.x, y: position.y };
     });
@@ -2476,7 +2486,7 @@ export const useStore = create<ProjectState>((set) => ({
       ...(nextLocked ? { locked: true } : {}),
     };
     const shapes = state.shapes.map(s => (s.id === id ? updated : s));
-    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
     return commitProjectPatch(state, `Edit ${nextLayer}/${nextPurpose} rect`, {
       shapes,
       ...(boundsSync ?? {}),
@@ -2514,7 +2524,7 @@ export const useStore = create<ProjectState>((set) => ({
       return { ...existing, x: cleanX, y: cleanY, width, height };
     });
     if (changedCount === 0) return state;
-    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
     const label = actionLabel ?? `Stretch ${changedCount} shape${changedCount === 1 ? '' : 's'}`;
     return commitProjectPatch(state, label, {
       shapes,
@@ -2529,7 +2539,7 @@ export const useStore = create<ProjectState>((set) => ({
       throw new Error('This shape is locked. Unlock it before deleting.');
     }
     const shapes = state.shapes.filter(s => s.id !== id);
-    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
     return {
       ...commitProjectPatch(state, `Delete ${existing.layer}/${existing.purpose} rect`, {
         shapes,
@@ -2564,7 +2574,7 @@ export const useStore = create<ProjectState>((set) => ({
         ? { ...s, x: Object.is(nextX, -0) ? 0 : nextX, y: Object.is(nextY, -0) ? 0 : nextY }
         : s
     ));
-    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
     return commitProjectPatch(state, `Nudge ${existing.layer}/${existing.purpose} rect`, {
       shapes,
       ...(boundsSync ?? {}),
@@ -2629,7 +2639,7 @@ export const useStore = create<ProjectState>((set) => ({
           y: Object.is(snapToGrid(targetY, state.gridSize), -0) ? 0 : snapToGrid(targetY, state.gridSize),
         }
       : master.kind === 'pad'
-        ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, effectiveOrientation, state.padInset)
+        ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, effectiveOrientation, state.padInset, master.originX ?? 0, master.originY ?? 0)
         : clampInstancePosition(targetX, targetY, effectiveOrientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
 
     const blocker = findOverlappingInstance(
@@ -2722,7 +2732,7 @@ export const useStore = create<ProjectState>((set) => ({
               y: Object.is(snapToGrid(reqY, state.gridSize), -0) ? 0 : snapToGrid(reqY, state.gridSize),
             }
           : master.kind === 'pad'
-            ? snapPadToNearestEdge(reqX, reqY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset)
+            ? snapPadToNearestEdge(reqX, reqY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset, master.originX ?? 0, master.originY ?? 0)
             : clampInstancePosition(reqX, reqY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
 
         const blocker = findOverlappingInstance(
@@ -2977,11 +2987,12 @@ export const useStore = create<ProjectState>((set) => ({
     if (!pending) return state;
     const master = state.masterCells[pending.masterId];
     if (!master || master.kind !== 'pad') return state;
-    const snapped = snapPadToAutoOrientedEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, state.padInset);
+    const snapped = snapPadToAutoOrientedEdge(x, y, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, state.padInset, master.originX ?? 0, master.originY ?? 0);
     const horizontal = snapped.side === 'top' || snapped.side === 'bottom';
     const centerAlong = horizontal ? x : y;
     const positions = computePadGroupPositions({
-      width: master.width, height: master.height, count: pending.count, pitch: pending.pitch,
+      width: master.width, height: master.height, originX: master.originX, originY: master.originY,
+      count: pending.count, pitch: pending.pitch,
       side: snapped.side, centerAlong, orientation: snapped.orientation,
       topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize,
       padInset: state.padInset,
@@ -2989,7 +3000,7 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = [...state.instances];
     for (const position of positions) {
       const blocker = findOverlappingInstance(
-        { x: position.x, y: position.y, orientation: snapped.orientation, width: master.width, height: master.height },
+        { x: position.x, y: position.y, orientation: snapped.orientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY },
         instances,
         state.masterCells,
       );
@@ -3140,6 +3151,8 @@ export const useStore = create<ProjectState>((set) => ({
                 state.gridSize,
                 inst.orientation,
                 state.padInset,
+                master.originX ?? 0,
+                master.originY ?? 0,
               )
             : clampInstancePosition(x, y, inst.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
         const blocker = findOverlappingInstance(
@@ -3281,7 +3294,7 @@ export const useStore = create<ProjectState>((set) => ({
               y: Object.is(snapToGrid(centeredY, state.gridSize), -0) ? 0 : snapToGrid(centeredY, state.gridSize),
             }
           : master.kind === 'pad'
-            ? snapPadToNearestEdge(centeredX, centeredY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset)
+            ? snapPadToNearestEdge(centeredX, centeredY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset, master.originX ?? 0, master.originY ?? 0)
             : clampInstancePosition(centeredX, centeredY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
         const blocker = findOverlappingInstance(
           { id: inst.id, x: clamped.x, y: clamped.y, orientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY },
@@ -3510,7 +3523,7 @@ export const useStore = create<ProjectState>((set) => ({
                 y: Object.is(snapToGrid(item.y + dy, state.gridSize), -0) ? 0 : snapToGrid(item.y + dy, state.gridSize),
               }
             : master.kind === 'pad'
-              ? snapPadToNearestEdge(item.x + dx, item.y + dy, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset)
+              ? snapPadToNearestEdge(item.x + dx, item.y + dy, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset, master.originX ?? 0, master.originY ?? 0)
               : clampInstancePosition(item.x + dx, item.y + dy, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
           const blocker = findOverlappingInstance(
             { x: clamped.x, y: clamped.y, orientation: item.orientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY },
@@ -3858,26 +3871,48 @@ export const useStore = create<ProjectState>((set) => ({
     const topLibName = data.topLibName ?? state.topLibName;
     const topCellName = data.topCellName ?? state.topCellName;
     const padInset = normalizePadInset(data.padInset ?? 0, topWidth, topHeight, gridSize);
-    const masterCells = Object.fromEntries(Object.entries(data.masterCells ?? {}).map(([id, master]) => [
+    const rawMasterCells: Record<string, Cell> = Object.fromEntries(Object.entries(data.masterCells ?? {}).map(([id, master]) => [
       id,
       { ...master, libName: master.libName?.trim() || topLibName },
     ]));
+    // Pass 1: Normalize drawn shapes and promote any cell with drawn shapes to Virtuoso content-driven autoBounds
+    // so legacy saved cells (e.g. pre-sized IP/PAD boxes that already contain text/drawing shapes) shrink cleanly to ONLY their drawn content.
+    const provisionalViews: Record<string, CellViewContent> = {};
+    for (const [cellId, rawView] of Object.entries(data.cellViews ?? {})) {
+      const container = rawMasterCells[cellId];
+      if (!container) continue;
+      const viewShapes = normalizeShapesForGrid(rawView.shapes ?? [], gridSize);
+      if (viewShapes.length > 0 && !container.autoBounds) {
+        rawMasterCells[cellId] = { ...container, autoBounds: true };
+      }
+      provisionalViews[cellId] = {
+        ...rawView,
+        instances: rawView.instances ?? [],
+        rulers: rawView.rulers ?? [],
+        ...(viewShapes.length > 0 ? { shapes: viewShapes } : {}),
+      };
+    }
+    const masterCells = propagateAutoBounds(rawMasterCells, provisionalViews);
+
     const instances = clampInstancesToContainer(data.instances ?? [], masterCells, topWidth, topHeight, gridSize, padInset);
     const shapes = normalizeShapesForGrid(data.shapes ?? [], gridSize);
     const pixelArray = data.pixelArray
       ? normalizePixelArray(data.pixelArray, topWidth, topHeight, gridSize)
       : null;
     const loadedCellViews: Record<string, CellViewContent> = {};
-    for (const [cellId, rawView] of Object.entries(data.cellViews ?? {})) {
+    for (const [cellId, rawView] of Object.entries(provisionalViews)) {
       const container = masterCells[cellId];
       if (!container) continue;
-      const viewInset = normalizePadInset(rawView.padInset ?? 0, container.width, container.height, gridSize);
+      const rawInset = rawView.padInset ?? 0;
+      const viewInset = rawInset > 0 && rawInset * 2 < container.width && rawInset * 2 < container.height
+        ? normalizePadInset(rawInset, container.width, container.height, gridSize)
+        : 0;
       const isOriginView = resolveStoredCoordinateMode(rawView) === 'origin';
       const viewInstances = clampInstancesToContainer(rawView.instances ?? [], masterCells, container.width, container.height, gridSize, viewInset, undefined, isOriginView);
-      const viewShapes = normalizeShapesForGrid(rawView.shapes ?? [], gridSize);
+      const viewShapes = rawView.shapes ?? [];
       const viewOriginX = isOriginView ? (container.originX ?? 0) : -container.width / 2;
       const viewOriginY = isOriginView ? (container.originY ?? 0) : -container.height / 2;
-      const viewPixelArray = rawView.pixelArray
+      const viewPixelArray = rawView.pixelArray && container.width > gridSize && container.height > gridSize
         ? normalizePixelArray(rawView.pixelArray, container.width, container.height, gridSize, viewOriginX, viewOriginY)
         : null;
       const normalized = buildCellViewContent(viewInstances, rawView.rulers ?? [], viewPixelArray, viewInset, viewShapes, rawView.coordinateMode);

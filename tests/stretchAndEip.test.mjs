@@ -79,10 +79,20 @@ test('selectShapeEdgesInBox partially selects single edges, corners, multi-shape
   const corner = selectShapeEdgesInBox(shapes, { minX: 90, maxX: 110, minY: 50, maxY: 70 });
   assert.deepEqual(corner, { r1: ['right', 'top'] });
 
-  // Cross right edges of r1, r2, and rLocked -> selects r1 & r2, skips locked rLocked
-  const multiRight = selectShapeEdgesInBox(shapes, { minX: 95, maxX: 105, minY: 20, maxY: 240 });
-  assert.deepEqual(multiRight, { r1: ['right'], r2: ['right'] });
-  assert.equal(countPartialSelectedEdges(multiRight), 2);
+  // Cross right edges of two overlapping-Y shapes without enclosing corners -> right-only on unlocked shapes, skips locked
+  const parallelShapes = [
+    { id: 'p1', layer: 'text', purpose: 'drawing', x: 0, y: 0, width: 100, height: 80 },
+    { id: 'p2', layer: 'M1', purpose: 'drawing', x: 20, y: 0, width: 80, height: 80 },
+    { id: 'pLocked', layer: 'M2', purpose: 'drawing', x: 10, y: 0, width: 90, height: 80, locked: true },
+  ];
+  const parallelRight = selectShapeEdgesInBox(parallelShapes, { minX: 95, maxX: 105, minY: 15, maxY: 65 });
+  assert.deepEqual(parallelRight, { p1: ['right'], p2: ['right'] });
+  assert.equal(countPartialSelectedEdges(parallelRight), 2);
+
+  // Sweeping across stacked shapes encloses intermediate corners too (Virtuoso area partial select) and skips locked rLocked
+  const multiSweep = selectShapeEdgesInBox(shapes, { minX: 95, maxX: 105, minY: 20, maxY: 240 });
+  assert.deepEqual(multiSweep, { r1: ['right', 'top'], r2: ['right', 'bottom', 'top'] });
+  assert.equal(countPartialSelectedEdges(multiSweep), 5);
 });
 
 test('hitTestShapeEdgeOrCorner prioritizes corners over edges and mergePartialSelections toggles cleanly', () => {
@@ -160,14 +170,16 @@ test('Virtuoso Edit-in-Place (X) descent tracks context stack, partial stretch u
   assert.equal(useStore.getState().descendStack[0].instanceId, inst.id);
   assert.equal(useStore.getState().descendStack[0].parentCellId, null);
 
-  // Partially select right edges of BOTH shapes and stretch them +100 um in one atomic batch
+  // Partially select across the right side of BOTH stacked shapes and stretch horizontally +100 um in one atomic batch
   const partialSel = selectShapeEdgesInBox(useStore.getState().shapes, { minX: 195, maxX: 205, minY: 10, maxY: 190 });
-  assert.deepEqual(partialSel, { [s1]: ['right'], [s2]: ['right'] });
+  assert.deepEqual(partialSel, { [s1]: ['right', 'top'], [s2]: ['right', 'bottom'] });
   const updates = computeStretchedShapes(useStore.getState().shapes, partialSel, 100, 0, 1, 1);
   useStore.getState().batchUpdateShapes(updates);
 
   assert.equal(useStore.getState().shapes.find(s => s.id === s1).width, 300);
+  assert.equal(useStore.getState().shapes.find(s => s.id === s1).height, 100);
   assert.equal(useStore.getState().shapes.find(s => s.id === s2).width, 300);
+  assert.equal(useStore.getState().shapes.find(s => s.id === s2).height, 80);
   assert.equal(useStore.getState().masterCells[coreId].width, 300);
 
   // Return to top_asic -> descendStack cleared and I_CORE reflects stretched 300x200 bounds immediately

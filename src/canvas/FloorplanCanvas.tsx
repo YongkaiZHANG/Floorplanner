@@ -1364,6 +1364,8 @@ export const FloorplanCanvas: React.FC = () => {
               gridSize,
               orientation,
               padInset,
+              master.originX ?? 0,
+              master.originY ?? 0,
             )
           : clampWithSnapStep(
               umX,
@@ -2818,7 +2820,6 @@ export const FloorplanCanvas: React.FC = () => {
             const childSubInstances = childView?.instances ?? [];
             const childHasContent = childShapes.length > 0 || childSubInstances.length > 0;
             const childIsEmpty = isCellEmpty(masterCell);
-            const childHasShapeLabel = childShapes.some(s => Boolean(s.label?.trim()));
 
             const t = getTransformProps(inst.orientation);
             const outlineStyle = masterCell.outlineStyle ?? 'solid';
@@ -2969,35 +2970,13 @@ export const FloorplanCanvas: React.FC = () => {
                   />
                 )}
                 
-                {!childIsEmpty && (() => {
+                {!childIsEmpty && !childHasContent && (() => {
                   const shortSide = Math.min(w, h);
                   const longSide = Math.max(w, h);
                   const fontSizeWorld = Math.min(shortSide * 0.18, longSide * 0.1);
                   const screenH = h * stageScale;
                   const screenW = w * stageScale;
                   if (screenH < 24 || screenW < 30) return null;
-
-                  // For content-driven Virtuoso cells (drawn LPP shapes / sub-instances), show a compact non-obtrusive instance tag.
-                  if (childHasContent) {
-                    const compactFS = Math.min(11 / stageScale, Math.max(8 / stageScale, shortSide * 0.14));
-                    return (
-                      <Group x={ox} y={oy + h} scaleY={-1} listening={false}>
-                        <Text
-                          text={childHasShapeLabel ? `${inst.name} (${masterCell.cellName})` : `${inst.name} · ${masterCell.cellName}`}
-                          x={4 / stageScale}
-                          y={3 / stageScale}
-                          width={Math.max(1, w - 8 / stageScale)}
-                          align="left"
-                          fill="rgba(15, 23, 42, 0.72)"
-                          fontSize={compactFS}
-                          fontFamily={CANVAS_FONT_MONO}
-                          fontStyle="bold"
-                          ellipsis={true}
-                          wrap="none"
-                        />
-                      </Group>
-                    );
-                  }
 
                   const nameFS = fontSizeWorld;
                   const subFS = fontSizeWorld * 0.65;
@@ -3056,6 +3035,62 @@ export const FloorplanCanvas: React.FC = () => {
                     </Group>
                   );
                 })()}
+              </Group>
+            );
+          })}
+
+          {/* Always-upright selection tag for selected content-driven Virtuoso instances */}
+          {selectedInstanceIds.map(selId => {
+            const inst = instances.find(item => item.id === selId);
+            if (!inst) return null;
+            const masterCell = masterCells[inst.cellId];
+            if (!masterCell || isCellEmpty(masterCell)) return null;
+            const childView = cellViews[inst.cellId];
+            const childHasContent = (childView?.shapes?.length ?? 0) > 0 || (childView?.instances?.length ?? 0) > 0;
+            if (!childHasContent) return null;
+            const groupDragOffset = multiDragDelta && inst.id !== multiDragDelta.anchorId && selectedInstanceIds.includes(inst.id)
+              ? multiDragDelta
+              : null;
+            const box = computeInstanceBBox({
+              ...inst,
+              x: inst.x + (groupDragOffset?.dx ?? 0),
+              y: inst.y + (groupDragOffset?.dy ?? 0),
+            });
+            if (!box) return null;
+            const isPrimary = selectedInstanceId === inst.id;
+            const tag = `${inst.name} · ${masterCell.cellName}`;
+            const fs = 10.5 / stageScale;
+            const pillW = Math.max(46 / stageScale, (tag.length * 6.3 + 12) / stageScale);
+            const pillH = 17 / stageScale;
+            return (
+              <Group
+                key={`sel-tag-${inst.id}`}
+                x={((box.minX + box.maxX) / 2) * SCALE_FACTOR}
+                y={box.maxY * SCALE_FACTOR + 14 / stageScale}
+                scaleY={-1}
+                listening={false}
+              >
+                <Rect
+                  x={-pillW / 2}
+                  y={-pillH / 2}
+                  width={pillW}
+                  height={pillH}
+                  cornerRadius={pillH / 2}
+                  fill={isPrimary ? 'rgba(245, 158, 11, 0.94)' : 'rgba(56, 189, 248, 0.92)'}
+                />
+                <Text
+                  text={tag}
+                  x={-pillW / 2}
+                  y={-pillH / 2}
+                  width={pillW}
+                  height={pillH}
+                  align="center"
+                  verticalAlign="middle"
+                  fill="#ffffff"
+                  fontSize={fs}
+                  fontFamily={CANVAS_FONT_MONO}
+                  fontStyle="bold"
+                />
               </Group>
             );
           })}
@@ -3639,18 +3674,21 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Ghost Placement Group */}
           {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && snappedMousePos && (() => {
             const m = masterCells[placementMasterId];
+            const ghostHasContent = (cellViews[m.id]?.shapes?.length ?? 0) > 0 || (cellViews[m.id]?.instances?.length ?? 0) > 0;
+            const ghostOx = (m.originX ?? 0) * SCALE_FACTOR;
+            const ghostOy = (m.originY ?? 0) * SCALE_FACTOR;
             let previewOrientation = placementOrientation;
             let ghostPosition = snappedMousePos;
             if (m.kind === 'pad' && !isSubCellCanvas) {
               try {
                 if (pendingManualPadGroup) {
-                  const snapped = snapPadToAutoOrientedEdge(snappedMousePos.x, snappedMousePos.y, m.width, m.height, topWidth, topHeight, gridSize, padInset);
+                  const snapped = snapPadToAutoOrientedEdge(snappedMousePos.x, snappedMousePos.y, m.width, m.height, topWidth, topHeight, gridSize, padInset, m.originX ?? 0, m.originY ?? 0);
                   previewOrientation = snapped.orientation;
                   const t = getTransformProps(previewOrientation);
                   const horizontal = snapped.side === 'top' || snapped.side === 'bottom';
                   const centerAlong = horizontal ? snappedMousePos.x : snappedMousePos.y;
                   const positions = computePadGroupPositions({
-                    width: m.width, height: m.height, count: pendingManualPadGroup.count,
+                    width: m.width, height: m.height, originX: m.originX, originY: m.originY, count: pendingManualPadGroup.count,
                     pitch: pendingManualPadGroup.pitch, side: snapped.side, centerAlong,
                     orientation: previewOrientation, topWidth, topHeight, gridSize, padInset,
                   });
@@ -3662,21 +3700,26 @@ export const FloorplanCanvas: React.FC = () => {
                       rotation={t.rotation}
                       scaleX={t.scaleX}
                       scaleY={t.scaleY}
-                      opacity={0.5}
+                      opacity={0.55}
                       listening={false}
                     >
-                      <Rect
-                        width={m.width * SCALE_FACTOR}
-                        height={m.height * SCALE_FACTOR}
-                        fill={m.color}
-                        stroke="#f8fafc"
-                        strokeWidth={2 / stageScale}
-                        dash={[5 / stageScale, 5 / stageScale]}
-                      />
+                      {!ghostHasContent && (
+                        <Rect
+                          x={ghostOx}
+                          y={ghostOy}
+                          width={m.width * SCALE_FACTOR}
+                          height={m.height * SCALE_FACTOR}
+                          fill={m.color}
+                          stroke="#f8fafc"
+                          strokeWidth={2 / stageScale}
+                          dash={[5 / stageScale, 5 / stageScale]}
+                        />
+                      )}
+                      {renderCellViewContents(m.id, m.width * SCALE_FACTOR, m.height * SCALE_FACTOR)}
                     </Group>
                   ))}</>;
                 }
-                ghostPosition = snapPadToNearestEdge(snappedMousePos.x, snappedMousePos.y, m.width, m.height, topWidth, topHeight, gridSize, placementOrientation, padInset);
+                ghostPosition = snapPadToNearestEdge(snappedMousePos.x, snappedMousePos.y, m.width, m.height, topWidth, topHeight, gridSize, placementOrientation, padInset, m.originX ?? 0, m.originY ?? 0);
               } catch {
                 return null;
               }
@@ -3696,8 +3739,6 @@ export const FloorplanCanvas: React.FC = () => {
               }
             }
             const t = getTransformProps(previewOrientation);
-            const ghostOx = (m.originX ?? 0) * SCALE_FACTOR;
-            const ghostOy = (m.originY ?? 0) * SCALE_FACTOR;
             if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
               const rows = Math.max(1, Math.min(50, Math.floor(pendingInstanceArray.rows)));
               const cols = Math.max(1, Math.min(50, Math.floor(pendingInstanceArray.cols)));
@@ -3739,19 +3780,22 @@ export const FloorplanCanvas: React.FC = () => {
                       rotation={t.rotation}
                       scaleX={t.scaleX}
                       scaleY={t.scaleY}
-                      opacity={0.48}
+                      opacity={0.55}
                       listening={false}
                     >
-                      <Rect
-                        x={ghostOx}
-                        y={ghostOy}
-                        width={m.width * SCALE_FACTOR}
-                        height={m.height * SCALE_FACTOR}
-                        fill={m.color}
-                        stroke="#f8fafc"
-                        strokeWidth={2 / stageScale}
-                        dash={[5 / stageScale, 5 / stageScale]}
-                      />
+                      {!ghostHasContent && (
+                        <Rect
+                          x={ghostOx}
+                          y={ghostOy}
+                          width={m.width * SCALE_FACTOR}
+                          height={m.height * SCALE_FACTOR}
+                          fill={m.color}
+                          stroke="#f8fafc"
+                          strokeWidth={2 / stageScale}
+                          dash={[5 / stageScale, 5 / stageScale]}
+                        />
+                      )}
+                      {renderCellViewContents(m.id, m.width * SCALE_FACTOR, m.height * SCALE_FACTOR)}
                     </Group>
                   ))}
                 </>
@@ -3762,7 +3806,6 @@ export const FloorplanCanvas: React.FC = () => {
               instances,
               masterCells,
             );
-            const ghostHasContent = (cellViews[m.id]?.shapes?.length ?? 0) > 0 || (cellViews[m.id]?.instances?.length ?? 0) > 0;
             return (
               <Group
                 x={ghostPosition.x * SCALE_FACTOR}
@@ -3787,7 +3830,7 @@ export const FloorplanCanvas: React.FC = () => {
                   />
                 )}
                 {renderCellViewContents(m.id, m.width * SCALE_FACTOR, m.height * SCALE_FACTOR)}
-                {(() => {
+                {!ghostHasContent && (() => {
                   const w = m.width * SCALE_FACTOR;
                   const h = m.height * SCALE_FACTOR;
                   const screenH = h * stageScale;

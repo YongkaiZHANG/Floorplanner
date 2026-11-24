@@ -20,8 +20,9 @@ test('composeCadenceTransform matches physical geometry across all 8 Cadence ori
     const parentBounds = getPhysicalBounds({ id: 'p', ...parent, width: parentW, height: parentH });
 
     for (const childOrient of orientations) {
-      // Child placed centered inside parent edit space: [-parentW/2..parentW/2] x [-parentH/2..parentH/2]
-      const child = { x: -5, y: -3, orientation: childOrient };
+      // Child placed near the center of parent edit space (local (15, 10) inside 40x20),
+      // leaving >= 10 um margin in every direction so 10x6 fits under all 8 orientations.
+      const child = { x: -5, y: 0, orientation: childOrient };
       const composed = composeCadenceTransform(parent, child, parentW, parentH);
       const childBounds = getPhysicalBounds({
         id: 'c',

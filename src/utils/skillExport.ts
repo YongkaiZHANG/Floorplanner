@@ -581,8 +581,10 @@ export const generateSkillCode = (
       code += `${indent})\n`;
     }
 
-    // Labels
-    if (isPad) {
+    // Labels (only for legacy fixed-box cells without user-drawn shapes; cells with drawn shapes keep strictly what the user drew)
+    if (viewShapes.length > 0) {
+      code += `${indent}; Cell contains user-drawn shapes; no synthetic wrapper labels added.\n`;
+    } else if (isPad) {
       code += `${indent}; Compact pad label on the requested ("text" "drawing") LPP.\n`;
       code += `${indent}unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${exactCY} ${cellName} "centerCenter" "R0" "roman" ${nameLabelHeight}) t)\n`;
       code += `${indent}  printf("WARNING: label layer text/drawing is unavailable for %s/%s.\\n" ${lib} ${cellName})\n`;

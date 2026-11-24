@@ -455,3 +455,107 @@ test('hierarchical auto-bounds propagate bottom-up and drawing text/drawing insi
   assert.equal(useStore.getState().masterCells[oldPadId].width, 40);
   assert.equal(useStore.getState().masterCells[oldPadId].height, 30);
 });
+
+test('loadProject auto-shrinks legacy saved cells with drawn shapes, keeps R180 non-zero-origin pads flush on die edge, and omits wrapper boxes/labels in SVG & SKILL', () => {
+  // Simulates a legacy saved workspace where PAD had stale bloated bounds (180.075 x 125.685, autoBounds omitted)
+  // while its cellview actually contains only a smaller drawn text/drawing rectangle at (20, 30, 50x40).
+  const legacySaved = {
+    gridSize: 0.005,
+    topWidth: 3000,
+    topHeight: 2000,
+    topLibName: 'chip_lib',
+    topCellName: 'top_asic',
+    masterCells: {
+      pad1: {
+        id: 'pad1',
+        libName: 'chip_lib',
+        cellName: 'PAD',
+        width: 180.075,
+        height: 125.685,
+        color: '#f59e0b',
+        kind: 'pad',
+      },
+      ip1: {
+        id: 'ip1',
+        libName: 'chip_lib',
+        cellName: 'MY_IP',
+        width: 400,
+        height: 300,
+        color: '#2563eb',
+      },
+    },
+    instances: [
+      { id: 'p0', cellId: 'pad1', name: 'I0', x: -100, y: -950, orientation: 'R180' },
+      { id: 'p1', cellId: 'pad1', name: 'I1', x: 20, y: -950, orientation: 'R180' },
+      { id: 'u0', cellId: 'ip1', name: 'I2', x: 0, y: 0, orientation: 'R0' },
+    ],
+    rulers: [],
+    cellViews: {
+      pad1: {
+        instances: [],
+        rulers: [],
+        shapes: [{ id: 'ps1', layer: 'text', purpose: 'drawing', x: 20, y: 30, width: 50, height: 40 }],
+        coordinateMode: 'origin',
+      },
+      ip1: {
+        instances: [],
+        rulers: [],
+        shapes: [{ id: 'is1', layer: 'text', purpose: 'drawing', x: -100, y: 50, width: 120, height: 80, label: 'DRAWN_ONLY' }],
+        coordinateMode: 'origin',
+      },
+    },
+  };
+
+  useStore.getState().loadProject(legacySaved);
+
+  // Both legacy cells automatically promoted to content-driven autoBounds matching ONLY their drawn rectangles
+  const padMaster = useStore.getState().masterCells.pad1;
+  assert.equal(padMaster.autoBounds, true);
+  assert.equal(padMaster.originX, 20);
+  assert.equal(padMaster.originY, 30);
+  assert.equal(padMaster.width, 50);
+  assert.equal(padMaster.height, 40);
+
+  const ipMaster = useStore.getState().masterCells.ip1;
+  assert.equal(ipMaster.autoBounds, true);
+  assert.equal(ipMaster.originX, -100);
+  assert.equal(ipMaster.originY, 50);
+  assert.equal(ipMaster.width, 120);
+  assert.equal(ipMaster.height, 80);
+
+  // R180 bottom pads with non-zero (originX=20, originY=30) must snap strictly flush with bottom edge y = -1000
+  const padInst0 = useStore.getState().instances.find(i => i.id === 'p0');
+  const padBounds0 = getPhysicalBounds({
+    ...padInst0,
+    width: padMaster.width,
+    height: padMaster.height,
+    originX: padMaster.originX,
+    originY: padMaster.originY,
+  });
+  assert.equal(padBounds0.bottom, -1000);
+  assert.equal(padBounds0.top, -960);
+
+  // SVG export shows ONLY drawn shapes (no colored wrapper fill #f59e0b / #2563eb and no synthetic "120x80" label)
+  const snapshot = getProjectSnapshot(useStore.getState());
+  const svg = generateSvgMarkup(snapshot);
+  const svgDrawingOnly = svg.slice(svg.indexOf('</metadata>'), svg.indexOf('Floorplan Data Summary'));
+  assert.doesNotMatch(svgDrawingOnly, /fill="#f59e0b"/);
+  assert.doesNotMatch(svgDrawingOnly, /fill="#2563eb"/);
+  assert.doesNotMatch(svgDrawingOnly, />120x80</);
+  assert.match(svgDrawingOnly, />DRAWN_ONLY</);
+
+  // SKILL export emits drawn rect and user label without injecting synthetic "120 x 80 um" size text
+  const skill = generateSkillCode(
+    snapshot.topLibName,
+    snapshot.topCellName,
+    snapshot.topWidth,
+    snapshot.topHeight,
+    snapshot.masterCells,
+    snapshot.instances,
+    snapshot.gridSize,
+    snapshot.pixelArray,
+    { hierarchyMode: 'zero-origin-direct', cellViews: snapshot.cellViews },
+  );
+  assert.match(skill, /"DRAWN_ONLY"/);
+  assert.doesNotMatch(skill, /"120 x 80 um"/);
+});

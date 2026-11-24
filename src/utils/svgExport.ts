@@ -200,6 +200,10 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
         const sh = shape.height * sf;
         const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
         svg += `    <rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1.25"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
+        if (shape.label?.trim()) {
+          const shapeFS = Math.min(sw * 0.14, sh * 0.24, baseFS * 1.1);
+          svg += `    <text x="${sx + sw / 2}" y="${-(sy + sh / 2)}" fill="${escapeXml(style.color)}" font-family="monospace" font-size="${shapeFS}" font-weight="600" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(shape.label.trim())}</text>\n`;
+        }
       });
     }
     if (childSubInstances.length > 0) {
@@ -208,17 +212,31 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
       childSubInstances.forEach(sub => {
         const sm = state.masterCells[sub.cellId];
         if (!sm) return;
+        const subView = state.cellViews?.[sub.cellId];
+        const subShapes = subView?.shapes ?? [];
+        if (subShapes.length > 0) {
+          subShapes.forEach(shape => {
+            const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+            const sx = (sub.x + shape.x) * sf + subOffsetX;
+            const sy = (sub.y + shape.y) * sf + subOffsetY;
+            const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
+            svg += `    <rect x="${sx}" y="${sy}" width="${shape.width * sf}" height="${shape.height * sf}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
+          });
+          return;
+        }
         const smOx = (sm.originX ?? 0) * sf;
         const smOy = (sm.originY ?? 0) * sf;
         svg += `    <rect x="${sub.x * sf + subOffsetX + smOx}" y="${sub.y * sf + subOffsetY + smOy}" width="${sm.width * sf}" height="${sm.height * sf}" fill="${escapeXml(sm.color)}" fill-opacity="0.35" stroke="#1e293b" stroke-width="1" vector-effect="non-scaling-stroke" />\n`;
       });
     }
     
-    const instFS = Math.min(w * 0.15, h * 0.25, baseFS * 2);
-    const labelCX = ox + w / 2;
-    const labelCY = oy + h / 2;
-    svg += `    <text x="${labelCX}" y="${-labelCY - instFS * 0.6}" fill="#0f172a" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(m.cellName)}</text>\n`;
-    svg += `    <text x="${labelCX}" y="${-labelCY + instFS * 0.6}" fill="#334155" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="normal" font-size="${instFS * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${m.width}x${m.height}</text>\n`;
+    if (!childHasContent) {
+      const instFS = Math.min(w * 0.15, h * 0.25, baseFS * 2);
+      const labelCX = ox + w / 2;
+      const labelCY = oy + h / 2;
+      svg += `    <text x="${labelCX}" y="${-labelCY - instFS * 0.6}" fill="#0f172a" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(m.cellName)}</text>\n`;
+      svg += `    <text x="${labelCX}" y="${-labelCY + instFS * 0.6}" fill="#334155" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="normal" font-size="${instFS * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${m.width}x${m.height}</text>\n`;
+    }
     svg += `  </g>\n`;
   });
 
