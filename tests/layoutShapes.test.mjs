@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getPhysicalBounds } from '../src/utils/alignment.ts';
 import { resolveCanvasCursor } from '../src/utils/canvasCursor.ts';
+import { findOverlapViolations } from '../src/utils/floorplanMetrics.ts';
 import { composeCadenceTransform } from '../src/utils/hierarchy.ts';
 import {
   computeCellContentBounds,
@@ -193,7 +194,10 @@ test('IP cellview canvas draws text/drawing rectangles freely, auto-fits bounds,
       topShapes: snapshot.shapes,
     },
   );
-  assert.match(skill, /dbCreatePRBoundary\(cv list\(-400:100 -400:500 300:500 300:100\)\)/);
+  // Content-driven autoBounds cell CORE_IP emits only its drawn shapes & sub-instances (no synthetic prBoundary)
+  assert.doesNotMatch(skill, /dbCreatePRBoundary\(cv list\(-400:100 -400:500 300:500 300:100\)\)/);
+  assert.match(skill, /dbCreatePRBoundary\(cv list\(-350:150 -350:230 -250:230 -250:150\)\)/);
+  assert.match(skill, /dbCreatePRBoundary\(cv list\(-1500:-1000 -1500:1000 1500:1000 1500:-1000\)\)/);
   assert.match(skill, /dbCreateRect\(cv list\("text" "drawing"\) list\(-400:100 300:500\)\)/);
   assert.match(skill, /"CORE_OUTLINE"/);
   assert.match(skill, /dbCreateRect\(cv list\("text" "drawing"\) list\(400:-200 600:-50\)\)/);
@@ -697,4 +701,140 @@ test('Virtuoso Create Text (L) supports font size, font family, bold/italic styl
   );
   assert.match(skill, /dbCreateLabel\(cv list\("M1" "label"\) 100:200 "VDD_IO" "lowerLeft" "R90" "swiss" 25\)/);
   assert.match(skill, /dbCreateLabel\(cv list\("text" "drawing"\) 0:0 "PAD_SIG_LONG" "lowerLeft" "R0" "roman" 40\)/);
+});
+
+test('alignSelectedInstancesToBoundary & completeEdgeAlignmentToCoordinate align blocks, pads, pixel arrays, and Edit-in-Place (X) sub-cells to die boundaries', () => {
+  useStore.getState().loadProject(baseProject); // 3000 x 2000 => x in [-1500..1500], y in [-1000..1000]
+
+  // Create IP block (200x100) and place at (100, 200)
+  useStore.getState().addMasterCell('xxxL_TOP', 'BLK_A', 200, 100, '#3b82f6', 0.5, 'solid', false, false);
+  const blkA = Object.values(useStore.getState().masterCells).find(c => c.cellName === 'BLK_A');
+  useStore.getState().placeInstance(blkA.id, 100, 200, 'R0', 'I_A');
+  const instA = useStore.getState().instances[0];
+  useStore.getState().setSelection([instA.id]);
+
+  // Align single block to all 6 boundary references + undo
+  useStore.getState().alignSelectedInstancesToBoundary('left');
+  assert.equal(useStore.getState().instances[0].x, -1500);
+  useStore.getState().alignSelectedInstancesToBoundary('right');
+  assert.equal(useStore.getState().instances[0].x, 1300);
+  useStore.getState().alignSelectedInstancesToBoundary('horizontal-center');
+  assert.equal(useStore.getState().instances[0].x, -100);
+  useStore.getState().alignSelectedInstancesToBoundary('bottom');
+  assert.equal(useStore.getState().instances[0].y, -1000);
+  useStore.getState().alignSelectedInstancesToBoundary('top');
+  assert.equal(useStore.getState().instances[0].y, 900);
+  useStore.getState().alignSelectedInstancesToBoundary('vertical-center');
+  assert.equal(useStore.getState().instances[0].y, -50);
+  useStore.getState().undo();
+  assert.equal(useStore.getState().instances[0].y, 900);
+
+  // Align Pixel Array to boundary
+  useStore.getState().startPixelArrayPlacement(600, 400);
+  useStore.getState().placePixelArray(0, 0);
+  useStore.getState().setPixelArraySelected(true);
+  useStore.getState().alignSelectedInstancesToBoundary('top');
+  assert.equal(useStore.getState().pixelArray.y, 600); // 600 + 400 = 1000
+  useStore.getState().alignSelectedInstancesToBoundary('left');
+  assert.equal(useStore.getState().pixelArray.x, -1500);
+  useStore.getState().setPixelArraySelected(false);
+
+  // Edge-bound pad with seal-ring padInset=50 aligns to inner perimeter and rejects leaving perimeter
+  useStore.getState().setPadInset(50);
+  useStore.getState().prepareManualPadPlacement({ libName: 'xxxL_TOP', cellName: 'EDGE_PAD', width: 100, height: 80, color: '#f59e0b' });
+  const padMaster = Object.values(useStore.getState().masterCells).find(c => c.cellName === 'EDGE_PAD');
+  useStore.getState().placeInstance(padMaster.id, 0, -900, 'R0', 'P_BOT');
+  const padInst = useStore.getState().instances.find(i => i.name === 'P_BOT');
+  useStore.getState().setSelection([padInst.id]);
+  useStore.getState().alignSelectedInstancesToBoundary('left');
+  assert.equal(useStore.getState().instances.find(i => i.id === padInst.id).x, -1450); // -1500 + 50 inset
+  useStore.getState().alignSelectedInstancesToBoundary('horizontal-center');
+  assert.equal(useStore.getState().instances.find(i => i.id === padInst.id).x, -50); // centered along bottom perimeter
+  assert.throws(() => useStore.getState().alignSelectedInstancesToBoundary('vertical-center'), /perimeter/);
+
+  // Edit-in-Place (X) inside rotated padring (R180): align sub-pad visually to top_asic bottom (y_base = -1000)
+  useStore.getState().createEmptyCell('xxxL_TOP', 'PAD_UNIT', '#22c55e', true);
+  const padUnitId = useStore.getState().activeCellId;
+  useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 0, y: 0, width: 100, height: 100 });
+  useStore.getState().createEmptyCell('xxxL_TOP', 'PADRING', '#06b6d4', true);
+  const padringId = useStore.getState().activeCellId;
+  useStore.getState().placeInstance(padUnitId, 0, 800, 'R0', 'P0'); // Edit y:[800..900] -> in R180 base y:[-900..-800]
+  useStore.getState().openCellView(null);
+  useStore.getState().placeInstance(padringId, 0, 0, 'R180', 'I_RING');
+  const ringInst = useStore.getState().instances.find(i => i.name === 'I_RING');
+
+  // Descend Edit-in-Place (X) into I_RING (R180)
+  useStore.getState().descendIntoInstance(ringInst.id);
+  const p0 = useStore.getState().instances.find(i => i.name === 'P0');
+  useStore.getState().setSelection([p0.id]);
+  // Visual bottom of top_asic is y_base = -1000, which corresponds to Edit y = +900..1000 under R180
+  useStore.getState().alignSelectedInstancesToBoundary('bottom');
+  assert.equal(useStore.getState().instances.find(i => i.name === 'P0').y, 900);
+
+  // Interactive two-edge alignment (A) to coordinate in EIP: align P0.left to Edit x = 1500 (top_asic visual left under R180)
+  useStore.getState().startEdgeAlignment(p0.id);
+  useStore.getState().setEdgeAlignmentEdge(p0.id, 'right');
+  useStore.getState().setEdgeAlignmentOffset('0');
+  useStore.getState().completeEdgeAlignmentToCoordinate(1500, 'top_asic boundary');
+  assert.equal(useStore.getState().instances.find(i => i.name === 'P0').x, 1400); // [1400..1500] in Edit -> [-1500..-1400] in R180 Base!
+});
+
+test('non-fatal hierarchical overlaps (padring + asp_top) default showOverlapDrc off and export clean Virtuoso SKILL without synthetic prBoundary', () => {
+  // Default showOverlapDrc should be false so padring/asp_top bounding-box overlaps do not plaster red cross-hatches over the canvas
+  assert.equal(useStore.getState().showOverlapDrc, false);
+
+  useStore.getState().loadProject(baseProject);
+
+  // Create content-driven PAD cell (autoBounds = true)
+  useStore.getState().createEmptyCell('xxxL_TOP', 'PAD', '#f59e0b', true);
+  const padId = useStore.getState().activeCellId;
+  useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 0, y: 0, width: 100, height: 100 });
+
+  // Create 4-sided padring cell spanning the perimeter of top_asic
+  useStore.getState().createEmptyCell('xxxL_TOP', 'padring', '#06b6d4', true);
+  const padringId = useStore.getState().activeCellId;
+  useStore.getState().placeInstance(padId, -1500, -1000, 'R0', 'P_BL');
+  useStore.getState().placeInstance(padId, 1400, -1000, 'R0', 'P_BR');
+  useStore.getState().placeInstance(padId, -1500, 900, 'R0', 'P_TL');
+  useStore.getState().placeInstance(padId, 1400, 900, 'R0', 'P_TR');
+
+  // Create hierarchical asp_top containing inner IPs
+  useStore.getState().createEmptyCell('xxxL_TOP', 'ADC', '#8b5cf6', true);
+  const adcId = useStore.getState().activeCellId;
+  useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 0, y: 0, width: 400, height: 300 });
+  useStore.getState().createEmptyCell('xxxL_TOP', 'asp_top', '#3b82f6', true);
+  const aspTopId = useStore.getState().activeCellId;
+  useStore.getState().placeInstance(adcId, -600, -200, 'R0', 'I_ADC_L');
+  useStore.getState().placeInstance(adcId, 200, -200, 'R0', 'I_ADC_R');
+
+  // Place both padring and asp_top at (0, 0) in top_asic — their bounding boxes overlap, which is completely valid!
+  useStore.getState().openCellView(null);
+  useStore.getState().placeInstance(padringId, 0, 0, 'R0', 'I_PADRING');
+  useStore.getState().placeInstance(aspTopId, 0, 0, 'R0', 'I_ASP_TOP');
+
+  const snapshot = getProjectSnapshot(useStore.getState());
+  const overlaps = findOverlapViolations(snapshot);
+  assert.equal(overlaps.length, 1);
+  assert.deepEqual([overlaps[0].nameA, overlaps[0].nameB].sort(), ['I_ASP_TOP', 'I_PADRING']);
+
+  // SKILL export must succeed cleanly without synthetic prBoundary on padring/asp_top/PAD/ADC and without any overlap warnings
+  const skill = generateSkillCode(
+    snapshot.topLibName,
+    snapshot.topCellName,
+    snapshot.topWidth,
+    snapshot.topHeight,
+    snapshot.masterCells,
+    snapshot.instances,
+    snapshot.gridSize,
+    snapshot.pixelArray,
+    { hierarchyMode: 'zero-origin-direct', cellViews: snapshot.cellViews, topShapes: snapshot.shapes },
+  );
+  const prBoundaryMatches = skill.match(/dbCreatePRBoundary\(/g) ?? [];
+  // ONLY top_asic should emit dbCreatePRBoundary — none of the content-driven autoBounds cells!
+  assert.equal(prBoundaryMatches.length, 1);
+  assert.match(skill, /dbCreatePRBoundary\(cv list\(-1500:-1000 -1500:1000 1500:1000 1500:-1000\)\)/);
+  assert.doesNotMatch(skill, /overlap/i);
+  assert.match(skill, /dbCreateInst\(cv master "P_BL"/);
+  assert.match(skill, /dbCreateInst\(cv master "I_PADRING" 0:0 "R0" 1\)/);
+  assert.match(skill, /dbCreateInst\(cv master "I_ASP_TOP" 0:0 "R0" 1\)/);
 });

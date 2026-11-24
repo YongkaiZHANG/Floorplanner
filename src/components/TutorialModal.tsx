@@ -44,21 +44,24 @@ const shortcutGroups: Array<{ title: string; items: Array<[string, string]> }> =
     items: [
       ['N', 'Create a Master IP / Cell View'],
       ['I', 'Instantiate a cell (cursor or at 0,0)'],
+      ['X / Shift+B', 'Descend Edit-in-Place into cell / Return up'],
       ['R / D', 'Draw Virtuoso rectangle on layer/purpose (when idle)'],
+      ['L', 'Create Text Label on text/drawing or custom layer'],
+      ['F4 / S', 'Partial Select shape edges / Stretch selected edges'],
       ['C', 'Copy selected block into placement mode'],
       ['R / Shift+R', 'Rotate selected block or placing ghost ±90°'],
-      ['Right-click / Shift+Right', 'Rotate block CW / CCW on canvas'],
-      ['L', 'Lock or unlock selected blocks'],
+      ['Right-click / Shift+Right', 'Rotate block or text CW / CCW on canvas'],
+      ['Shift + L', 'Lock or unlock selected blocks or shapes'],
       ['Alt + Arrow / +Shift', 'Nudge selection by 1× or 10× grid'],
       ['Ctrl/Cmd + C / V', 'Copy & paste selected instances'],
-      ['Delete / Backspace', 'Delete unlocked selected blocks'],
+      ['Delete / Backspace', 'Delete unlocked selected blocks or shapes'],
     ],
   },
   {
     title: 'Alignment, Measurement & Project',
     items: [
       ['Shift + click / Drag box', 'Multi-select blocks for group drag or align'],
-      ['A', 'Start two-edge directional alignment'],
+      ['A', 'Two-edge align to IP, die boundary, or ruler'],
       ['M', 'Return to Select mode'],
       ['K / Shift+K', 'Enter Ruler mode / Clear all rulers'],
       ['O', 'Toggle orthogonal ruler lock'],
@@ -125,7 +128,7 @@ const walkthroughSteps = [
     eyebrow: 'Step 03 · Group Control',
     title: 'Drag multi-selections together, rename, and lock blocks.',
     summary:
-      'Marquee-drag or Shift-click to select a cluster of macros, then drag any selected block to move the entire group together inside die bounds. Rename instances meaningfully in Properties and press L to lock finalized blocks against accidental edits.',
+      'Marquee-drag or Shift-click to select a cluster of macros, then drag any selected block to move the entire group together. Rename instances meaningfully in Properties and press Shift+L to lock finalized blocks against accidental edits.',
     tips: [
       'Locked blocks show a gold lock indicator and cannot be dragged, rotated, aligned, nudged, or deleted.',
       'Use the Sidebar instance search and IP / Pad filter pills to locate blocks instantly on dense floorplans.',
@@ -353,7 +356,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose, onLoadDem
                 </article>
                 <article className="tutorial-card">
                   <FiLock />
-                  <div><strong>Rename &amp; lock instances</strong><p>Give blocks and pads meaningful Virtuoso names in Properties. Press <kbd>L</kbd> or click Lock to protect finalized placements from accidental drags, rotations, or deletes.</p></div>
+                  <div><strong>Rename &amp; lock instances</strong><p>Give blocks and pads meaningful Virtuoso names in Properties. Press <kbd>Shift+L</kbd> or click Lock to protect finalized placements from accidental drags, rotations, or deletes.</p></div>
                 </article>
                 <article className="tutorial-card">
                   <FiRotateCw />

@@ -463,7 +463,10 @@ export const generateSkillCode = (
     code += `${indent}cv = dbOpenCellViewByType(${lib} ${cellName} "layout" "maskLayout" "w")\n`;
     code += `${indent}unless(cv error("Floorplanner: cannot create master %s/%s/layout.\\n" ${lib} ${cellName}))\n`;
 
-    if (anchoredTransform) {
+    const isContentDrivenCell = Boolean(cell.autoBounds) && (viewShapes.length > 0 || subInstances.length > 0);
+    if (isContentDrivenCell) {
+      code += `${indent}; Content-driven Virtuoso cellview (no synthetic prBoundary emitted; bounds come strictly from drawn shapes and sub-instances).\n`;
+    } else if (anchoredTransform) {
       const bounds = getPhysicalBounds({
         id: cell.id,
         x: anchoredTransform.x,
@@ -600,9 +603,9 @@ export const generateSkillCode = (
       code += `${indent})\n`;
     }
 
-    // Labels (only for legacy fixed-box cells without user-drawn shapes; cells with drawn shapes keep strictly what the user drew)
-    if (viewShapes.length > 0) {
-      code += `${indent}; Cell contains user-drawn shapes; no synthetic wrapper labels added.\n`;
+    // Labels (only for legacy fixed-box cells without user-drawn shapes/sub-instances; content-driven cells keep strictly what the user created)
+    if (viewShapes.length > 0 || isContentDrivenCell) {
+      code += `${indent}; Content-driven cell; no synthetic wrapper labels added.\n`;
     } else if (isPad) {
       code += `${indent}; Compact pad label on the requested ("text" "drawing") LPP.\n`;
       code += `${indent}unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${exactCY} ${cellName} "centerCenter" "R0" "roman" ${nameLabelHeight}) t)\n`;
@@ -687,13 +690,18 @@ export const generateSkillCode = (
       code += `    inst = dbCreateInst(cv master ${internalName} ${snapX}:${snapY} ${orientation} 1)\n`;
       code += `    unless(inst error("Floorplanner: cannot place IP master inside %s.\\n" ${wrapperCell}))\n`;
       code += `    dbClose(master)\n`;
-      code += `    ; Explicit wrapper labels at the transformed IP center on ("text" "drawing").\n`;
-      code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${labelX}:${nameLabelY} ${masterName} "centerCenter" "R0" "roman" ${nameLabelHeight}) t)\n`;
-      code += `      printf("WARNING: cannot create the placed IP name label in %s.\\n" ${wrapperCell})\n`;
-      code += `    )\n`;
-      code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${labelX}:${sizeLabelY} ${sizeText} "centerCenter" "R0" "roman" ${sizeLabelHeight}) t)\n`;
-      code += `      printf("WARNING: cannot create the placed IP size label in %s.\\n" ${wrapperCell})\n`;
-      code += `    )\n`;
+      const masterView = cellViews[masterCell.id];
+      const masterIsContentDriven = Boolean(masterCell.autoBounds)
+        && ((masterView?.shapes?.length ?? 0) > 0 || (masterView?.instances?.length ?? 0) > 0);
+      if (!masterIsContentDriven) {
+        code += `    ; Explicit wrapper labels at the transformed IP center on ("text" "drawing").\n`;
+        code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${labelX}:${nameLabelY} ${masterName} "centerCenter" "R0" "roman" ${nameLabelHeight}) t)\n`;
+        code += `      printf("WARNING: cannot create the placed IP name label in %s.\\n" ${wrapperCell})\n`;
+        code += `    )\n`;
+        code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${labelX}:${sizeLabelY} ${sizeText} "centerCenter" "R0" "roman" ${sizeLabelHeight}) t)\n`;
+        code += `      printf("WARNING: cannot create the placed IP size label in %s.\\n" ${wrapperCell})\n`;
+        code += `    )\n`;
+      }
       code += `    dbSave(cv)\n`;
       code += `    dbClose(cv)\n`;
     });

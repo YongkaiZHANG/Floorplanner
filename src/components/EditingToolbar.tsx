@@ -9,6 +9,7 @@ import {
   FiMoreHorizontal,
   FiMoreVertical,
 } from 'react-icons/fi';
+import type { AlignmentEdge } from '../utils/alignment';
 import './EditingToolbar.css';
 
 export type AlignmentAction =
@@ -26,11 +27,27 @@ type EditingToolbarProps = {
   canRedo: boolean;
   selectionCount: number;
   anchorName?: string;
+  boundaryLabel?: string;
   onUndo: () => void;
   onRedo: () => void;
   onAlign: (action: AlignmentAction) => void;
+  onAlignToBoundary: (edge: AlignmentEdge) => void;
   onStartEdgeAlign: () => void;
 };
+
+const boundaryAlignmentItems: Array<{
+  edge: AlignmentEdge;
+  label: string;
+  title: string;
+  icon: React.ReactNode;
+}> = [
+  { edge: 'left', label: 'Left', title: 'Align left edge to boundary', icon: <FiAlignLeft /> },
+  { edge: 'horizontal-center', label: 'Center X', title: 'Center horizontally in boundary', icon: <FiAlignCenter /> },
+  { edge: 'right', label: 'Right', title: 'Align right edge to boundary', icon: <FiAlignRight /> },
+  { edge: 'bottom', label: 'Bottom', title: 'Align bottom edge to boundary', icon: <FiAlignLeft className="editing-toolbar__vertical-icon" /> },
+  { edge: 'vertical-center', label: 'Center Y', title: 'Center vertically in boundary', icon: <FiAlignCenter className="editing-toolbar__vertical-icon" /> },
+  { edge: 'top', label: 'Top', title: 'Align top edge to boundary', icon: <FiAlignRight className="editing-toolbar__vertical-icon" /> },
+];
 
 const alignmentItems: Array<{
   action: AlignmentAction;
@@ -53,9 +70,11 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
   canRedo,
   selectionCount,
   anchorName,
+  boundaryLabel = 'Boundary',
   onUndo,
   onRedo,
   onAlign,
+  onAlignToBoundary,
   onStartEdgeAlign,
 }) => {
   const [isAlignOpen, setIsAlignOpen] = useState(false);
@@ -109,20 +128,11 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
         className="editing-toolbar__button editing-toolbar__align-trigger"
         type="button"
         disabled={!canAlign}
-        onClick={() => {
-          if (selectionCount === 1) {
-            onStartEdgeAlign();
-            setIsAlignOpen(false);
-          } else {
-            setIsAlignOpen((open) => !open);
-          }
-        }}
+        onClick={() => setIsAlignOpen((open) => !open)}
         aria-expanded={isAlignOpen}
         aria-haspopup="menu"
         title={canAlign
-          ? selectionCount === 1
-            ? `Align ${anchorName ?? 'the selected block'} by clicking two edges (A)`
-            : `Open alignment choices for ${selectionCount} selected blocks`
+          ? `Open alignment choices for ${selectionCount === 1 ? (anchorName ?? 'the selected block') : `${selectionCount} selected blocks`} (or press A for two-edge align)`
           : 'Select a source block to align'}
       >
         <FiAlignLeft />
@@ -145,8 +155,27 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
             }}
           >
             <FiAlignCenter />
-            <span><strong>Align by two edges…</strong><small>Pick any selected object’s edge; the whole selection moves together</small></span>
+            <span><strong>Align by two edges… (A)</strong><small>Click any edge, then an IP, {boundaryLabel} boundary, or ruler</small></span>
           </button>
+          <div className="editing-toolbar__menu-section">Align to {boundaryLabel} boundary</div>
+          <div className="editing-toolbar__boundary-grid">
+            {boundaryAlignmentItems.map((item) => (
+              <button
+                key={`boundary-${item.edge}`}
+                className="editing-toolbar__boundary-btn"
+                type="button"
+                role="menuitem"
+                title={`${item.title} (${boundaryLabel})`}
+                onClick={() => {
+                  onAlignToBoundary(item.edge);
+                  setIsAlignOpen(false);
+                }}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
           <div className="editing-toolbar__menu-section">Quick align selected blocks</div>
           {alignmentItems.map((item) => (
             <button

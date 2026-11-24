@@ -11,12 +11,13 @@ import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiSquare, FiType, 
 import { TutorialModal } from './TutorialModal';
 import { EditingToolbar } from './EditingToolbar';
 import type { AlignmentAction } from './EditingToolbar';
+import type { AlignmentEdge } from '../utils/alignment';
 import { ToastViewport } from './ToastViewport';
 import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, descendStack, rootView, openCellView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, descendStack, rootView, openCellView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, alignSelectedInstancesToBoundary, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
@@ -74,7 +75,9 @@ export const Topbar: React.FC = () => {
     }
     return [];
   }, [activeCellId, descendStack, metrics.boundaryViolations, canonicalSnapshot]);
-  const drcTotalWarnings = metrics.overlaps.length + drcBoundaryViolations.length;
+  const boundaryLabel = activeCellId !== null && descendStack.length > 0 && descendStack[0].parentCellId === null && rootView
+    ? rootView.topCellName
+    : topCellName;
   const isDirty = savedSignature === null ? history.past.length > 0 : projectSignature !== savedSignature;
   const saveStatus = isDirty ? 'Unsaved' : savedSignature === null ? 'Not saved' : 'Saved';
   const alignmentSource = edgeAlignmentSession
@@ -296,6 +299,15 @@ export const Topbar: React.FC = () => {
     }
   };
 
+  const handleAlignToBoundary = (edge: AlignmentEdge) => {
+    try {
+      alignSelectedInstancesToBoundary(edge);
+      showToast(`Aligned to ${boundaryLabel} ${edge.replaceAll('-', ' ')}`, 'info');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to align to boundary.');
+    }
+  };
+
   const closeTutorial = () => {
     setShowTutorial(false);
     try {
@@ -351,6 +363,15 @@ export const Topbar: React.FC = () => {
             <FiCrop /> <span className="topbar-label-md">Partial</span>
           </button>
           <button
+            className={`mode-btn ${appMode === 'stretch' ? 'active' : ''}`}
+            onClick={() => setAppMode(appMode === 'stretch' ? 'select' : 'stretch')}
+            title="Virtuoso Stretch (S): drag a box over rectangle edge(s)/corner(s) to partially select, then drag to stretch"
+            aria-pressed={appMode === 'stretch'}
+          >
+            <FiMove /> <span className="topbar-label-sm">Stretch</span>
+          </button>
+          <span className="mode-toggle__sep" aria-hidden="true" />
+          <button
             className={`mode-btn ${appMode === 'rect' ? 'active' : ''}`}
             onClick={() => setAppMode(appMode === 'rect' ? 'select' : 'rect')}
             title="Draw Rectangle on Virtuoso Layer/Purpose (R when idle, or D)"
@@ -366,14 +387,7 @@ export const Topbar: React.FC = () => {
           >
             <FiType /> <span className="topbar-label-sm">Text</span>
           </button>
-          <button
-            className={`mode-btn ${appMode === 'stretch' ? 'active' : ''}`}
-            onClick={() => setAppMode(appMode === 'stretch' ? 'select' : 'stretch')}
-            title="Virtuoso Stretch (S): drag a box over rectangle edge(s)/corner(s) to partially select, then drag to stretch"
-            aria-pressed={appMode === 'stretch'}
-          >
-            <FiMove /> <span className="topbar-label-sm">Stretch</span>
-          </button>
+          <span className="mode-toggle__sep" aria-hidden="true" />
           <button 
             className={`mode-btn ${appMode === 'measure' ? 'active' : ''}`}
             onClick={() => setAppMode('measure')}
@@ -443,9 +457,11 @@ export const Topbar: React.FC = () => {
             canRedo={history.future.length > 0}
             selectionCount={pixelArraySelected ? 1 : selectedInstanceIds.length}
             anchorName={pixelArraySelected ? 'Pixel Array' : instances.find(instance => instance.id === selectedInstanceId)?.name}
+            boundaryLabel={boundaryLabel}
             onUndo={undo}
             onRedo={redo}
             onAlign={handleAlignment}
+            onAlignToBoundary={handleAlignToBoundary}
             onStartEdgeAlign={() => {
               setAppMode('select');
               if (pixelArraySelected) startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
@@ -559,10 +575,9 @@ export const Topbar: React.FC = () => {
           <div className="grid-settings">
             <label>Grid:</label>
             <input 
-              type="number" 
+              type="text"
+              inputMode="decimal"
               list="grid-size-presets"
-              min="0.000000000001"
-              step="any"
               value={draftGridSize} 
               onChange={event => setDraftGridSize(event.target.value)}
               onBlur={commitGridSize}
@@ -593,23 +608,19 @@ export const Topbar: React.FC = () => {
           </div>
           <div className="vertical-divider vertical-divider--compact" />
           <button
-            className={`btn metrics-btn${metrics.overlaps.length > 0 ? ' metrics-btn--alert' : drcBoundaryViolations.length > 0 ? ' metrics-btn--warn' : ''}`}
+            className={`btn metrics-btn${drcBoundaryViolations.length > 0 ? ' metrics-btn--warn' : ''}`}
             onClick={() => setShowSummary(true)}
-            title={drcTotalWarnings > 0
-              ? `${metrics.overlaps.length} overlap${metrics.overlaps.length === 1 ? '' : 's'}, ${drcBoundaryViolations.length} out-of-bounds warning${drcBoundaryViolations.length === 1 ? '' : 's'} — click to inspect summary & DRC`
-              : 'Floorplan area metrics, DRC status, and CSV export'}
+            title={drcBoundaryViolations.length > 0
+              ? `${drcBoundaryViolations.length} out-of-bounds warning${drcBoundaryViolations.length === 1 ? '' : 's'} — click to inspect summary & boundary check`
+              : metrics.overlaps.length > 0
+                ? `Floorplan area metrics, CSV export, and ${metrics.overlaps.length} non-fatal bounding-box overlap notice${metrics.overlaps.length === 1 ? '' : 's'}`
+                : 'Floorplan area metrics, boundary status, and CSV export'}
           >
-            {drcTotalWarnings > 0 ? (
+            {drcBoundaryViolations.length > 0 ? (
               <>
                 <FiAlertTriangle />
-                <span>{drcTotalWarnings}</span>
-                <span className="topbar-label-lg">
-                  {metrics.overlaps.length > 0 && drcBoundaryViolations.length > 0
-                    ? ' Warnings'
-                    : metrics.overlaps.length > 0
-                      ? ` Overlap${metrics.overlaps.length === 1 ? '' : 's'}`
-                      : ' Out of Bounds'}
-                </span>
+                <span>{drcBoundaryViolations.length}</span>
+                <span className="topbar-label-lg"> Out of Bounds</span>
               </>
             ) : (
               <><FiBarChart2 /> <span className="topbar-label-lg">Summary</span></>
@@ -702,20 +713,14 @@ export const Topbar: React.FC = () => {
             <div className="drc-section">
               <div className="drc-section__header">
                 <h3 className="drc-section__title">
-                  {drcTotalWarnings === 0 ? (
-                    <span className="drc-status drc-status--clean"><FiCheckCircle /> No DRC warnings detected</span>
+                  {drcBoundaryViolations.length === 0 ? (
+                    <span className="drc-status drc-status--clean"><FiCheckCircle /> All instances within die boundary</span>
                   ) : (
-                    <span className={`drc-status ${metrics.overlaps.length > 0 ? 'drc-status--error' : 'drc-status--warn'}`}>
-                      <FiAlertTriangle /> {drcTotalWarnings} DRC warning{drcTotalWarnings === 1 ? '' : 's'}
-                      {metrics.overlaps.length > 0 ? ` · ${metrics.overlaps.length} overlap${metrics.overlaps.length === 1 ? '' : 's'}` : ''}
-                      {drcBoundaryViolations.length > 0 ? ` · ${drcBoundaryViolations.length} out of bounds` : ''}
+                    <span className="drc-status drc-status--warn">
+                      <FiAlertTriangle /> {drcBoundaryViolations.length} out-of-bounds warning{drcBoundaryViolations.length === 1 ? '' : 's'}
                     </span>
                   )}
                 </h3>
-                <label className="drc-toggle">
-                  <input type="checkbox" checked={showOverlapDrc} onChange={toggleOverlapDrc} />
-                  Highlight DRC warnings on canvas
-                </label>
               </div>
               {drcBoundaryViolations.length > 0 && (
                 <ul className="drc-list">
@@ -742,30 +747,53 @@ export const Topbar: React.FC = () => {
                   ))}
                 </ul>
               )}
-              {metrics.overlaps.length > 0 && (
-                <ul className="drc-list">
-                  {metrics.overlaps.map(violation => (
-                    <li key={violation.id}>
-                      <button
-                        type="button"
-                        className="drc-item"
-                        onClick={() => {
-                          setSelection([violation.idA, violation.idB]);
-                          setShowSummary(false);
-                        }}
-                      >
-                        <span className="drc-item__names">
-                          <strong>{violation.nameA}</strong> ↔ <strong>{violation.nameB}</strong>
-                        </span>
-                        <span className="drc-item__meta">
-                          <span className="drc-kind-badge">{violation.kind.toUpperCase()}</span>
-                          {formatGridValue(violation.width, gridSize)} × {formatGridValue(violation.height, gridSize)} µm ({violation.areaUm2.toFixed(2)} µm²)
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+
+              <div className="drc-subsection">
+                <div className="drc-section__header">
+                  <h3 className="drc-section__title">
+                    {metrics.overlaps.length === 0 ? (
+                      <span className="drc-status drc-status--clean"><FiCheckCircle /> No bounding-box overlaps</span>
+                    ) : (
+                      <span className="drc-status drc-status--info">
+                        ⓘ {metrics.overlaps.length} bounding-box overlap notice{metrics.overlaps.length === 1 ? '' : 's'} (non-fatal)
+                      </span>
+                    )}
+                  </h3>
+                  <label className="drc-toggle">
+                    <input type="checkbox" checked={showOverlapDrc} onChange={toggleOverlapDrc} />
+                    Highlight overlap boxes on canvas
+                  </label>
+                </div>
+                {metrics.overlaps.length > 0 && (
+                  <>
+                    <p className="drc-note">
+                      Non-fatal informational notice — hierarchical cells such as pad rings (<code>padring</code>) or subsystems (<code>asp_top</code>) naturally share bounding boxes with inner IPs. Overlap notices appear in each IP’s Properties panel and are not exported to SKILL.
+                    </p>
+                    <ul className="drc-list">
+                      {metrics.overlaps.map(violation => (
+                        <li key={violation.id}>
+                          <button
+                            type="button"
+                            className="drc-item drc-item--info"
+                            onClick={() => {
+                              setSelection([violation.idA, violation.idB]);
+                              setShowSummary(false);
+                            }}
+                          >
+                            <span className="drc-item__names">
+                              <strong>{violation.nameA}</strong> ↔ <strong>{violation.nameB}</strong>
+                            </span>
+                            <span className="drc-item__meta">
+                              <span className="drc-kind-badge drc-kind-badge--info">{violation.kind.toUpperCase()}</span>
+                              {formatGridValue(violation.width, gridSize)} × {formatGridValue(violation.height, gridSize)} µm ({violation.areaUm2.toFixed(2)} µm²)
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
             </div>
 
             <div className="modal-actions">

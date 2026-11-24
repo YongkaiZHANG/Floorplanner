@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, computePadGroupPositions, findOverlappingInstance, getTransformProps, isCellEmpty, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
+import { useStore, computePadGroupPositions, getTransformProps, isCellEmpty, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
 import type { Instance } from '../store/useStore';
 import { getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment';
 import type { AlignmentEdge, CadenceOrientation } from '../utils/alignment';
@@ -182,6 +182,7 @@ export const FloorplanCanvas: React.FC = () => {
     setEdgeAlignmentEdge,
     completeEdgeAlignment,
     completeEdgeAlignmentToBoundary,
+    completeEdgeAlignmentToCoordinate,
     completeEdgeAlignmentToRuler,
     pixelArray,
     pendingPixelArraySize,
@@ -1642,7 +1643,7 @@ export const FloorplanCanvas: React.FC = () => {
   );
 
   const boundaryViolations = useMemo(() => {
-    if (!showOverlapDrc || !baseIsRoot) return [];
+    if (!baseIsRoot) return [];
     const rootInstances = isEditInPlace ? (rootView?.instances ?? []) : instances;
     return findBoundaryViolations({
       topWidth: baseWidth,
@@ -1650,7 +1651,7 @@ export const FloorplanCanvas: React.FC = () => {
       masterCells,
       instances: rootInstances,
     });
-  }, [showOverlapDrc, baseIsRoot, isEditInPlace, rootView, instances, baseWidth, baseHeight, masterCells]);
+  }, [baseIsRoot, isEditInPlace, rootView, instances, baseWidth, baseHeight, masterCells]);
 
   // ----------------------------------------------------------------
   // Gap annotation helpers
@@ -3921,11 +3922,26 @@ export const FloorplanCanvas: React.FC = () => {
               });
             })() : [];
 
-            if (!sourceAxis || isSubCellCanvas) return [...ipEdges, ...pixelArrayEdges];
+            const showEipRootBoundary = isEditInPlace && baseIsRoot;
+            const showActiveBoundary = !isSubCellCanvas || (!isEditInPlace && !activeMasterCell?.autoBounds && topWidth > 0 && topHeight > 0);
+            if (!sourceAxis || (!showEipRootBoundary && !showActiveBoundary)) {
+              return [...ipEdges, ...pixelArrayEdges];
+            }
             const boundaryEdges: AlignmentEdge[] = sourceAxis === 'horizontal'
               ? ['left', 'right']
               : ['bottom', 'top'];
-            const boundaryBox: BBox = activeBoundaryBox;
+            const boundaryBox: BBox = showEipRootBoundary
+              ? (() => {
+                  const c1 = baseToEditPoint(baseBoundaryBox.minX, baseBoundaryBox.minY);
+                  const c2 = baseToEditPoint(baseBoundaryBox.maxX, baseBoundaryBox.maxY);
+                  return {
+                    minX: Math.min(c1.x, c2.x),
+                    maxX: Math.max(c1.x, c2.x),
+                    minY: Math.min(c1.y, c2.y),
+                    maxY: Math.max(c1.y, c2.y),
+                  };
+                })()
+              : activeBoundaryBox;
             const boundaryTargets = boundaryEdges.map(edge => {
               const key = `top-${edge}`;
               return (
@@ -3942,9 +3958,20 @@ export const FloorplanCanvas: React.FC = () => {
                   onClick={event => {
                     event.cancelBubble = true;
                     try {
-                      completeEdgeAlignmentToBoundary(edge as 'left' | 'right' | 'bottom' | 'top');
+                      if (showEipRootBoundary) {
+                        const coord = edge === 'left'
+                          ? boundaryBox.minX
+                          : edge === 'right'
+                            ? boundaryBox.maxX
+                            : edge === 'bottom'
+                              ? boundaryBox.minY
+                              : boundaryBox.maxY;
+                        completeEdgeAlignmentToCoordinate(coord, `${baseCellName} boundary`);
+                      } else {
+                        completeEdgeAlignmentToBoundary(edge as 'left' | 'right' | 'bottom' | 'top');
+                      }
                     } catch (error) {
-                      alert(error instanceof Error ? error.message : 'Unable to align to the top cell.');
+                      alert(error instanceof Error ? error.message : 'Unable to align to the boundary.');
                     }
                   }}
                 />
@@ -4108,11 +4135,6 @@ export const FloorplanCanvas: React.FC = () => {
                 </>
               );
             }
-            const ghostOverlap = findOverlappingInstance(
-              { x: ghostPosition.x, y: ghostPosition.y, orientation: previewOrientation, width: m.width, height: m.height, originX: m.originX, originY: m.originY },
-              instances,
-              masterCells,
-            );
             const ghostExceedsBounds = !isSubCellCanvas && m.kind !== 'pad' && m.width > 0 && m.height > 0 && (() => {
               const gb = getPhysicalBounds({
                 id: '__ghost__',
@@ -4131,7 +4153,7 @@ export const FloorplanCanvas: React.FC = () => {
                 || gb.top > topHeight / 2 + 1e-6
               );
             })();
-            const ghostHasWarning = Boolean(ghostOverlap) || ghostExceedsBounds;
+            const ghostHasWarning = ghostExceedsBounds;
             return (
               <Group
                 x={ghostPosition.x * SCALE_FACTOR}
@@ -4393,7 +4415,7 @@ export const FloorplanCanvas: React.FC = () => {
           })()}
 
           {/* Out-of-Bounds Die Warning Highlights (live in top_asic and during Edit-in-Place X) */}
-          {showOverlapDrc && baseIsRoot && boundaryViolations.map(violation => {
+          {baseIsRoot && boundaryViolations.map(violation => {
             const halfW = baseWidth / 2;
             const halfH = baseHeight / 2;
             const { minX, maxX, minY, maxY } = violation.bounds;
@@ -4521,7 +4543,7 @@ export const FloorplanCanvas: React.FC = () => {
         </Layer>
       </Stage>
       {appMode === 'rect' && (
-        <div className="lpp-palette-bar" role="toolbar" aria-label="Virtuoso Layer Purpose Palette">
+        <div className={`lpp-palette-bar${isEditInPlace ? ' lpp-palette-bar--below-eip' : ''}`} role="toolbar" aria-label="Virtuoso Layer Purpose Palette">
           <div className="lpp-palette-bar__presets">
             {VIRTUOSO_LAYER_PRESETS.slice(0, 8).map(preset => {
               const isSelected = activeDrawLayer.toLowerCase() === preset.layer.toLowerCase()
@@ -4598,7 +4620,7 @@ export const FloorplanCanvas: React.FC = () => {
           setActiveTextConfig({ fontStyle: nextStyle });
         };
         return (
-          <div className="lpp-palette-bar" role="toolbar" aria-label="Virtuoso Create Text Label Toolbar">
+          <div className={`lpp-palette-bar lpp-palette-bar--text${isEditInPlace ? ' lpp-palette-bar--below-eip' : ''}`} role="toolbar" aria-label="Virtuoso Create Text Label Toolbar">
             <div className="lpp-palette-bar__custom">
               <input
                 ref={textInputRef}

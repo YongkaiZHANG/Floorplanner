@@ -969,12 +969,12 @@ export const PropertiesPanel: React.FC = () => {
                 </div>
               )}
               {selectedOverlapNames.length > 0 && (
-                <div className="pad-edge-note" role="status">
+                <div className="overlap-info-note" role="status">
                   <strong>
-                    ⚠ Overlaps {selectedOverlapNames.join(', ')}
+                    ⓘ Bounding box overlaps {selectedOverlapNames.join(', ')}
                   </strong>
                   <span>
-                    Cell overlap is allowed and flagged as a DRC warning so you can adjust layout hierarchy freely.
+                    Non-fatal notice — normal for pad rings or hierarchical cells (e.g. padring, asp_top) whose bounding box spans other IPs. Not exported to SKILL.
                   </span>
                 </div>
               )}

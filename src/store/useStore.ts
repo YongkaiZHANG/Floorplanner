@@ -6,7 +6,13 @@ import type { ProjectSnapshot } from './projectDocument.ts';
 import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
 import type { ProjectHistory } from './projectHistory.ts';
 import { snapToGrid } from '../utils/grid.ts';
-import { wouldCreateHierarchyCycle } from '../utils/hierarchy.ts';
+import {
+  applyCadenceOrientationVector,
+  applyCadenceTransformPoint,
+  computeActiveToBaseTransform,
+  invertCadenceTransform,
+  wouldCreateHierarchyCycle,
+} from '../utils/hierarchy.ts';
 import type { CellViewContent, CellViewCoordinateMode } from '../utils/hierarchy.ts';
 import { computeCellContentBounds, estimateTextBoxSize } from '../utils/layoutLayers.ts';
 import type { LayoutShape, LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers.ts';
@@ -311,12 +317,14 @@ export type ProjectState = {
   undo: () => void;
   redo: () => void;
   alignSelectedInstances: (operation: AlignmentOperation) => void;
+  alignSelectedInstancesToBoundary: (edge: AlignmentEdge) => void;
   alignInstanceEdges: (sourceId: string, targetId: string, sourceEdge: AlignmentEdge, targetEdge: AlignmentEdge, offset?: number) => void;
   startEdgeAlignment: (sourceId: string) => void;
   setEdgeAlignmentEdge: (instanceId: string, edge: AlignmentEdge) => void;
   setEdgeAlignmentOffset: (value: string) => void;
   completeEdgeAlignment: (targetId: string, targetEdge: AlignmentEdge) => void;
   completeEdgeAlignmentToBoundary: (targetEdge: 'left' | 'right' | 'bottom' | 'top') => void;
+  completeEdgeAlignmentToCoordinate: (coordinate: number, referenceLabel?: string) => void;
   completeEdgeAlignmentToRuler: (rulerId: string) => void;
   cancelEdgeAlignment: () => void;
   applyEdgeAlignment: () => void;
@@ -1637,7 +1645,7 @@ export const useStore = create<ProjectState>((set) => ({
   lastAlignmentSpacing: readStoredAlignmentSpacing(),
   orthogonalRuler: false,
   showAutoDim: false,
-  showOverlapDrc: true,
+  showOverlapDrc: false,
   showGrid: true,
   snapToVisibleGrid: false,
   clipboard: [],
@@ -3625,6 +3633,206 @@ export const useStore = create<ProjectState>((set) => ({
     });
   }),
 
+  alignSelectedInstancesToBoundary: (edge) => set((state) => {
+    const boxEdgeCoordinate = (box: { minX: number; maxX: number; minY: number; maxY: number }, targetEdge: AlignmentEdge): number => {
+      if (targetEdge === 'left') return box.minX;
+      if (targetEdge === 'right') return box.maxX;
+      if (targetEdge === 'horizontal-center') return (box.minX + box.maxX) / 2;
+      if (targetEdge === 'bottom') return box.minY;
+      if (targetEdge === 'top') return box.maxY;
+      return (box.minY + box.maxY) / 2;
+    };
+
+    const isEipRootedAtTop = state.activeCellId !== null
+      && state.descendStack.length > 0
+      && state.descendStack[0].parentCellId === null
+      && Boolean(state.rootView);
+
+    let refBox: { minX: number; maxX: number; minY: number; maxY: number };
+    let refLabel: string;
+    let forwardTransform: { x: number; y: number; orientation: CadenceOrientation } | null = null;
+    let inverseTransform: { x: number; y: number; orientation: CadenceOrientation } | null = null;
+
+    if (state.activeCellId === null) {
+      refBox = {
+        minX: -state.topWidth / 2,
+        maxX: state.topWidth / 2,
+        minY: -state.topHeight / 2,
+        maxY: state.topHeight / 2,
+      };
+      refLabel = state.topCellName;
+    } else if (isEipRootedAtTop && state.rootView) {
+      const liveChain = state.descendStack.map(step => {
+        const liveParent = step.parentCellId ? state.masterCells[step.parentCellId] : null;
+        return {
+          ...step,
+          parentWidth: liveParent?.width ?? (step.parentCellId === null ? state.rootView!.topWidth : step.parentWidth),
+          parentHeight: liveParent?.height ?? (step.parentCellId === null ? state.rootView!.topHeight : step.parentHeight),
+        };
+      });
+      forwardTransform = computeActiveToBaseTransform(liveChain, state.activeCoordinateMode, state.topWidth, state.topHeight);
+      inverseTransform = invertCadenceTransform(forwardTransform);
+      refBox = {
+        minX: -state.rootView.topWidth / 2,
+        maxX: state.rootView.topWidth / 2,
+        minY: -state.rootView.topHeight / 2,
+        maxY: state.rootView.topHeight / 2,
+      };
+      refLabel = state.rootView.topCellName;
+    } else {
+      if (state.topWidth <= 0 || state.topHeight <= 0) {
+        throw new Error(`Cannot align to boundary because ${state.topCellName} has no boundary size yet.`);
+      }
+      const { originX, originY } = getActiveContainerOrigin(state);
+      refBox = {
+        minX: originX,
+        maxX: originX + state.topWidth,
+        minY: originY,
+        maxY: originY + state.topHeight,
+      };
+      refLabel = state.topCellName;
+    }
+
+    const axis = getAlignmentEdgeAxis(edge);
+
+    if (state.pixelArraySelected && state.pixelArray?.visible) {
+      const pa = state.pixelArray;
+      const paBounds = getPhysicalBounds({
+        id: PIXEL_ARRAY_ALIGNMENT_ID,
+        x: pa.x,
+        y: pa.y,
+        width: pa.width,
+        height: pa.height,
+        orientation: 'R0',
+      });
+      let nextX = pa.x;
+      let nextY = pa.y;
+      if (forwardTransform && inverseTransform) {
+        const c1 = applyCadenceTransformPoint(forwardTransform, paBounds.left, paBounds.bottom);
+        const c2 = applyCadenceTransformPoint(forwardTransform, paBounds.right, paBounds.top);
+        const baseBounds = {
+          left: Math.min(c1.x, c2.x),
+          right: Math.max(c1.x, c2.x),
+          bottom: Math.min(c1.y, c2.y),
+          top: Math.max(c1.y, c2.y),
+          centerX: (c1.x + c2.x) / 2,
+          centerY: (c1.y + c2.y) / 2,
+          width: Math.abs(c2.x - c1.x),
+          height: Math.abs(c2.y - c1.y),
+        };
+        const delta = boxEdgeCoordinate(refBox, edge) - getEdgeCoordinate(baseBounds, edge);
+        const editDelta = applyCadenceOrientationVector(
+          inverseTransform.orientation,
+          axis === 'horizontal' ? delta : 0,
+          axis === 'vertical' ? delta : 0,
+        );
+        nextX = pa.x + editDelta.dx;
+        nextY = pa.y + editDelta.dy;
+      } else {
+        const delta = boxEdgeCoordinate(refBox, edge) - getEdgeCoordinate(paBounds, edge);
+        if (axis === 'horizontal') nextX = pa.x + delta;
+        else nextY = pa.y + delta;
+      }
+      const { originX, originY } = getActiveContainerOrigin(state);
+      const pixelArray = normalizePixelArray(
+        { ...pa, x: nextX, y: nextY },
+        state.topWidth,
+        state.topHeight,
+        state.gridSize,
+        originX,
+        originY,
+      );
+      if (Math.abs(pixelArray.x - pa.x) <= 1e-9 && Math.abs(pixelArray.y - pa.y) <= 1e-9) {
+        return state;
+      }
+      return commitProjectPatch(state, `Align Pixel Array to ${refLabel} ${edge.replace('-', ' ')}`, { pixelArray });
+    }
+
+    if (state.selectedInstanceIds.length === 0) return state;
+    const selectedIds = new Set(state.selectedInstanceIds);
+    let anyChanged = false;
+    const instances = state.instances.map(instance => {
+      if (!selectedIds.has(instance.id)) return instance;
+      if (instance.locked) {
+        throw new Error(`Cannot align because ${instance.name} is locked`);
+      }
+      const master = state.masterCells[instance.cellId];
+      if (!master || isCellEmpty(master)) return instance;
+      const bounds = getPhysicalBounds({
+        ...instance,
+        width: master.width,
+        height: master.height,
+        originX: master.originX,
+        originY: master.originY,
+      });
+
+      let nextPos: { x: number; y: number };
+      if (forwardTransform && inverseTransform) {
+        const c1 = applyCadenceTransformPoint(forwardTransform, bounds.left, bounds.bottom);
+        const c2 = applyCadenceTransformPoint(forwardTransform, bounds.right, bounds.top);
+        const baseBounds = {
+          left: Math.min(c1.x, c2.x),
+          right: Math.max(c1.x, c2.x),
+          bottom: Math.min(c1.y, c2.y),
+          top: Math.max(c1.y, c2.y),
+          centerX: (c1.x + c2.x) / 2,
+          centerY: (c1.y + c2.y) / 2,
+          width: Math.abs(c2.x - c1.x),
+          height: Math.abs(c2.y - c1.y),
+        };
+        const delta = boxEdgeCoordinate(refBox, edge) - getEdgeCoordinate(baseBounds, edge);
+        const editDelta = applyCadenceOrientationVector(
+          inverseTransform.orientation,
+          axis === 'horizontal' ? delta : 0,
+          axis === 'vertical' ? delta : 0,
+        );
+        nextPos = snapUnboundedPosition(instance.x + editDelta.dx, instance.y + editDelta.dy, state.gridSize);
+      } else {
+        const isRootPad = state.activeCellId === null && master.kind === 'pad';
+        const effectiveBox = isRootPad
+          ? {
+              minX: refBox.minX + state.padInset,
+              maxX: refBox.maxX - state.padInset,
+              minY: refBox.minY + state.padInset,
+              maxY: refBox.maxY - state.padInset,
+            }
+          : refBox;
+        const delta = boxEdgeCoordinate(effectiveBox, edge) - getEdgeCoordinate(bounds, edge);
+        const rawX = axis === 'horizontal' ? instance.x + delta : instance.x;
+        const rawY = axis === 'vertical' ? instance.y + delta : instance.y;
+        nextPos = snapUnboundedPosition(rawX, rawY, state.gridSize);
+        if (isRootPad) {
+          const movedBounds = getPhysicalBounds({
+            ...instance,
+            x: nextPos.x,
+            y: nextPos.y,
+            width: master.width,
+            height: master.height,
+            originX: master.originX,
+            originY: master.originY,
+          });
+          if (!isPadTouchingPerimeter(movedBounds, state.topWidth, state.topHeight, state.padInset)) {
+            throw new RangeError(`Cannot align pad ${instance.name} to ${edge.replace('-', ' ')} because it would leave the top-cell perimeter`);
+          }
+        }
+      }
+
+      if (Math.abs(nextPos.x - instance.x) > 1e-9 || Math.abs(nextPos.y - instance.y) > 1e-9) {
+        anyChanged = true;
+      }
+      return { ...instance, x: nextPos.x, y: nextPos.y };
+    });
+
+    if (!anyChanged) return state;
+    const boundsSync = state.activeCellId
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    return commitProjectPatch(state, `Align to ${refLabel} ${edge.replace('-', ' ')}`, {
+      instances,
+      ...(boundsSync ?? {}),
+    });
+  }),
+
   alignInstanceEdges: (sourceId, targetId, sourceEdge, targetEdge, offset = 0) => set((state) => (
     edgeAlignmentPatch(state, sourceId, targetId, sourceEdge, targetEdge, offset)
   )),
@@ -3725,6 +3933,27 @@ export const useStore = create<ProjectState>((set) => ({
         coordinate,
         offset,
         `top.${targetEdge}`,
+        spacing,
+        session.sourceIds,
+      ),
+      edgeAlignmentSession: null,
+    };
+  }),
+
+  completeEdgeAlignmentToCoordinate: (coordinate, referenceLabel = 'boundary') => set((state) => {
+    const session = state.edgeAlignmentSession;
+    if (!session?.sourceEdge) throw new Error('Choose the source edge first');
+    if (!Number.isFinite(coordinate)) throw new RangeError('Boundary reference coordinate must be finite');
+    const spacing = parseEdgeAlignmentSpacing(session);
+    const offset = directionalSpacingOffset(getAlignable(state, session.sourceId), session.sourceEdge, coordinate, spacing);
+    return {
+      ...edgeAlignmentCoordinatePatch(
+        state,
+        session.sourceId,
+        session.sourceEdge,
+        coordinate,
+        offset,
+        referenceLabel,
         spacing,
         session.sourceIds,
       ),

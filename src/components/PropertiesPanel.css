@@ -163,6 +163,28 @@
   line-height: 1.4;
 }
 
+.overlap-info-note {
+  margin-top: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  border-radius: var(--radius-md);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.overlap-info-note strong {
+  color: #7dd3fc;
+  font-size: 12px;
+}
+
+.overlap-info-note span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .rotation-actions .btn {
   padding: 7px 8px;
   justify-content: center;
