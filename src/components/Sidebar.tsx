@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
 import type { Cell, PadSide, PendingInstanceArray } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiExternalLink, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight, FiArrowDownCircle } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiExternalLink, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight, FiArrowDownCircle, FiSquare } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
 import { wouldCreateHierarchyCycle } from '../utils/hierarchy';
+import { resolveLayerStyle } from '../utils/layoutLayers';
 
 const ORIENTATION_OPTIONS = ['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'] as const;
 
@@ -26,11 +27,13 @@ export const Sidebar: React.FC = () => {
   const { 
     topWidth, topHeight, topLibName, topCellName, padInset, libraries,
     setTopConfig, setPadInset,
-    masterCells, instances, cellViews, activeCellId, rootView,
+    masterCells, instances, shapes, cellViews, activeCellId, rootView,
     createLibrary, renameLibrary, deleteLibrary, moveCellToLibrary, moveAllCellsToLibrary,
     openCellView, descendIntoInstance,
     selectedInstanceIds, setSelectedInstance,
-    addMasterCell, updateMasterCell, deleteMasterCell, createPadRow, prepareManualPadPlacement,
+    selectedShapeId, setSelectedShape,
+    setAppMode,
+    addMasterCell, updateMasterCell, deleteMasterCell, placeInstance, placeInstanceMosaic, createPadRow, prepareManualPadPlacement,
     pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
@@ -64,6 +67,7 @@ export const Sidebar: React.FC = () => {
   const [newColor, setNewColor] = useState(PRESET_COLORS[0]);
   const [newOpacity, setNewOpacity] = useState('50');
   const [newOutlineStyle, setNewOutlineStyle] = useState<NonNullable<Cell['outlineStyle']>>('solid');
+  const [newCellCreationMode, setNewCellCreationMode] = useState<'canvas' | 'fixed'>('fixed');
   const [openCellAfterCreate, setOpenCellAfterCreate] = useState(false);
 
   const [showEditTopModal, setShowEditTopModal] = useState(false);
@@ -213,8 +217,9 @@ export const Sidebar: React.FC = () => {
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const width = Number.parseFloat(newWidth);
-    const height = Number.parseFloat(newHeight);
+    const isCanvasCell = !editingCellId && newCellCreationMode === 'canvas';
+    const width = isCanvasCell ? Math.max(gridSize * 20, 100) : Number.parseFloat(newWidth);
+    const height = isCanvasCell ? Math.max(gridSize * 20, 100) : Number.parseFloat(newHeight);
     const resolvedLib = newLibName.trim() || topLibName;
     if (!resolvedLib || !newCellName.trim() || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
       alert('Enter a valid library name, cell name, and positive width and height.');
@@ -225,7 +230,17 @@ export const Sidebar: React.FC = () => {
         updateMasterCell(editingCellId, resolvedLib, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle);
         setEditingCellId(null);
       } else {
-        addMasterCell(resolvedLib, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle, openCellAfterCreate);
+        addMasterCell(
+          resolvedLib,
+          newCellName,
+          width,
+          height,
+          newColor,
+          Number(newOpacity) / 100,
+          newOutlineStyle,
+          isCanvasCell ? true : openCellAfterCreate,
+          isCanvasCell,
+        );
         setCollapsedLibs(prev => ({ ...prev, [resolvedLib]: false }));
       }
       setShowCreateModal(false);
@@ -300,7 +315,8 @@ export const Sidebar: React.FC = () => {
     setNewCellName('');
     setNewOpacity('50');
     setNewOutlineStyle('solid');
-    setOpenCellAfterCreate(false);
+    setNewCellCreationMode('canvas');
+    setOpenCellAfterCreate(true);
     setShowCreateModal(true);
   };
 
@@ -313,6 +329,7 @@ export const Sidebar: React.FC = () => {
     setNewColor(cell.color);
     setNewOpacity(String(Math.round((cell.opacity ?? 0.5) * 100)));
     setNewOutlineStyle(cell.outlineStyle ?? 'solid');
+    setNewCellCreationMode('fixed');
     setOpenCellAfterCreate(false);
     setShowCreateModal(true);
   };
@@ -322,6 +339,38 @@ export const Sidebar: React.FC = () => {
       setPlacement(cellId, orientation, arrayConfig);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to instantiate this cell in the active view.');
+    }
+  };
+
+  const handleInstantiateAtOrigin = () => {
+    const target = eligibleInstantiateCells.find(cell => cell.id === instantiateSelection) ?? eligibleInstantiateCells[0];
+    if (!target) {
+      alert('No eligible cell is available to instantiate in the current cell view.');
+      return;
+    }
+    const rows = Math.max(1, Math.floor(Number(instRows) || 1));
+    const cols = Math.max(1, Math.floor(Number(instCols) || 1));
+    const deltaX = Number(instDeltaX);
+    const deltaY = Number(instDeltaY);
+    try {
+      if (rows > 1 || cols > 1) {
+        if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+          alert('Enter finite ΔX and ΔY pitch values for the mosaic array.');
+          return;
+        }
+        placeInstanceMosaic(target.id, 0, 0, instOrientation, {
+          namePrefix: instNamePrefix.trim() || undefined,
+          rows,
+          cols,
+          deltaX,
+          deltaY,
+        });
+      } else {
+        placeInstance(target.id, 0, 0, instOrientation, instNamePrefix.trim() || undefined);
+      }
+      setShowInstantiateModal(false);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to instantiate cell at (0, 0).');
     }
   };
 
@@ -610,6 +659,9 @@ export const Sidebar: React.FC = () => {
                         const subCount = isOpenView
                           ? instances.length
                           : (cellViews[cell.id]?.instances.length ?? 0);
+                        const rectCount = isOpenView
+                          ? shapes.length
+                          : (cellViews[cell.id]?.shapes?.length ?? 0);
                         const blocksCycle = wouldCreateHierarchyCycle(activeCellId, cell.id, effectiveCellViews);
                         return (
                           <li
@@ -637,6 +689,11 @@ export const Sidebar: React.FC = () => {
                               <div className="cell-item__text">
                                 <div className="cell-item__title-row">
                                   <span className="cell-name" title={`${cell.libName}/${cell.cellName}`}>{cell.cellName}</span>
+                                  {rectCount > 0 && (
+                                    <span className="subcount-badge" title={`${rectCount} drawn rectangle${rectCount === 1 ? '' : 's'}`}>
+                                      {rectCount} rect{rectCount === 1 ? '' : 's'}
+                                    </span>
+                                  )}
                                   {subCount > 0 && (
                                     <span className="subcount-badge" title={`${subCount} sub-instance${subCount === 1 ? '' : 's'} inside this cell`}>
                                       {subCount} sub
@@ -725,6 +782,10 @@ export const Sidebar: React.FC = () => {
               </button>
             )}
           </div>
+          <button className="edge-pad-action" type="button" onClick={() => setAppMode('rect')}>
+            <FiSquare />
+            <span><strong>Draw Rectangle (LPP)</strong><small>Draw on text/drawing, M1, prBoundary… (R/D)</small></span>
+          </button>
           <button className="edge-pad-action" type="button" onClick={() => {
             setPadLibName(topLibName);
             setPadInsetDraft(padInset.toString());
@@ -832,6 +893,52 @@ export const Sidebar: React.FC = () => {
             )}
           </ul>
         </div>
+
+        {shapes.length > 0 && (
+          <div className="sidebar-section">
+            <div className="section-header">
+              <h3 className="section-title"><FiSquare /> {topCellName} Shapes</h3>
+              <span className="lib-badge">{shapes.length}</span>
+            </div>
+            <ul className="instance-list">
+              {shapes.map(shape => {
+                const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                return (
+                  <li
+                    key={shape.id}
+                    className={`instance-item${selectedShapeId === shape.id ? ' active' : ''}`}
+                    onClick={() => setSelectedShape(shape.id)}
+                    title="Click to select rectangle and inspect/edit in Properties"
+                  >
+                    <div className="inst-header">
+                      <span
+                        className="inst-icon"
+                        style={{
+                          display: 'inline-block',
+                          width: 10,
+                          height: 10,
+                          borderRadius: 2,
+                          backgroundColor: style.color,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span className="inst-name">{shape.layer}/{shape.purpose}</span>
+                      {shape.label?.trim() && <span className="inst-master">({shape.label.trim()})</span>}
+                      {shape.locked && (
+                        <span className="inst-lock-badge" title="Locked">
+                          <FiLock />
+                        </span>
+                      )}
+                    </div>
+                    <div className="inst-pos">
+                      ({formatGridValue(shape.x, gridSize)}, {formatGridValue(shape.y, gridSize)}) · {formatGridValue(shape.width, gridSize)}×{formatGridValue(shape.height, gridSize)} µm
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </div>
       
       <button 
@@ -950,16 +1057,53 @@ export const Sidebar: React.FC = () => {
                     <input className="input-field locked-library" value="layout" readOnly aria-label="Cell view type" />
                   </div>
                 </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label className="label">Width (um)</label>
-                    <input type="number" step="any" className="input-field" value={newWidth} onChange={e => setNewWidth(e.target.value)} required />
+                {!editingCellId && (
+                  <div className="pad-placement-mode" role="group" aria-label="Cell creation mode" style={{ marginBottom: '12px' }}>
+                    <button
+                      type="button"
+                      className={newCellCreationMode === 'canvas' ? 'active' : ''}
+                      onClick={() => {
+                        setNewCellCreationMode('canvas');
+                        setOpenCellAfterCreate(true);
+                      }}
+                      aria-pressed={newCellCreationMode === 'canvas'}
+                    >
+                      <FiSquare />
+                      <span>
+                        <strong>Layout Canvas (0,0)</strong>
+                        <small>Draw rectangles &amp; sub-cells freely</small>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className={newCellCreationMode === 'fixed' ? 'active' : ''}
+                      onClick={() => setNewCellCreationMode('fixed')}
+                      aria-pressed={newCellCreationMode === 'fixed'}
+                    >
+                      <FiBox />
+                      <span>
+                        <strong>Fixed Block (W × H)</strong>
+                        <small>Pre-sized floorplan macro</small>
+                      </span>
+                    </button>
                   </div>
-                  <div className="form-group">
-                    <label className="label">Height (um)</label>
-                    <input type="number" step="any" className="input-field" value={newHeight} onChange={e => setNewHeight(e.target.value)} required />
+                )}
+                {(editingCellId || newCellCreationMode === 'fixed') ? (
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label className="label">Width (um)</label>
+                      <input type="number" step="any" className="input-field" value={newWidth} onChange={e => setNewWidth(e.target.value)} required />
+                    </div>
+                    <div className="form-group">
+                      <label className="label">Height (um)</label>
+                      <input type="number" step="any" className="input-field" value={newHeight} onChange={e => setNewHeight(e.target.value)} required />
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <small className="field-help" style={{ display: 'block', marginBottom: '12px' }}>
+                    Opens a blank Virtuoso canvas centered at <strong>(0, 0)</strong> with a Top-Cell reference frame. Draw rectangles (e.g. <code>text/drawing</code>) or instantiate cells, then instantiate this cell at <strong>(0, 0)</strong> in upper-level cells.
+                  </small>
+                )}
                 <div className="form-group">
                   <label className="label">IP Color</label>
                   <div className="color-swatch-grid">
@@ -1028,7 +1172,7 @@ export const Sidebar: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                {!editingCellId && (
+                {!editingCellId && newCellCreationMode === 'fixed' && (
                   <label className="checkbox-label" style={{ marginTop: '12px' }}>
                     <input
                       type="checkbox"
@@ -1168,9 +1312,18 @@ export const Sidebar: React.FC = () => {
                     </>
                   )}
                 </div>
-                <small className="field-help">Tip: Press <strong>R</strong> or right-click while placing on canvas to rotate before clicking. Press <strong>Esc</strong> when done.</small>
+                <small className="field-help">Tip: Use <strong>Place at (0, 0)</strong> to drop a co-origin IP cell directly at chip origin, or <strong>Hide &amp; Place</strong> to click interactively (<strong>R</strong> / right-click rotates).</small>
                 <div className="modal-actions">
                   <button type="button" className="btn" onClick={() => setShowInstantiateModal(false)}>Cancel</button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={eligibleInstantiateCells.length === 0}
+                    onClick={handleInstantiateAtOrigin}
+                    title={`Instantiate directly at (0, 0) in ${topCellName}`}
+                  >
+                    Place at (0, 0)
+                  </button>
                   <button type="submit" className="btn btn-primary" disabled={eligibleInstantiateCells.length === 0}>
                     Hide &amp; Place
                   </button>

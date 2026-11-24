@@ -31,6 +31,10 @@ export interface AlignableInstance {
   y: number;
   width: number;
   height: number;
+  /** Optional local X origin of master bounding box relative to (0, 0). Defaults to 0. */
+  originX?: number;
+  /** Optional local Y origin of master bounding box relative to (0, 0). Defaults to 0. */
+  originY?: number;
   /** Runtime-validated so it can accept the store's current string field directly. */
   orientation: string;
 }
@@ -85,16 +89,21 @@ const assertInstance = (instance: AlignableInstance) => {
 };
 
 const getLocalBounds = (instance: AlignableInstance): LocalBounds => {
-  const { width: w, height: h } = instance;
+  const ox = instance.originX ?? 0;
+  const oy = instance.originY ?? 0;
+  const x1 = ox;
+  const y1 = oy;
+  const x2 = ox + instance.width;
+  const y2 = oy + instance.height;
   switch (instance.orientation) {
-    case 'R0': return { minX: 0, maxX: w, minY: 0, maxY: h };
-    case 'R90': return { minX: -h, maxX: 0, minY: 0, maxY: w };
-    case 'R180': return { minX: -w, maxX: 0, minY: -h, maxY: 0 };
-    case 'R270': return { minX: 0, maxX: h, minY: -w, maxY: 0 };
-    case 'MX': return { minX: 0, maxX: w, minY: -h, maxY: 0 };
-    case 'MY': return { minX: -w, maxX: 0, minY: 0, maxY: h };
-    case 'MXR90': return { minX: 0, maxX: h, minY: 0, maxY: w };
-    case 'MYR90': return { minX: -h, maxX: 0, minY: -w, maxY: 0 };
+    case 'R0': return { minX: x1, maxX: x2, minY: y1, maxY: y2 };
+    case 'R90': return { minX: -y2, maxX: -y1, minY: x1, maxY: x2 };
+    case 'R180': return { minX: -x2, maxX: -x1, minY: -y2, maxY: -y1 };
+    case 'R270': return { minX: y1, maxX: y2, minY: -x2, maxY: -x1 };
+    case 'MX': return { minX: x1, maxX: x2, minY: -y2, maxY: -y1 };
+    case 'MY': return { minX: -x2, maxX: -x1, minY: y1, maxY: y2 };
+    case 'MXR90': return { minX: y1, maxX: y2, minY: x1, maxY: x2 };
+    case 'MYR90': return { minX: -y2, maxX: -y1, minY: -x2, maxY: -x1 };
     default: throw new Error(`Unsupported orientation for ${instance.id}`);
   }
 };

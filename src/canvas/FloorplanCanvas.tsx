@@ -10,6 +10,8 @@ import { SCALE_FACTOR } from '../utils/canvasConstants';
 import { computeDisplayGridStep, resolveActiveSnapStep, resolveCanvasCursor, snapPointToGrid } from '../utils/canvasCursor';
 import { findOverlapViolations } from '../utils/floorplanMetrics';
 import { formatGridValue, snapToGrid } from '../utils/grid';
+import { normalizeRectFromPoints, resolveLayerStyle, VIRTUOSO_LAYER_PRESETS } from '../utils/layoutLayers';
+import type { LayoutShape } from '../utils/layoutLayers';
 import { getIpPixelArrayEdgeMeasurements } from '../utils/pixelArrayDimensions';
 import { resolveOrthogonalRulerEnd } from '../utils/ruler';
 import type { SnapEdgeAxis } from '../utils/ruler';
@@ -17,7 +19,7 @@ import { panViewportByArrow } from '../utils/viewport';
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { FiCrosshair, FiGrid, FiMaximize2, FiMinus, FiPlus } from 'react-icons/fi';
+import { FiCrosshair, FiGrid, FiMaximize2, FiMinus, FiPlus, FiX } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
@@ -52,6 +54,10 @@ export const FloorplanCanvas: React.FC = () => {
   const selectionBoxRef = useRef<typeof selectionBox>(null);
   const marqueeDraggedRef = useRef(false);
   const ignoreBackgroundClickUntilRef = useRef(0);
+  const [rectDraft, setRectDraft] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+  const rectDraftRef = useRef<typeof rectDraft>(null);
+  const rectDraggingRef = useRef(false);
+  const [shapeResizePreview, setShapeResizePreview] = useState<{ id: string; x: number; y: number; width: number; height: number } | null>(null);
   const [panStart, setPanStart] = useState<{ x: number; y: number; stageX: number; stageY: number } | null>(null);
   const [isSpaceDown, setIsSpaceDown] = useState(false);
   const [multiDragDelta, setMultiDragDelta] = useState<{ anchorId: string; dx: number; dy: number } | null>(null);
@@ -75,8 +81,11 @@ export const FloorplanCanvas: React.FC = () => {
     padInset,
     masterCells, 
     instances,
+    shapes,
+    activeCoordinateMode,
     cellViews,
     activeCellId,
+    rootView,
     windowLayoutMode,
     openViewIds,
     descendIntoInstance,
@@ -87,6 +96,16 @@ export const FloorplanCanvas: React.FC = () => {
     selectedInstanceId,
     selectedInstanceIds,
     setSelectedInstance,
+    selectedShapeId,
+    setSelectedShape,
+    activeDrawLayer,
+    activeDrawPurpose,
+    activeDrawLabel,
+    activeDrawColor,
+    setActiveDrawLpp,
+    setActiveDrawLabel,
+    addShape,
+    updateShape,
     addRuler,
     deleteRuler,
     clearRulers,
@@ -119,9 +138,44 @@ export const FloorplanCanvas: React.FC = () => {
     setPixelArraySelected,
   } = useStore();
 
+  const activeMasterCell = activeCellId ? masterCells[activeCellId] ?? null : null;
+  const isSubCellCanvas = activeCellId !== null;
+  const isOriginSubCell = isSubCellCanvas && activeCoordinateMode !== 'centered';
+  const activeBoundaryBox = useMemo(() => {
+    if (isOriginSubCell && activeMasterCell) {
+      const ox = activeMasterCell.originX ?? 0;
+      const oy = activeMasterCell.originY ?? 0;
+      return { minX: ox, minY: oy, maxX: ox + topWidth, maxY: oy + topHeight };
+    }
+    return { minX: -topWidth / 2, minY: -topHeight / 2, maxX: topWidth / 2, maxY: topHeight / 2 };
+  }, [isOriginSubCell, activeMasterCell, topWidth, topHeight]);
+
+  const gridExtentUm = useMemo(() => {
+    if (!isSubCellCanvas) {
+      return { minX: -topWidth / 2, maxX: topWidth / 2, minY: -topHeight / 2, maxY: topHeight / 2 };
+    }
+    let minX = Math.min(activeBoundaryBox.minX, 0);
+    let maxX = Math.max(activeBoundaryBox.maxX, 0);
+    let minY = Math.min(activeBoundaryBox.minY, 0);
+    let maxY = Math.max(activeBoundaryBox.maxY, 0);
+    if (rootView) {
+      minX = Math.min(minX, -rootView.topWidth / 2);
+      maxX = Math.max(maxX, rootView.topWidth / 2);
+      minY = Math.min(minY, -rootView.topHeight / 2);
+      maxY = Math.max(maxY, rootView.topHeight / 2);
+    }
+    return { minX, maxX, minY, maxY };
+  }, [isSubCellCanvas, topWidth, topHeight, activeBoundaryBox, rootView]);
+
   const displayGrid = useMemo(
-    () => computeDisplayGridStep(gridSize, stageScale, SCALE_FACTOR, topWidth, topHeight),
-    [gridSize, stageScale, topWidth, topHeight],
+    () => computeDisplayGridStep(
+      gridSize,
+      stageScale,
+      SCALE_FACTOR,
+      Math.max(1, gridExtentUm.maxX - gridExtentUm.minX),
+      Math.max(1, gridExtentUm.maxY - gridExtentUm.minY),
+    ),
+    [gridSize, stageScale, gridExtentUm],
   );
   const activeSnapStep = resolveActiveSnapStep(gridSize, displayGrid.minorStep, snapToVisibleGrid);
   const activeSnapStepRef = useRef(activeSnapStep);
@@ -129,41 +183,74 @@ export const FloorplanCanvas: React.FC = () => {
     activeSnapStepRef.current = activeSnapStep;
   }, [activeSnapStep]);
 
+  useEffect(() => {
+    if (appMode !== 'rect') {
+      rectDraftRef.current = null;
+      rectDraggingRef.current = false;
+      setRectDraft(null);
+    }
+  }, [appMode, activeCellId]);
+
   const snappedMousePos = useMemo(() => {
     if (!mousePos) return null;
     if (appMode === 'measure' && snapIndicator) return mousePos;
     return snapPointToGrid(mousePos.x, mousePos.y, activeSnapStep);
   }, [mousePos, appMode, snapIndicator, activeSnapStep]);
 
-  const clampWithSnapStep = (x: number, y: number, orientation: string, width: number, height: number) => {
+  const clampWithSnapStep = (x: number, y: number, orientation: string, width: number, height: number, originX = 0, originY = 0) => {
+    if (isSubCellCanvas) {
+      return snapPointToGrid(x, y, activeSnapStep);
+    }
     try {
-      return clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, activeSnapStep);
+      return clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, activeSnapStep, originX, originY);
     } catch {
-      return clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, gridSize);
+      return clampInstancePosition(x, y, orientation, width, height, topWidth, topHeight, gridSize, originX, originY);
     }
   };
 
   const fitView = useCallback(() => {
     if (containerRef.current) {
       const { offsetHeight, offsetWidth } = containerRef.current;
-      const tw = topWidth * SCALE_FACTOR;
-      const th = topHeight * SCALE_FACTOR;
+      let minX = activeBoundaryBox.minX;
+      let maxX = activeBoundaryBox.maxX;
+      let minY = activeBoundaryBox.minY;
+      let maxY = activeBoundaryBox.maxY;
+
+      if (isSubCellCanvas) {
+        const isBlankAutoCell = Boolean(activeMasterCell?.autoBounds) && shapes.length === 0 && instances.length === 0;
+        if (isBlankAutoCell && rootView) {
+          minX = -rootView.topWidth / 2;
+          maxX = rootView.topWidth / 2;
+          minY = -rootView.topHeight / 2;
+          maxY = rootView.topHeight / 2;
+        } else {
+          minX = Math.min(minX, 0);
+          maxX = Math.max(maxX, 0);
+          minY = Math.min(minY, 0);
+          maxY = Math.max(maxY, 0);
+        }
+      }
+
+      const spanW = Math.max(gridSize * 10, maxX - minX) * SCALE_FACTOR;
+      const spanH = Math.max(gridSize * 10, maxY - minY) * SCALE_FACTOR;
+      const centerX = ((minX + maxX) / 2) * SCALE_FACTOR;
+      const centerY = ((minY + maxY) / 2) * SCALE_FACTOR;
       
       const padding = 72;
       const availableWidth = Math.max(1, offsetWidth - padding * 2);
       const availableHeight = Math.max(1, offsetHeight - padding * 2);
-      const scaleX = availableWidth / tw;
-      const scaleY = availableHeight / th;
+      const scaleX = availableWidth / spanW;
+      const scaleY = availableHeight / spanH;
       const initialScale = Math.max(MIN_STAGE_SCALE, Math.min(scaleX, scaleY, 1.5));
       
       setFitScale(initialScale);
       setStageScale(initialScale);
       setStagePos({ 
-        x: offsetWidth / 2, 
-        y: offsetHeight / 2 
+        x: offsetWidth / 2 - centerX * initialScale, 
+        y: offsetHeight / 2 + centerY * initialScale, 
       }); 
     }
-  }, [topWidth, topHeight]);
+  }, [activeBoundaryBox, isSubCellCanvas, activeMasterCell, shapes.length, instances.length, rootView, gridSize]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -214,12 +301,16 @@ export const FloorplanCanvas: React.FC = () => {
 
       if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key)) {
         e.preventDefault();
-        if (e.altKey && state.selectedInstanceIds.length > 0) {
+        if (e.altKey && (state.selectedInstanceIds.length > 0 || state.selectedShapeId)) {
           const dx = key === 'arrowright' ? 1 : key === 'arrowleft' ? -1 : 0;
           const dy = key === 'arrowup' ? 1 : key === 'arrowdown' ? -1 : 0;
           const multiplier = e.shiftKey ? 10 : 1;
           const step = activeSnapStepRef.current;
-          state.nudgeSelection(dx * multiplier * step, dy * multiplier * step);
+          if (state.selectedShapeId) {
+            state.nudgeSelectedShape(dx * multiplier * step, dy * multiplier * step);
+          } else {
+            state.nudgeSelection(dx * multiplier * step, dy * multiplier * step);
+          }
           return;
         }
         const panDistance = e.shiftKey ? 160 : 48;
@@ -318,9 +409,19 @@ export const FloorplanCanvas: React.FC = () => {
           e.preventDefault();
           setAppMode('select');
           break;
+        case 'd':
+          e.preventDefault();
+          setAppMode('rect');
+          break;
         case 'backspace':
         case 'delete':
-          if (state.selectedInstanceIds.length > 0) {
+          if (state.selectedShapeId) {
+            try {
+              state.deleteShape(state.selectedShapeId);
+            } catch (error) {
+              alert(error instanceof Error ? error.message : 'Unable to delete the selected shape.');
+            }
+          } else if (state.selectedInstanceIds.length > 0) {
             state.deleteSelectedInstances();
           }
           break;
@@ -342,7 +443,9 @@ export const FloorplanCanvas: React.FC = () => {
           break;
         case 'l':
           e.preventDefault();
-          if (state.selectedInstanceIds.length > 0) {
+          if (state.selectedShapeId) {
+            state.toggleShapeLock(state.selectedShapeId);
+          } else if (state.selectedInstanceIds.length > 0) {
             state.toggleInstanceLock(state.selectedInstanceIds);
           }
           break;
@@ -366,6 +469,9 @@ export const FloorplanCanvas: React.FC = () => {
                 alert(error instanceof Error ? error.message : 'Unable to rotate the selected block.');
               }
             }
+          } else {
+            // Cadence Virtuoso bindkey: R creates a rectangle when no instance is selected
+            setAppMode('rect');
           }
           break;
         case 'a':
@@ -376,6 +482,14 @@ export const FloorplanCanvas: React.FC = () => {
         case 'escape':
           if (state.edgeAlignmentSession) {
             state.cancelEdgeAlignment();
+          } else if (state.appMode === 'rect') {
+            if (rectDraftRef.current) {
+              rectDraftRef.current = null;
+              rectDraggingRef.current = false;
+              setRectDraft(null);
+            } else {
+              setAppMode('select');
+            }
           } else if (state.appMode === 'place') {
             state.setPlacement(null);
           } else if (state.appMode === 'pixel-array') {
@@ -386,6 +500,8 @@ export const FloorplanCanvas: React.FC = () => {
             setMeasureStart(null);
             setCurrentRuler(null);
             setSnapIndicator(null);
+          } else if (state.selectedShapeId) {
+            state.setSelectedShape(null);
           } else if (state.selectedInstanceId || state.selectedInstanceIds.length > 0) {
             setSelectedInstance(null);
           } else if (state.pixelArraySelected) {
@@ -470,7 +586,13 @@ export const FloorplanCanvas: React.FC = () => {
   const getInstanceCorners = (inst: Instance) => {
     const master = masterCells[inst.cellId];
     if (!master) return null;
-    const bounds = getPhysicalBounds({ ...inst, width: master.width, height: master.height });
+    const bounds = getPhysicalBounds({
+      ...inst,
+      width: master.width,
+      height: master.height,
+      originX: master.originX,
+      originY: master.originY,
+    });
     return [
       { x: bounds.left, y: bounds.bottom },
       { x: bounds.right, y: bounds.bottom },
@@ -491,19 +613,32 @@ export const FloorplanCanvas: React.FC = () => {
       
       const segments: {a: {x:number, y:number}, b: {x:number, y:number}, axis: SnapEdgeAxis}[] = [];
       
-      // top_asic boundary
-      const w2 = topWidth / 2;
-      const h2 = topHeight / 2;
+      // active cell boundary
       const topAsicCorners = [
-        {x: -w2, y: -h2},
-        {x: w2, y: -h2},
-        {x: w2, y: h2},
-        {x: -w2, y: h2}
+        { x: activeBoundaryBox.minX, y: activeBoundaryBox.minY },
+        { x: activeBoundaryBox.maxX, y: activeBoundaryBox.minY },
+        { x: activeBoundaryBox.maxX, y: activeBoundaryBox.maxY },
+        { x: activeBoundaryBox.minX, y: activeBoundaryBox.maxY },
       ];
       for (let i=0; i<4; i++) {
         const a = topAsicCorners[i];
         const b = topAsicCorners[(i+1)%4];
         segments.push({ a, b, axis: Math.abs(a.x - b.x) <= 1e-9 ? 'vertical' : 'horizontal' });
+      }
+
+      // drawn shapes (for snapping rulers cleanly onto shape edges too)
+      for (const shape of shapes) {
+        const shapeCorners = [
+          { x: shape.x, y: shape.y },
+          { x: shape.x + shape.width, y: shape.y },
+          { x: shape.x + shape.width, y: shape.y + shape.height },
+          { x: shape.x, y: shape.y + shape.height },
+        ];
+        for (let i = 0; i < 4; i++) {
+          const a = shapeCorners[i];
+          const b = shapeCorners[(i + 1) % 4];
+          segments.push({ a, b, axis: Math.abs(a.x - b.x) <= 1e-9 ? 'vertical' : 'horizontal' });
+        }
       }
 
       // visible pixel array boundary
@@ -561,10 +696,55 @@ export const FloorplanCanvas: React.FC = () => {
     return { umX: snapped.x, umY: snapped.y, isSnapped: false, snapEdgeAxis: undefined };
   };
 
+  const commitRectDraft = (startX: number, startY: number, endX: number, endY: number): boolean => {
+    const normalized = normalizeRectFromPoints(startX, startY, endX, endY, activeSnapStep, gridSize);
+    if (!normalized) return false;
+    try {
+      addShape({
+        layer: activeDrawLayer,
+        purpose: activeDrawPurpose,
+        x: normalized.x,
+        y: normalized.y,
+        width: normalized.width,
+        height: normalized.height,
+        ...(activeDrawColor ? { color: activeDrawColor } : {}),
+        ...(activeDrawLabel.trim() ? { label: activeDrawLabel.trim() } : {}),
+      });
+      return true;
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to create rectangle.');
+      return false;
+    }
+  };
+
   const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
     if (e.evt.button === 1 || (e.evt.button === 0 && isSpaceDown)) {
       setPanStart({ x: e.evt.clientX, y: e.evt.clientY, stageX: stagePos.x, stageY: stagePos.y });
       setIsPanning(true);
+      return;
+    }
+
+    if (appMode === 'rect' && e.evt.button === 0) {
+      const pointer = stageRef.current?.getPointerPosition();
+      if (pointer) {
+        const worldX = (pointer.x - stagePos.x) / stageScale;
+        const worldY = (pointer.y - stagePos.y) / -stageScale;
+        const snapped = snapPointToGrid(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR, activeSnapStep);
+        setMousePos(snapped);
+        if (rectDraftRef.current) {
+          const existing = rectDraftRef.current;
+          commitRectDraft(existing.startX, existing.startY, snapped.x, snapped.y);
+          rectDraftRef.current = null;
+          rectDraggingRef.current = false;
+          setRectDraft(null);
+          ignoreBackgroundClickUntilRef.current = performance.now() + 100;
+        } else {
+          const nextDraft = { startX: snapped.x, startY: snapped.y, currentX: snapped.x, currentY: snapped.y };
+          rectDraftRef.current = nextDraft;
+          rectDraggingRef.current = true;
+          setRectDraft(nextDraft);
+        }
+      }
       return;
     }
     
@@ -594,6 +774,17 @@ export const FloorplanCanvas: React.FC = () => {
 
     const pointer = stageRef.current?.getPointerPosition();
     if (!pointer) return;
+
+    if (rectDraftRef.current) {
+      const worldX = (pointer.x - stagePos.x) / stageScale;
+      const worldY = (pointer.y - stagePos.y) / -stageScale;
+      const snapped = snapPointToGrid(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR, activeSnapStep);
+      setMousePos(snapped);
+      const nextDraft = { ...rectDraftRef.current, currentX: snapped.x, currentY: snapped.y };
+      rectDraftRef.current = nextDraft;
+      setRectDraft(nextDraft);
+      return;
+    }
     
     if (selectionBoxRef.current) {
       const worldX = (pointer.x - stagePos.x) / stageScale;
@@ -687,6 +878,17 @@ export const FloorplanCanvas: React.FC = () => {
       setIsPanning(false);
       return;
     }
+    if (rectDraftRef.current && rectDraggingRef.current) {
+      rectDraggingRef.current = false;
+      const draft = rectDraftRef.current;
+      // If user dragged out a non-zero rectangle, commit immediately; otherwise keep first corner for two-click Virtuoso mode.
+      if (commitRectDraft(draft.startX, draft.startY, draft.currentX, draft.currentY)) {
+        rectDraftRef.current = null;
+        setRectDraft(null);
+        ignoreBackgroundClickUntilRef.current = performance.now() + 100;
+      }
+      return;
+    }
     finishMarqueeSelection(e.evt.shiftKey);
   };
 
@@ -720,7 +922,17 @@ export const FloorplanCanvas: React.FC = () => {
       if (!item) continue;
       const master = masterCells[item.cellId];
       if (!master) continue;
-      const bounds = getPhysicalBounds({ ...item, width: master.width, height: master.height });
+      const bounds = getPhysicalBounds({
+        ...item,
+        width: master.width,
+        height: master.height,
+        originX: master.originX,
+        originY: master.originY,
+      });
+      if (isSubCellCanvas) {
+        // Sub-cell layout canvases are unbounded around (0, 0)
+        continue;
+      }
       if (master.kind === 'pad') {
         const onTopOrBottom = Math.abs(bounds.top - padHalfH) <= 1e-6 || Math.abs(bounds.bottom + padHalfH) <= 1e-6;
         const onLeftOrRight = Math.abs(bounds.left + padHalfW) <= 1e-6 || Math.abs(bounds.right - padHalfW) <= 1e-6;
@@ -789,25 +1001,29 @@ export const FloorplanCanvas: React.FC = () => {
     }
 
     try {
-      const snapped = master.kind === 'pad'
-        ? snapPadToNearestEdge(
-            umX,
-            umY,
-            master.width,
-            master.height,
-            topWidth,
-            topHeight,
-            gridSize,
-            orientation,
-            padInset,
-          )
-        : clampWithSnapStep(
-            umX,
-            umY,
-            orientation,
-            master.width,
-            master.height,
-          );
+      const snapped = isSubCellCanvas
+        ? snapPointToGrid(umX, umY, activeSnapStep)
+        : master.kind === 'pad'
+          ? snapPadToNearestEdge(
+              umX,
+              umY,
+              master.width,
+              master.height,
+              topWidth,
+              topHeight,
+              gridSize,
+              orientation,
+              padInset,
+            )
+          : clampWithSnapStep(
+              umX,
+              umY,
+              orientation,
+              master.width,
+              master.height,
+              master.originX ?? 0,
+              master.originY ?? 0,
+            );
       return {
         x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
         y: snapped.y * SCALE_FACTOR * -stageScale + stagePos.y,
@@ -901,7 +1117,13 @@ export const FloorplanCanvas: React.FC = () => {
   const computeInstanceBBox = (inst: Instance): BBox | null => {
     const m = masterCells[inst.cellId];
     if (!m) return null;
-    const bounds = getPhysicalBounds({ ...inst, width: m.width, height: m.height });
+    const bounds = getPhysicalBounds({
+      ...inst,
+      width: m.width,
+      height: m.height,
+      originX: m.originX,
+      originY: m.originY,
+    });
     return {
       minX: bounds.left,
       maxX: bounds.right,
@@ -1542,8 +1764,16 @@ export const FloorplanCanvas: React.FC = () => {
 
   const tw = topWidth * SCALE_FACTOR;
   const th = topHeight * SCALE_FACTOR;
-  const axisExtent = Math.max(tw, th, 100000) * 2;
-  const bgExtent = Math.max(tw, th, 100000) * 12;
+  const boundaryX = activeBoundaryBox.minX * SCALE_FACTOR;
+  const boundaryY = activeBoundaryBox.minY * SCALE_FACTOR;
+  const axisExtent = Math.max(
+    tw,
+    th,
+    (gridExtentUm.maxX - gridExtentUm.minX) * SCALE_FACTOR,
+    (gridExtentUm.maxY - gridExtentUm.minY) * SCALE_FACTOR,
+    100000,
+  ) * 2;
+  const bgExtent = axisExtent * 6;
 
   const gridGeometry = useMemo(() => {
     if (!showGrid || stageScale <= 0) {
@@ -1554,25 +1784,28 @@ export const FloorplanCanvas: React.FC = () => {
     }
     const { minorStep, majorStep, showFineDots } = displayGrid;
     const lines: Array<{ key: string; points: number[]; major: boolean }> = [];
-    const halfW = topWidth / 2;
-    const halfH = topHeight / 2;
+    const { minX: gxMin, maxX: gxMax, minY: gyMin, maxY: gyMax } = gridExtentUm;
+    const gxMinPx = gxMin * SCALE_FACTOR;
+    const gxMaxPx = gxMax * SCALE_FACTOR;
+    const gyMinPx = gyMin * SCALE_FACTOR;
+    const gyMaxPx = gyMax * SCALE_FACTOR;
     const isMajor = (coord: number) => Math.abs(coord - Math.round(coord / majorStep) * majorStep) <= Math.max(1e-9, minorStep * 1e-6);
 
-    const startXIndex = Math.ceil((-halfW + 1e-9) / minorStep);
-    const endXIndex = Math.floor((halfW - 1e-9) / minorStep);
+    const startXIndex = Math.ceil((gxMin + 1e-9) / minorStep);
+    const endXIndex = Math.floor((gxMax - 1e-9) / minorStep);
     for (let idx = startXIndex; idx <= endXIndex; idx += 1) {
       if (idx === 0) continue;
       const x = snapToGrid(idx * minorStep, gridSize);
       const px = x * SCALE_FACTOR;
-      lines.push({ key: `gx-${idx}`, points: [px, -th / 2, px, th / 2], major: isMajor(x) });
+      lines.push({ key: `gx-${idx}`, points: [px, gyMinPx, px, gyMaxPx], major: isMajor(x) });
     }
-    const startYIndex = Math.ceil((-halfH + 1e-9) / minorStep);
-    const endYIndex = Math.floor((halfH - 1e-9) / minorStep);
+    const startYIndex = Math.ceil((gyMin + 1e-9) / minorStep);
+    const endYIndex = Math.floor((gyMax - 1e-9) / minorStep);
     for (let idx = startYIndex; idx <= endYIndex; idx += 1) {
       if (idx === 0) continue;
       const y = snapToGrid(idx * minorStep, gridSize);
       const py = y * SCALE_FACTOR;
-      lines.push({ key: `gy-${idx}`, points: [-tw / 2, py, tw / 2, py], major: isMajor(y) });
+      lines.push({ key: `gy-${idx}`, points: [gxMinPx, py, gxMaxPx, py], major: isMajor(y) });
     }
 
     // When zoomed closely onto the defined gridSize, show crisp Virtuoso grid intersection dots inside the visible viewport.
@@ -1582,10 +1815,10 @@ export const FloorplanCanvas: React.FC = () => {
       const viewRightUm = ((dimensions.width - stagePos.x) / stageScale) / SCALE_FACTOR;
       const viewTopUm = (stagePos.y / stageScale) / SCALE_FACTOR;
       const viewBottomUm = ((stagePos.y - dimensions.height) / stageScale) / SCALE_FACTOR;
-      const minX = Math.max(-halfW, viewLeftUm);
-      const maxX = Math.min(halfW, viewRightUm);
-      const minY = Math.max(-halfH, viewBottomUm);
-      const maxY = Math.min(halfH, viewTopUm);
+      const minX = Math.max(gxMin, viewLeftUm);
+      const maxX = Math.min(gxMax, viewRightUm);
+      const minY = Math.max(gyMin, viewBottomUm);
+      const maxY = Math.min(gyMax, viewTopUm);
       const ixStart = Math.ceil((minX - 1e-9) / minorStep);
       const ixEnd = Math.floor((maxX + 1e-9) / minorStep);
       const iyStart = Math.ceil((minY - 1e-9) / minorStep);
@@ -1604,7 +1837,104 @@ export const FloorplanCanvas: React.FC = () => {
     }
 
     return { lines, dots };
-  }, [showGrid, stageScale, displayGrid, gridSize, topWidth, topHeight, tw, th, stagePos.x, stagePos.y, dimensions.width, dimensions.height]);
+  }, [showGrid, stageScale, displayGrid, gridSize, gridExtentUm, stagePos.x, stagePos.y, dimensions.width, dimensions.height]);
+
+  /** Recursively renders drawn LPP shapes and sub-instances inside an instantiated cellview. */
+  const renderCellViewContents = (
+    cellId: string,
+    parentW: number,
+    parentH: number,
+    depth = 0,
+    visited: Set<string> = new Set(),
+  ): React.ReactNode => {
+    if (depth > 3 || visited.has(cellId)) return null;
+    const subView = cellViews[cellId];
+    if (!subView) return null;
+    const subShapes = subView.shapes ?? [];
+    const subInstances = subView.instances ?? [];
+    if (subShapes.length === 0 && subInstances.length === 0) return null;
+    const nextVisited = new Set(visited);
+    nextVisited.add(cellId);
+    const isCenteredLegacy = subView.coordinateMode === 'centered' || (subView.coordinateMode === undefined && subShapes.length === 0);
+    const offsetX = isCenteredLegacy ? parentW / 2 : 0;
+    const offsetY = isCenteredLegacy ? parentH / 2 : 0;
+
+    return (
+      <Group x={offsetX} y={offsetY} listening={false}>
+        {subShapes.map(shape => {
+          const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+          const sw = shape.width * SCALE_FACTOR;
+          const sh = shape.height * SCALE_FACTOR;
+          const sx = shape.x * SCALE_FACTOR;
+          const sy = shape.y * SCALE_FACTOR;
+          return (
+            <Group key={`sub-shape-${shape.id}`}>
+              <Rect
+                x={sx}
+                y={sy}
+                width={sw}
+                height={sh}
+                fill={style.color}
+                opacity={style.fillOpacity}
+                stroke={style.color}
+                strokeWidth={1.1 / stageScale}
+                dash={style.strokeDash === 'dashed' ? [6 / stageScale, 4 / stageScale] : undefined}
+              />
+              {shape.label?.trim() && sw * stageScale >= 28 && sh * stageScale >= 16 && (
+                <Group x={sx} y={sy + sh} scaleY={-1}>
+                  <Text
+                    text={shape.label.trim()}
+                    x={0}
+                    y={(sh - Math.min(sw * 0.14, sh * 0.24)) / 2}
+                    width={sw}
+                    align="center"
+                    fill={style.color}
+                    fontSize={Math.min(sw * 0.14, sh * 0.24)}
+                    fontFamily={CANVAS_FONT_MONO}
+                    fontStyle="bold"
+                    ellipsis={true}
+                    wrap="none"
+                  />
+                </Group>
+              )}
+            </Group>
+          );
+        })}
+        {subInstances.map(subInst => {
+          const subMaster = masterCells[subInst.cellId];
+          if (!subMaster) return null;
+          const st = getTransformProps(subInst.orientation);
+          const subOx = (subMaster.originX ?? 0) * SCALE_FACTOR;
+          const subOy = (subMaster.originY ?? 0) * SCALE_FACTOR;
+          const subW = subMaster.width * SCALE_FACTOR;
+          const subH = subMaster.height * SCALE_FACTOR;
+          const childHasShapes = (cellViews[subInst.cellId]?.shapes?.length ?? 0) > 0;
+          return (
+            <Group
+              key={subInst.id}
+              x={subInst.x * SCALE_FACTOR}
+              y={subInst.y * SCALE_FACTOR}
+              rotation={st.rotation}
+              scaleX={st.scaleX}
+              scaleY={st.scaleY}
+            >
+              <Rect
+                x={subOx}
+                y={subOy}
+                width={subW}
+                height={subH}
+                fill={subMaster.color}
+                opacity={childHasShapes && subMaster.autoBounds ? 0.08 : Math.min(0.65, (subMaster.opacity ?? 0.5) * 0.8)}
+                stroke="rgba(15, 23, 42, 0.55)"
+                strokeWidth={0.8 / stageScale}
+              />
+              {renderCellViewContents(subInst.cellId, subW, subH, depth + 1, nextVisited)}
+            </Group>
+          );
+        })}
+      </Group>
+    );
+  };
 
   const canvasCursor = resolveCanvasCursor({
     appMode,
@@ -1682,13 +2012,15 @@ export const FloorplanCanvas: React.FC = () => {
               if (pendingManualPadGroup) {
                 placeManualPadGroup(snapped.umX, snapped.umY);
               } else {
-                const targetPos = placementMaster && placementMaster.kind !== 'pad'
+                const targetPos = placementMaster && (isSubCellCanvas || placementMaster.kind !== 'pad')
                   ? clampWithSnapStep(
                       snapped.umX,
                       snapped.umY,
                       placementOrientation,
                       placementMaster.width,
                       placementMaster.height,
+                      placementMaster.originX ?? 0,
+                      placementMaster.originY ?? 0,
                     )
                   : { x: snapped.umX, y: snapped.umY };
                 if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
@@ -1707,7 +2039,10 @@ export const FloorplanCanvas: React.FC = () => {
               ignoreBackgroundClickUntilRef.current = 0;
               return;
             }
-            if (!e.evt.shiftKey) setSelectedInstance(null);
+            if (!e.evt.shiftKey) {
+              setSelectedInstance(null);
+              setSelectedShape(null);
+            }
           }
         }}
         onContextMenu={(e) => {
@@ -1732,20 +2067,46 @@ export const FloorplanCanvas: React.FC = () => {
             fill="transparent" 
           />
 
-          {/* Top ASIC boundary and background */}
+          {/* Optional Top-Cell Reference Frame when editing an IP cellview in native (0,0) coordinates */}
+          {isSubCellCanvas && rootView && (
+            <Group listening={false}>
+              <Rect
+                x={(-rootView.topWidth / 2) * SCALE_FACTOR}
+                y={(-rootView.topHeight / 2) * SCALE_FACTOR}
+                width={rootView.topWidth * SCALE_FACTOR}
+                height={rootView.topHeight * SCALE_FACTOR}
+                fill="#ffffff"
+                opacity={0.78}
+                stroke="#94a3b8"
+                strokeWidth={1.25 / stageScale}
+                dash={[12 / stageScale, 8 / stageScale]}
+              />
+              <Text
+                text={`Top Ref: ${rootView.topCellName} (${rootView.topWidth} × ${rootView.topHeight} µm)`}
+                x={(-rootView.topWidth / 2) * SCALE_FACTOR}
+                y={(rootView.topHeight / 2) * SCALE_FACTOR + 18 / stageScale}
+                fill="#94a3b8"
+                fontSize={11.5 / stageScale}
+                fontFamily={CANVAS_FONT_SANS}
+                scaleY={-1}
+              />
+            </Group>
+          )}
+
+          {/* Active cell boundary (prBoundary / bounding box) */}
           <Rect 
             name="bg"
-            x={-tw / 2} 
-            y={-th / 2} 
+            x={boundaryX} 
+            y={boundaryY} 
             width={tw} 
             height={th} 
-            fill="#ffffff"
-            stroke="#64748b" 
-            strokeWidth={1.75 / stageScale}
+            fill={isSubCellCanvas && activeMasterCell?.autoBounds ? 'rgba(255, 255, 255, 0.35)' : '#ffffff'}
+            stroke={isSubCellCanvas ? '#3b82f6' : '#64748b'} 
+            strokeWidth={(isSubCellCanvas ? 1.5 : 1.75) / stageScale}
             dash={[10 / stageScale, 8 / stageScale]}
-            shadowColor="rgba(15, 23, 42, 0.1)"
-            shadowBlur={24 / stageScale}
-            shadowOffsetY={-4 / stageScale}
+            shadowColor={isSubCellCanvas ? undefined : 'rgba(15, 23, 42, 0.1)'}
+            shadowBlur={isSubCellCanvas ? 0 : 24 / stageScale}
+            shadowOffsetY={isSubCellCanvas ? 0 : -4 / stageScale}
           />
 
           {/* Virtuoso Minor & Major Drafting Grid (exact integer multiples of gridSize) */}
@@ -1772,8 +2133,8 @@ export const FloorplanCanvas: React.FC = () => {
           {/* Optional seal-ring / pad-inset inner perimeter guide */}
           {padInset > 0 && (
             <Rect
-              x={-tw / 2 + padInset * SCALE_FACTOR}
-              y={-th / 2 + padInset * SCALE_FACTOR}
+              x={boundaryX + padInset * SCALE_FACTOR}
+              y={boundaryY + padInset * SCALE_FACTOR}
               width={tw - padInset * 2 * SCALE_FACTOR}
               height={th - padInset * 2 * SCALE_FACTOR}
               fillEnabled={false}
@@ -1882,24 +2243,39 @@ export const FloorplanCanvas: React.FC = () => {
             }
           })()}
 
-          {/* Grid Axes (span full die and beyond) */}
-          <Line points={[-axisExtent, 0, axisExtent, 0]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.7} listening={false} />
-          <Line points={[0, -axisExtent, 0, axisExtent]} stroke="#cbd5e1" strokeWidth={1 / stageScale} opacity={0.7} listening={false} />
+          {/* Grid Axes (span full die and beyond) + Virtuoso (0, 0) Origin Marker */}
+          <Line points={[-axisExtent, 0, axisExtent, 0]} stroke={isSubCellCanvas ? '#94a3b8' : '#cbd5e1'} strokeWidth={1 / stageScale} opacity={0.75} listening={false} />
+          <Line points={[0, -axisExtent, 0, axisExtent]} stroke={isSubCellCanvas ? '#94a3b8' : '#cbd5e1'} strokeWidth={1 / stageScale} opacity={0.75} listening={false} />
+          <Group x={0} y={0} listening={false}>
+            <Line points={[-9 / stageScale, 0, 9 / stageScale, 0]} stroke="#0284c7" strokeWidth={1.6 / stageScale} />
+            <Line points={[0, -9 / stageScale, 0, 9 / stageScale]} stroke="#0284c7" strokeWidth={1.6 / stageScale} />
+            <Circle radius={3 / stageScale} fill="#ffffff" stroke="#0284c7" strokeWidth={1.5 / stageScale} />
+            <Text
+              text="(0, 0)"
+              x={6 / stageScale}
+              y={-4 / stageScale}
+              fill="#0284c7"
+              fontSize={10.5 / stageScale}
+              fontFamily={CANVAS_FONT_MONO}
+              fontStyle="bold"
+              scaleY={-1}
+            />
+          </Group>
           <Text
-            text={`${topCellName} (${topWidth}um x ${topHeight}um)`}
-            x={-tw / 2}
-            y={th / 2 + 25 / stageScale}
-            fill="#94a3b8"
-            fontSize={16 / stageScale}
+            text={`${topCellName} (${formatGridValue(topWidth, gridSize)}um x ${formatGridValue(topHeight, gridSize)}um)`}
+            x={boundaryX}
+            y={boundaryY + th + 25 / stageScale}
+            fill={isSubCellCanvas ? '#2563eb' : '#94a3b8'}
+            fontSize={15 / stageScale}
             fontFamily={CANVAS_FONT_SANS}
             scaleY={-1}
             listening={false}
           />
           {/* Top Right Coordinate */}
           <Text
-            text={`(${topWidth/2}, ${topHeight/2})`}
-            x={tw / 2 - 200 / stageScale}
-            y={th / 2 + 25 / stageScale}
+            text={`(${formatGridValue(activeBoundaryBox.maxX, gridSize)}, ${formatGridValue(activeBoundaryBox.maxY, gridSize)})`}
+            x={boundaryX + tw - 200 / stageScale}
+            y={boundaryY + th + 25 / stageScale}
             width={200 / stageScale}
             align="right"
             fill="#94a3b8"
@@ -1910,9 +2286,9 @@ export const FloorplanCanvas: React.FC = () => {
           />
           {/* Bottom Left Coordinate */}
           <Text
-            text={`(${-topWidth/2}, ${-topHeight/2})`}
-            x={-tw / 2}
-            y={-th / 2 - 10 / stageScale}
+            text={`(${formatGridValue(activeBoundaryBox.minX, gridSize)}, ${formatGridValue(activeBoundaryBox.minY, gridSize)})`}
+            x={boundaryX}
+            y={boundaryY - 10 / stageScale}
             fill="#94a3b8"
             fontSize={12 / stageScale}
             fontFamily={CANVAS_FONT_SANS}
@@ -1925,10 +2301,13 @@ export const FloorplanCanvas: React.FC = () => {
           {sortedInstances.map(inst => {
             const masterCell = masterCells[inst.cellId];
             if (!masterCell) return null;
+            const ox = (masterCell.originX ?? 0) * SCALE_FACTOR;
+            const oy = (masterCell.originY ?? 0) * SCALE_FACTOR;
             const w = masterCell.width * SCALE_FACTOR;
             const h = masterCell.height * SCALE_FACTOR;
             const isSelected = selectedInstanceIds.includes(inst.id);
             const isPrimarySelection = selectedInstanceId === inst.id;
+            const hasDrawnChildShapes = (cellViews[inst.cellId]?.shapes?.length ?? 0) > 0;
 
             const t = getTransformProps(inst.orientation);
             const outlineStyle = masterCell.outlineStyle ?? 'solid';
@@ -1962,6 +2341,7 @@ export const FloorplanCanvas: React.FC = () => {
                 onDragMove={(e) => handleDragMove(e, inst.id)}
                 onDragEnd={(e) => handleDragEnd(e, inst.id)}
                 onClick={(e) => {
+                  if (appMode === 'rect') return;
                   e.cancelBubble = true;
                   if (appMode === 'select' && !edgeAlignmentSession) {
                     setSelectedInstance(inst.id, e.evt.shiftKey);
@@ -1989,67 +2369,52 @@ export const FloorplanCanvas: React.FC = () => {
                 }}
               >
                 <Rect
+                  x={ox}
+                  y={oy}
                   width={w}
                   height={h}
                   fill={masterCell.color}
-                  opacity={masterCell.opacity ?? 0.5}
+                  opacity={hasDrawnChildShapes && masterCell.autoBounds ? 0.08 : (masterCell.opacity ?? 0.5)}
                 />
-                {/* Live sub-hierarchy preview for hierarchical cells */}
-                {(() => {
-                  const subView = cellViews[inst.cellId];
-                  if (!subView || subView.instances.length === 0) return null;
-                  return (
-                    <Group x={w / 2} y={h / 2} listening={false}>
-                      {subView.instances.map(subInst => {
-                        const subMaster = masterCells[subInst.cellId];
-                        if (!subMaster) return null;
-                        const st = getTransformProps(subInst.orientation);
-                        return (
-                          <Group
-                            key={subInst.id}
-                            x={subInst.x * SCALE_FACTOR}
-                            y={subInst.y * SCALE_FACTOR}
-                            rotation={st.rotation}
-                            scaleX={st.scaleX}
-                            scaleY={st.scaleY}
-                          >
-                            <Rect
-                              width={subMaster.width * SCALE_FACTOR}
-                              height={subMaster.height * SCALE_FACTOR}
-                              fill={subMaster.color}
-                              opacity={Math.min(0.65, (subMaster.opacity ?? 0.5) * 0.8)}
-                              stroke="rgba(15, 23, 42, 0.55)"
-                              strokeWidth={0.8 / stageScale}
-                            />
-                          </Group>
-                        );
-                      })}
-                    </Group>
-                  );
-                })()}
+                {/* Live recursive sub-hierarchy & drawn LPP shape preview */}
+                {renderCellViewContents(inst.cellId, w, h)}
                 {outlineStyle !== 'none' && (
                   <Rect
+                    x={ox}
+                    y={oy}
                     width={w}
                     height={h}
                     fillEnabled={false}
                     stroke="#334155"
                     strokeWidth={1 / stageScale}
-                    dash={outlineDash}
+                    dash={hasDrawnChildShapes && masterCell.autoBounds ? [6 / stageScale, 4 / stageScale] : outlineDash}
                     listening={false}
                   />
                 )}
                 {isSelected && (
-                  <Rect
-                    width={w}
-                    height={h}
-                    fillEnabled={false}
-                    stroke={isPrimarySelection ? '#f59e0b' : '#38bdf8'}
-                    strokeWidth={3 / stageScale}
-                    listening={false}
-                  />
+                  <>
+                    <Rect
+                      x={ox}
+                      y={oy}
+                      width={w}
+                      height={h}
+                      fillEnabled={false}
+                      stroke={isPrimarySelection ? '#f59e0b' : '#38bdf8'}
+                      strokeWidth={3 / stageScale}
+                      listening={false}
+                    />
+                    {/* Instance (0, 0) origin marker */}
+                    <Group x={0} y={0} listening={false}>
+                      <Line points={[-6 / stageScale, 0, 6 / stageScale, 0]} stroke="#f59e0b" strokeWidth={1.6 / stageScale} />
+                      <Line points={[0, -6 / stageScale, 0, 6 / stageScale]} stroke="#f59e0b" strokeWidth={1.6 / stageScale} />
+                      <Circle radius={2.4 / stageScale} fill="#f59e0b" stroke="#ffffff" strokeWidth={0.9 / stageScale} />
+                    </Group>
+                  </>
                 )}
                 {inst.locked && (
                   <Rect
+                    x={ox}
+                    y={oy}
                     width={w}
                     height={h}
                     fillEnabled={false}
@@ -2061,13 +2426,9 @@ export const FloorplanCanvas: React.FC = () => {
                 )}
                 
                 {(() => {
-                  // Compute a fontSize that is always readable:
-                  // - In world-space (before stage scale) we want ~10% of the shorter side
-                  // - Clamp so it's never smaller than 8 screen-px or larger than 30% of cell
                   const shortSide = Math.min(w, h);
                   const longSide = Math.max(w, h);
                   const fontSizeWorld = Math.min(shortSide * 0.18, longSide * 0.1);
-                  // Only render if the cell is big enough on screen
                   const screenH = h * stageScale;
                   const screenW = w * stageScale;
                   if (screenH < 24 || screenW < 30) return null;
@@ -2079,7 +2440,7 @@ export const FloorplanCanvas: React.FC = () => {
                   const startY = (h - totalTextH) / 2;
 
                   return (
-                    <Group scaleY={-1} offsetY={h}>
+                    <Group x={ox} y={oy + h} scaleY={-1} listening={false}>
                       {/* Instance name (top, smaller, secondary) */}
                       {screenH > 48 && (
                         <Text
@@ -2113,7 +2474,7 @@ export const FloorplanCanvas: React.FC = () => {
                       {/* Size (sub-label) */}
                       {screenH > 36 && (
                         <Text
-                          text={`${masterCell.width} × ${masterCell.height} um`}
+                          text={`${formatGridValue(masterCell.width, gridSize)} × ${formatGridValue(masterCell.height, gridSize)} um`}
                           x={0}
                           y={startY + (screenH > 48 ? instFS * 1.3 : 0) + nameFS * 1.3}
                           width={w}
@@ -2132,6 +2493,210 @@ export const FloorplanCanvas: React.FC = () => {
               </Group>
             );
           })}
+
+          {/* Drawn Layout Shapes (Virtuoso Rectangles on LPPs like text/drawing, prBoundary/drawing, M1/drawing) */}
+          {shapes.map((shape: LayoutShape) => {
+            const preview = shapeResizePreview && shapeResizePreview.id === shape.id ? shapeResizePreview : null;
+            const curX = preview ? preview.x : shape.x;
+            const curY = preview ? preview.y : shape.y;
+            const curW = preview ? preview.width : shape.width;
+            const curH = preview ? preview.height : shape.height;
+            const sx = curX * SCALE_FACTOR;
+            const sy = curY * SCALE_FACTOR;
+            const sw = curW * SCALE_FACTOR;
+            const sh = curH * SCALE_FACTOR;
+            const isSelected = selectedShapeId === shape.id;
+            const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+            const canDragShape = appMode === 'select' && !edgeAlignmentSession && !shape.locked;
+            const tagText = shape.label?.trim()
+              ? `${shape.label.trim()}\n${shape.layer}/${shape.purpose}`
+              : `${shape.layer}/${shape.purpose}`;
+            const handleSize = 7 / stageScale;
+
+            const buildResizeCorners = () => {
+              if (!isSelected || !canDragShape) return null;
+              const corners: Array<{ key: 'sw' | 'se' | 'ne' | 'nw'; hx: number; hy: number; anchorX: number; anchorY: number }> = [
+                { key: 'sw', hx: curX, hy: curY, anchorX: curX + curW, anchorY: curY + curH },
+                { key: 'se', hx: curX + curW, hy: curY, anchorX: curX, anchorY: curY + curH },
+                { key: 'ne', hx: curX + curW, hy: curY + curH, anchorX: curX, anchorY: curY },
+                { key: 'nw', hx: curX, hy: curY + curH, anchorX: curX + curW, anchorY: curY },
+              ];
+              return corners.map(corner => (
+                <Rect
+                  key={`shape-handle-${shape.id}-${corner.key}`}
+                  x={corner.hx * SCALE_FACTOR - handleSize / 2}
+                  y={corner.hy * SCALE_FACTOR - handleSize / 2}
+                  width={handleSize}
+                  height={handleSize}
+                  fill="#ffffff"
+                  stroke="#f59e0b"
+                  strokeWidth={1.6 / stageScale}
+                  draggable
+                  dragBoundFunc={(pos) => {
+                    const worldX = (pos.x - stagePos.x) / stageScale;
+                    const worldY = (pos.y - stagePos.y) / -stageScale;
+                    const snapped = snapPointToGrid(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR, activeSnapStep);
+                    return {
+                      x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x - (handleSize * stageScale) / 2,
+                      y: snapped.y * SCALE_FACTOR * -stageScale + stagePos.y - (handleSize * stageScale) / 2,
+                    };
+                  }}
+                  onClick={event => { event.cancelBubble = true; }}
+                  onDragMove={event => {
+                    const nx = (event.target.x() + handleSize / 2) / SCALE_FACTOR;
+                    const ny = (event.target.y() + handleSize / 2) / SCALE_FACTOR;
+                    const nextRect = normalizeRectFromPoints(corner.anchorX, corner.anchorY, nx, ny, activeSnapStep, gridSize);
+                    if (nextRect) {
+                      setShapeResizePreview({ id: shape.id, ...nextRect });
+                    }
+                  }}
+                  onDragEnd={event => {
+                    const nx = (event.target.x() + handleSize / 2) / SCALE_FACTOR;
+                    const ny = (event.target.y() + handleSize / 2) / SCALE_FACTOR;
+                    const nextRect = normalizeRectFromPoints(corner.anchorX, corner.anchorY, nx, ny, activeSnapStep, gridSize);
+                    setShapeResizePreview(null);
+                    if (nextRect) {
+                      try {
+                        updateShape(shape.id, nextRect);
+                      } catch (error) {
+                        alert(error instanceof Error ? error.message : 'Unable to resize rectangle.');
+                      }
+                    }
+                  }}
+                />
+              ));
+            };
+
+            return (
+              <React.Fragment key={shape.id}>
+                <Group
+                  x={sx}
+                  y={sy}
+                  draggable={canDragShape}
+                  dragBoundFunc={(pos) => {
+                    const worldX = (pos.x - stagePos.x) / stageScale;
+                    const worldY = (pos.y - stagePos.y) / -stageScale;
+                    const snapped = snapPointToGrid(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR, activeSnapStep);
+                    return {
+                      x: snapped.x * SCALE_FACTOR * stageScale + stagePos.x,
+                      y: snapped.y * SCALE_FACTOR * -stageScale + stagePos.y,
+                    };
+                  }}
+                  onClick={event => {
+                    if (appMode === 'rect') return;
+                    event.cancelBubble = true;
+                    if (appMode === 'select' && !edgeAlignmentSession) {
+                      setSelectedShape(shape.id);
+                    }
+                  }}
+                  onDblClick={event => {
+                    if (appMode !== 'select') return;
+                    event.cancelBubble = true;
+                    setSelectedShape(shape.id);
+                    setRightSidebarPinned(true);
+                  }}
+                  onDragEnd={event => {
+                    const nextX = snapToGrid(event.target.x() / SCALE_FACTOR, gridSize);
+                    const nextY = snapToGrid(event.target.y() / SCALE_FACTOR, gridSize);
+                    try {
+                      updateShape(shape.id, { x: nextX, y: nextY });
+                    } catch (error) {
+                      event.target.x(shape.x * SCALE_FACTOR);
+                      event.target.y(shape.y * SCALE_FACTOR);
+                      alert(error instanceof Error ? error.message : 'Unable to move rectangle.');
+                    }
+                  }}
+                >
+                  <Rect
+                    width={sw}
+                    height={sh}
+                    fill={style.color}
+                    opacity={style.fillOpacity}
+                    stroke={isSelected ? '#f59e0b' : style.color}
+                    strokeWidth={(isSelected ? 2.5 : 1.5) / stageScale}
+                    dash={style.strokeDash === 'dashed' ? [7 / stageScale, 5 / stageScale] : undefined}
+                  />
+                  {shape.locked && (
+                    <Rect
+                      width={sw}
+                      height={sh}
+                      fillEnabled={false}
+                      stroke="#eab308"
+                      strokeWidth={1.8 / stageScale}
+                      dash={[4 / stageScale, 4 / stageScale]}
+                      listening={false}
+                    />
+                  )}
+                  {sw * stageScale >= 34 && sh * stageScale >= 20 && (
+                    <Group x={0} y={sh} scaleY={-1} listening={false}>
+                      <Text
+                        text={tagText}
+                        x={4 / stageScale}
+                        y={Math.max(2 / stageScale, (sh - Math.min(13 / stageScale, sh * 0.28) * (shape.label?.trim() ? 2.3 : 1.2)) / 2)}
+                        width={Math.max(1, sw - 8 / stageScale)}
+                        align="center"
+                        fill={isSelected ? '#92400e' : style.color}
+                        fontSize={Math.min(12 / stageScale, Math.max(8 / stageScale, Math.min(sw * 0.14, sh * 0.24)))}
+                        fontFamily={CANVAS_FONT_MONO}
+                        fontStyle="bold"
+                        lineHeight={1.25}
+                        ellipsis={true}
+                      />
+                    </Group>
+                  )}
+                </Group>
+                {buildResizeCorners()}
+              </React.Fragment>
+            );
+          })}
+
+          {/* Live Rubber-Band Rectangle Draft Preview (Create Rect mode) */}
+          {appMode === 'rect' && rectDraft && (() => {
+            const draftRect = normalizeRectFromPoints(rectDraft.startX, rectDraft.startY, rectDraft.currentX, rectDraft.currentY, activeSnapStep, gridSize);
+            const activeStyle = resolveLayerStyle(activeDrawLayer, activeDrawPurpose, activeDrawColor);
+            if (!draftRect) {
+              return (
+                <Circle
+                  x={rectDraft.startX * SCALE_FACTOR}
+                  y={rectDraft.startY * SCALE_FACTOR}
+                  radius={4 / stageScale}
+                  fill={activeStyle.color}
+                  stroke="#ffffff"
+                  strokeWidth={1.2 / stageScale}
+                  listening={false}
+                />
+              );
+            }
+            const dx = draftRect.x * SCALE_FACTOR;
+            const dy = draftRect.y * SCALE_FACTOR;
+            const dw = draftRect.width * SCALE_FACTOR;
+            const dh = draftRect.height * SCALE_FACTOR;
+            const dimLabel = `${activeDrawLayer}/${activeDrawPurpose} · ${formatGridValue(draftRect.width, gridSize)} × ${formatGridValue(draftRect.height, gridSize)} µm`;
+            return (
+              <Group listening={false}>
+                <Rect
+                  x={dx}
+                  y={dy}
+                  width={dw}
+                  height={dh}
+                  fill={activeStyle.color}
+                  opacity={Math.max(0.2, activeStyle.fillOpacity)}
+                  stroke={activeStyle.color}
+                  strokeWidth={2 / stageScale}
+                  dash={[6 / stageScale, 4 / stageScale]}
+                />
+                <Group x={dx} y={dy + dh + 16 / stageScale} scaleY={-1}>
+                  <Text
+                    text={dimLabel}
+                    fill={activeStyle.color}
+                    fontSize={11.5 / stageScale}
+                    fontFamily={CANVAS_FONT_MONO}
+                    fontStyle="bold"
+                  />
+                </Group>
+              </Group>
+            );
+          })()}
 
           {/* Overlap / DRC Violation Highlights */}
           {showOverlapDrc && overlapViolations.map(violation => {
@@ -2386,7 +2951,7 @@ export const FloorplanCanvas: React.FC = () => {
             const m = masterCells[placementMasterId];
             let previewOrientation = placementOrientation;
             let ghostPosition = snappedMousePos;
-            if (m.kind === 'pad') {
+            if (m.kind === 'pad' && !isSubCellCanvas) {
               try {
                 if (pendingManualPadGroup) {
                   const snapped = snapPadToAutoOrientedEdge(snappedMousePos.x, snappedMousePos.y, m.width, m.height, topWidth, topHeight, gridSize, padInset);
@@ -2427,12 +2992,22 @@ export const FloorplanCanvas: React.FC = () => {
               }
             } else {
               try {
-                ghostPosition = clampWithSnapStep(snappedMousePos.x, snappedMousePos.y, placementOrientation, m.width, m.height);
+                ghostPosition = clampWithSnapStep(
+                  snappedMousePos.x,
+                  snappedMousePos.y,
+                  placementOrientation,
+                  m.width,
+                  m.height,
+                  m.originX ?? 0,
+                  m.originY ?? 0,
+                );
               } catch {
                 return null;
               }
             }
             const t = getTransformProps(previewOrientation);
+            const ghostOx = (m.originX ?? 0) * SCALE_FACTOR;
+            const ghostOy = (m.originY ?? 0) * SCALE_FACTOR;
             if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
               const rows = Math.max(1, Math.min(50, Math.floor(pendingInstanceArray.rows)));
               const cols = Math.max(1, Math.min(50, Math.floor(pendingInstanceArray.cols)));
@@ -2440,16 +3015,24 @@ export const FloorplanCanvas: React.FC = () => {
               for (let r = 0; r < rows; r += 1) {
                 for (let c = 0; c < cols; c += 1) {
                   try {
-                    const p = clampInstancePosition(
-                      ghostPosition.x + c * pendingInstanceArray.deltaX,
-                      ghostPosition.y + r * pendingInstanceArray.deltaY,
-                      previewOrientation,
-                      m.width,
-                      m.height,
-                      topWidth,
-                      topHeight,
-                      gridSize,
-                    );
+                    const p = isSubCellCanvas
+                      ? snapPointToGrid(
+                          ghostPosition.x + c * pendingInstanceArray.deltaX,
+                          ghostPosition.y + r * pendingInstanceArray.deltaY,
+                          gridSize,
+                        )
+                      : clampInstancePosition(
+                          ghostPosition.x + c * pendingInstanceArray.deltaX,
+                          ghostPosition.y + r * pendingInstanceArray.deltaY,
+                          previewOrientation,
+                          m.width,
+                          m.height,
+                          topWidth,
+                          topHeight,
+                          gridSize,
+                          m.originX ?? 0,
+                          m.originY ?? 0,
+                        );
                     ghosts.push({ key: `mosaic-${r}-${c}`, x: p.x, y: p.y });
                   } catch {
                     // skip out-of-bounds ghost cell
@@ -2470,6 +3053,8 @@ export const FloorplanCanvas: React.FC = () => {
                       listening={false}
                     >
                       <Rect
+                        x={ghostOx}
+                        y={ghostOy}
                         width={m.width * SCALE_FACTOR}
                         height={m.height * SCALE_FACTOR}
                         fill={m.color}
@@ -2483,7 +3068,7 @@ export const FloorplanCanvas: React.FC = () => {
               );
             }
             const ghostOverlap = findOverlappingInstance(
-              { x: ghostPosition.x, y: ghostPosition.y, orientation: previewOrientation, width: m.width, height: m.height },
+              { x: ghostPosition.x, y: ghostPosition.y, orientation: previewOrientation, width: m.width, height: m.height, originX: m.originX, originY: m.originY },
               instances,
               masterCells,
             );
@@ -2494,18 +3079,21 @@ export const FloorplanCanvas: React.FC = () => {
                 rotation={t.rotation}
                 scaleX={t.scaleX}
                 scaleY={t.scaleY}
-                opacity={ghostOverlap ? 0.72 : 0.5}
+                opacity={ghostOverlap ? 0.72 : 0.58}
                 listening={false}
               >
                 <Rect
+                  x={ghostOx}
+                  y={ghostOy}
                   width={m.width * SCALE_FACTOR}
                   height={m.height * SCALE_FACTOR}
                   fill={ghostOverlap ? '#ef4444' : m.color}
                   stroke={ghostOverlap ? '#dc2626' : '#f8fafc'}
                   strokeWidth={(ghostOverlap ? 2.5 : 2) / stageScale}
                   dash={[5 / stageScale, 5 / stageScale]}
-                  opacity={ghostOverlap ? 0.55 : 0.5}
+                  opacity={ghostOverlap ? 0.55 : ((cellViews[m.id]?.shapes?.length ?? 0) > 0 && m.autoBounds ? 0.12 : 0.5)}
                 />
+                {renderCellViewContents(m.id, m.width * SCALE_FACTOR, m.height * SCALE_FACTOR)}
                 {(() => {
                   const w = m.width * SCALE_FACTOR;
                   const h = m.height * SCALE_FACTOR;
@@ -2519,7 +3107,7 @@ export const FloorplanCanvas: React.FC = () => {
                   const totalTextH = nameFS + subFS * 1.3;
                   const startY = (h - totalTextH) / 2;
                   return (
-                    <Group scaleY={-1} offsetY={h}>
+                    <Group x={ghostOx} y={ghostOy + h} scaleY={-1}>
                       <Text
                         text={m.cellName}
                         x={0}
@@ -2535,7 +3123,7 @@ export const FloorplanCanvas: React.FC = () => {
                       />
                       {screenH > 36 && (
                         <Text
-                          text={`${m.width} × ${m.height} um`}
+                          text={`${formatGridValue(m.width, gridSize)} × ${formatGridValue(m.height, gridSize)} um`}
                           x={0}
                           y={startY + nameFS * 1.3}
                           width={w}
@@ -2556,6 +3144,68 @@ export const FloorplanCanvas: React.FC = () => {
           })()}
         </Layer>
       </Stage>
+      {appMode === 'rect' && (
+        <div className="lpp-palette-bar" role="toolbar" aria-label="Virtuoso Layer Purpose Palette">
+          <div className="lpp-palette-bar__presets">
+            {VIRTUOSO_LAYER_PRESETS.slice(0, 8).map(preset => {
+              const isSelected = activeDrawLayer.toLowerCase() === preset.layer.toLowerCase()
+                && activeDrawPurpose.toLowerCase() === preset.purpose.toLowerCase();
+              return (
+                <button
+                  key={`${preset.layer}/${preset.purpose}`}
+                  type="button"
+                  className={`lpp-chip${isSelected ? ' active' : ''}`}
+                  onClick={() => setActiveDrawLpp(preset.layer, preset.purpose)}
+                  title={`Draw rectangle on ("${preset.layer}" "${preset.purpose}")`}
+                >
+                  <span className="lpp-chip__swatch" style={{ backgroundColor: preset.color }} />
+                  <span>{preset.shortLabel}</span>
+                </button>
+              );
+            })}
+          </div>
+          <span className="lpp-palette-bar__divider" aria-hidden="true" />
+          <div className="lpp-palette-bar__custom">
+            <input
+              type="text"
+              className="lpp-input"
+              value={activeDrawLayer}
+              onChange={e => setActiveDrawLpp(e.target.value, activeDrawPurpose, activeDrawColor)}
+              placeholder="Layer"
+              title="Cadence Layer Name (e.g. text, prBoundary, M1)"
+              aria-label="Layer name"
+            />
+            <span className="lpp-sep">/</span>
+            <input
+              type="text"
+              className="lpp-input"
+              value={activeDrawPurpose}
+              onChange={e => setActiveDrawLpp(activeDrawLayer, e.target.value, activeDrawColor)}
+              placeholder="Purpose"
+              title="Cadence Layer Purpose (e.g. drawing, pin, label)"
+              aria-label="Layer purpose"
+            />
+            <input
+              type="text"
+              className="lpp-input lpp-input--label"
+              value={activeDrawLabel}
+              onChange={e => setActiveDrawLabel(e.target.value)}
+              placeholder="Optional label…"
+              title="Optional text label attached to new rectangles"
+              aria-label="Optional rectangle label"
+            />
+          </div>
+          <button
+            type="button"
+            className="lpp-close-btn"
+            onClick={() => setAppMode('select')}
+            title="Finish drawing rectangles (Esc)"
+            aria-label="Exit rectangle tool"
+          >
+            <FiX />
+          </button>
+        </div>
+      )}
       {appMode === 'measure' && (
         <div className="coordinate-overlay measure-mode-hint">
           Measure Mode · Click two snapped points · Press O for Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc cancels

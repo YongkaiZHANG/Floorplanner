@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getTransformProps, useStore } from '../store/useStore';
-import type { Cell, Instance, PixelArray } from '../store/useStore';
+import type { Cell, Instance, LayoutShape, PixelArray } from '../store/useStore';
+import { resolveLayerStyle } from '../utils/layoutLayers';
 import { FloorplanCanvas } from '../canvas/FloorplanCanvas';
 import {
   FiArrowUp,
@@ -11,6 +12,7 @@ import {
   FiCornerDownRight,
   FiLayers,
   FiMaximize2,
+  FiMinimize,
   FiPlus,
   FiSearch,
   FiX,
@@ -22,10 +24,14 @@ type ResolvedViewData = {
   isRoot: boolean;
   libName: string;
   cellName: string;
+  originX: number;
+  originY: number;
   width: number;
   height: number;
   padInset: number;
   instances: Instance[];
+  shapes: LayoutShape[];
+  coordinateMode: 'origin' | 'centered';
   pixelArray: PixelArray | null;
 };
 
@@ -42,6 +48,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
     libraries,
     masterCells,
     instances,
+    shapes,
     activeCellId,
     openViewIds,
     windowLayoutMode,
@@ -55,6 +62,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
     descendIntoInstance,
     ascendToParent,
     navigateBreadcrumb,
+    fitActiveCellBoundsToContents,
   } = useStore();
 
   const [openPickerVisible, setOpenPickerVisible] = useState(false);
@@ -363,6 +371,16 @@ export const VirtuosoCellViewBar: React.FC = () => {
             })}
           </nav>
         )}
+        {activeCellId !== null && (shapes.length > 0 || instances.length > 0) && (
+          <button
+            type="button"
+            className="virtuoso-ctrl-btn"
+            onClick={fitActiveCellBoundsToContents}
+            title={`Fit ${topCellName} boundary tightly around its drawn shapes and sub-instances`}
+          >
+            <FiMinimize /> <span className="virtuoso-ctrl-label">Fit Bounds</span>
+          </button>
+        )}
         <button
           type="button"
           className="virtuoso-ctrl-btn"
@@ -415,6 +433,7 @@ const CompanionCellViewWindow: React.FC<{
   cellViews: ReturnType<typeof useStore.getState>['cellViews'];
   activeCellId: string | null;
   activeInstances: Instance[];
+  activeShapes: LayoutShape[];
   onSelectCompanion: (cellId: string | null) => void;
   onActivate: () => void;
   onClose: () => void;
@@ -425,15 +444,20 @@ const CompanionCellViewWindow: React.FC<{
   cellViews,
   activeCellId,
   activeInstances,
+  activeShapes,
   onSelectCompanion,
   onActivate,
   onClose,
 }) => {
   const pad = Math.max(view.width, view.height) * 0.14;
-  const vbX = -view.width / 2 - pad;
-  const vbY = -view.height / 2 - pad;
-  const vbW = view.width + pad * 2;
-  const vbH = view.height + pad * 2;
+  const boundLeft = view.isRoot || view.coordinateMode === 'centered' ? -view.width / 2 : view.originX;
+  const boundBottom = view.isRoot || view.coordinateMode === 'centered' ? -view.height / 2 : view.originY;
+  const vbX = Math.min(boundLeft, 0) - pad;
+  const vbY = Math.min(boundBottom, 0) - pad;
+  const vbMaxX = Math.max(boundLeft + view.width, 0) + pad;
+  const vbMaxY = Math.max(boundBottom + view.height, 0) + pad;
+  const vbW = vbMaxX - vbX;
+  const vbH = vbMaxY - vbY;
   const labelSize = Math.max(view.width, view.height) * 0.022;
 
   const sortedInstances = useMemo(
@@ -540,8 +564,8 @@ const CompanionCellViewWindow: React.FC<{
               vectorEffect="non-scaling-stroke"
             />
             <rect
-              x={-view.width / 2}
-              y={-view.height / 2}
+              x={boundLeft}
+              y={boundBottom}
               width={view.width}
               height={view.height}
               fill="#ffffff"
@@ -550,10 +574,28 @@ const CompanionCellViewWindow: React.FC<{
               strokeDasharray="8,6"
               vectorEffect="non-scaling-stroke"
             />
+            {view.shapes.map(shape => {
+              const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+              return (
+                <rect
+                  key={shape.id}
+                  x={shape.x}
+                  y={shape.y}
+                  width={shape.width}
+                  height={shape.height}
+                  fill={style.color}
+                  fillOpacity={style.fillOpacity}
+                  stroke={style.color}
+                  strokeWidth={1.25}
+                  strokeDasharray={style.strokeDash === 'dashed' ? '6,4' : undefined}
+                  vectorEffect="non-scaling-stroke"
+                />
+              );
+            })}
             {view.padInset > 0 && (
               <rect
-                x={-view.width / 2 + view.padInset}
-                y={-view.height / 2 + view.padInset}
+                x={boundLeft + view.padInset}
+                y={boundBottom + view.padInset}
                 width={view.width - view.padInset * 2}
                 height={view.height - view.padInset * 2}
                 fill="none"
@@ -584,16 +626,21 @@ const CompanionCellViewWindow: React.FC<{
               const t = getTransformProps(inst.orientation);
               const subInstances = getLiveSubInstances(inst.cellId);
               const instFS = Math.min(master.width * 0.18, master.height * 0.28, labelSize * 1.6);
+              const ox = master.originX ?? 0;
+              const oy = master.originY ?? 0;
+              const childShapes = inst.cellId === activeCellId ? activeShapes : (cellViews[inst.cellId]?.shapes ?? []);
               return (
                 <g
                   key={inst.id}
                   transform={`translate(${inst.x} ${inst.y}) rotate(${t.rotation}) scale(${t.scaleX} ${t.scaleY})`}
                 >
                   <rect
+                    x={ox}
+                    y={oy}
                     width={master.width}
                     height={master.height}
                     fill={master.color}
-                    fillOpacity={master.opacity ?? 0.5}
+                    fillOpacity={childShapes.length > 0 && master.autoBounds ? 0.08 : (master.opacity ?? 0.5)}
                     stroke={master.outlineStyle === 'none' ? 'none' : '#1e293b'}
                     strokeWidth={1.25}
                     strokeDasharray={
@@ -605,8 +652,25 @@ const CompanionCellViewWindow: React.FC<{
                     }
                     vectorEffect="non-scaling-stroke"
                   />
+                  {childShapes.map(shape => {
+                    const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                    return (
+                      <rect
+                        key={shape.id}
+                        x={shape.x}
+                        y={shape.y}
+                        width={shape.width}
+                        height={shape.height}
+                        fill={style.color}
+                        fillOpacity={style.fillOpacity}
+                        stroke={style.color}
+                        strokeWidth={1}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    );
+                  })}
                   {subInstances.length > 0 && (
-                    <g transform={`translate(${master.width / 2} ${master.height / 2})`}>
+                    <g transform={cellViews[inst.cellId]?.coordinateMode === 'origin' ? undefined : `translate(${master.width / 2} ${master.height / 2})`}>
                       {subInstances.map(sub => {
                         const subMaster = masterCells[sub.cellId];
                         if (!subMaster) return null;
@@ -617,6 +681,8 @@ const CompanionCellViewWindow: React.FC<{
                             transform={`translate(${sub.x} ${sub.y}) rotate(${st.rotation}) scale(${st.scaleX} ${st.scaleY})`}
                           >
                             <rect
+                              x={subMaster.originX ?? 0}
+                              y={subMaster.originY ?? 0}
                               width={subMaster.width}
                               height={subMaster.height}
                               fill={subMaster.color}
@@ -632,15 +698,15 @@ const CompanionCellViewWindow: React.FC<{
                     </g>
                   )}
                   <text
-                    x={master.width / 2}
-                    y={master.height / 2}
+                    x={ox + master.width / 2}
+                    y={-(oy + master.height / 2)}
                     fill="#0f172a"
                     fontSize={instFS}
                     fontWeight={700}
                     fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
                     textAnchor="middle"
                     dominantBaseline="middle"
-                    transform={`scale(1, -1) translate(0, ${-master.height})`}
+                    transform="scale(1, -1)"
                   >
                     {master.cellName}
                   </text>
@@ -648,8 +714,8 @@ const CompanionCellViewWindow: React.FC<{
               );
             })}
             <text
-              x={-view.width / 2}
-              y={-(view.height / 2 + labelSize * 0.85)}
+              x={boundLeft}
+              y={-(boundBottom + view.height + labelSize * 0.85)}
               fill="#334155"
               fontSize={labelSize}
               fontWeight={600}
@@ -678,6 +744,8 @@ export const VirtuosoWorkspace: React.FC = () => {
     padInset,
     masterCells,
     instances,
+    shapes,
+    activeCoordinateMode,
     pixelArray,
     cellViews,
     activeCellId,
@@ -700,10 +768,14 @@ export const VirtuosoWorkspace: React.FC = () => {
             isRoot: true,
             libName: topLibName,
             cellName: topCellName,
+            originX: -topWidth / 2,
+            originY: -topHeight / 2,
             width: topWidth,
             height: topHeight,
             padInset,
             instances,
+            shapes,
+            coordinateMode: 'origin',
             pixelArray,
           };
         }
@@ -713,10 +785,14 @@ export const VirtuosoWorkspace: React.FC = () => {
           isRoot: true,
           libName: rootView.topLibName,
           cellName: rootView.topCellName,
+          originX: -rootView.topWidth / 2,
+          originY: -rootView.topHeight / 2,
           width: rootView.topWidth,
           height: rootView.topHeight,
           padInset: rootView.padInset,
           instances: rootView.instances,
+          shapes: rootView.shapes,
+          coordinateMode: 'origin',
           pixelArray: rootView.pixelArray,
         };
       }
@@ -729,10 +805,14 @@ export const VirtuosoWorkspace: React.FC = () => {
           isRoot: false,
           libName: topLibName,
           cellName: topCellName,
+          originX: master.originX ?? 0,
+          originY: master.originY ?? 0,
           width: topWidth,
           height: topHeight,
           padInset,
           instances,
+          shapes,
+          coordinateMode: activeCoordinateMode,
           pixelArray,
         };
       }
@@ -742,10 +822,14 @@ export const VirtuosoWorkspace: React.FC = () => {
         isRoot: false,
         libName: master.libName,
         cellName: master.cellName,
+        originX: master.originX ?? 0,
+        originY: master.originY ?? 0,
         width: master.width,
         height: master.height,
         padInset: savedView?.padInset ?? 0,
         instances: savedView?.instances ?? [],
+        shapes: savedView?.shapes ?? [],
+        coordinateMode: savedView?.coordinateMode ?? ((savedView?.instances.length ?? 0) > 0 && (savedView?.shapes?.length ?? 0) === 0 ? 'centered' : 'origin'),
         pixelArray: savedView?.pixelArray ?? null,
       };
     };
@@ -767,6 +851,8 @@ export const VirtuosoWorkspace: React.FC = () => {
     topHeight,
     padInset,
     instances,
+    shapes,
+    activeCoordinateMode,
     pixelArray,
   ]);
 
@@ -814,6 +900,7 @@ export const VirtuosoWorkspace: React.FC = () => {
             cellViews={cellViews}
             activeCellId={activeCellId}
             activeInstances={instances}
+            activeShapes={shapes}
             onSelectCompanion={setPreferredCompanionId}
             onActivate={() => openCellView(companionView.id)}
             onClose={() => setWindowLayoutMode('tabs')}

@@ -8,6 +8,7 @@ import {
   getTopologicalCellOrder,
 } from './hierarchy.ts';
 import type { CellViewContent } from './hierarchy.ts';
+import type { LayoutShape } from './layoutLayers.ts';
 
 export type SkillHierarchyMode = 'zero-origin-direct' | 'wrapped' | 'local-origin';
 
@@ -20,13 +21,15 @@ export type SkillExportOptions = {
    * Hierarchy generation mode:
    * - `'zero-origin-direct'`: Single-instance IPs and sub-modules own their exact chip coordinates
    *   directly in their own `lib/cell/layout` and are instantiated at `0:0 "R0"` in their parent/top cell.
-   *   Reused multi-instance cells keep local `0:0..W:H` coordinates and are placed at their exact transforms.
+   *   Reused multi-instance cells keep local `originX..originX+W` coordinates and are placed at their exact transforms.
    * - `'wrapped'`: Origin-anchored `<Top>_<Cell>_PLACED` wrapper cells around local-origin masters.
-   * - `'local-origin'`: Local `0:0..W:H` masters placed directly at `(x:y, orient)` with no wrappers.
+   * - `'local-origin'`: Local masters placed directly at `(x:y, orient)` with no wrappers.
    */
   hierarchyMode?: SkillHierarchyMode;
   /** Optional internal layout views for hierarchical master cells (Virtuoso multi-view). */
   cellViews?: Record<string, CellViewContent>;
+  /** Optional rectangles drawn directly inside the Top Cell view. */
+  topShapes?: LayoutShape[];
 };
 
 const VALID_ORIENTATIONS = new Set(['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90']);
@@ -172,6 +175,28 @@ const validatePixelArrayForContainer = (
   }
 };
 
+const validateShapesList = (
+  shapes: readonly LayoutShape[],
+  gridSize: number,
+  scopeLabel: string,
+) => {
+  shapes.forEach((shape, index) => {
+    if (!shape.layer.trim() || !shape.purpose.trim()) {
+      throw new Error(`Shape #${index + 1} in ${scopeLabel} requires a non-empty layer and purpose.`);
+    }
+    if (!Number.isFinite(shape.x) || !Number.isFinite(shape.y) ||
+        !Number.isFinite(shape.width) || !Number.isFinite(shape.height) ||
+        shape.width <= 0 || shape.height <= 0) {
+      throw new Error(`Shape #${index + 1} in ${scopeLabel} has invalid geometry.`);
+    }
+    for (const coord of [shape.x, shape.y, shape.width, shape.height]) {
+      if (!isOnGrid(coord, gridSize)) {
+        throw new Error(`Shape #${index + 1} in ${scopeLabel} is off the ${formatGridValue(gridSize, gridSize)} um placement grid.`);
+      }
+    }
+  });
+};
+
 const validateFloorplan = (
   topLibName: string,
   topCellName: string,
@@ -182,6 +207,7 @@ const validateFloorplan = (
   gridSize: number,
   pixelArray?: PixelArray | null,
   cellViews: Record<string, CellViewContent> = {},
+  topShapes: readonly LayoutShape[] = [],
 ) => {
   if (!topLibName.trim() || !topCellName.trim()) throw new Error('Top library and cell names are required.');
   if (!Number.isFinite(gridSize) || gridSize <= 0) throw new Error('Grid size must be greater than zero.');
@@ -204,6 +230,7 @@ const validateFloorplan = (
   });
 
   validateInstancesList(instances, masterCells, gridSize, topCellName);
+  validateShapesList(topShapes, gridSize, topCellName);
 
   if (pixelArray) {
     validatePixelArrayForContainer(pixelArray, topWidth, topHeight, gridSize);
@@ -213,6 +240,9 @@ const validateFloorplan = (
     const master = masterCells[cellId];
     if (!master) throw new Error(`Cell view ${cellId} references a missing master cell.`);
     validateInstancesList(view.instances, masterCells, gridSize, `${master.libName}/${master.cellName}`);
+    if (view.shapes && view.shapes.length > 0) {
+      validateShapesList(view.shapes, gridSize, `${master.libName}/${master.cellName}`);
+    }
     if (view.pixelArray) {
       validatePixelArrayForContainer(view.pixelArray, master.width, master.height, gridSize);
     }
@@ -263,8 +293,9 @@ export const generateSkillCode = (
     ?? (options.useIpWrappers === false ? 'local-origin' : 'wrapped');
   const useIpWrappers = hierarchyMode === 'wrapped';
   const cellViews = options.cellViews ?? {};
+  const topShapes = options.topShapes ?? [];
 
-  validateFloorplan(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray, cellViews);
+  validateFloorplan(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray, cellViews, topShapes);
   const hierarchy = buildExportHierarchy(topLibName, topCellName, masterCells, instances, pixelArray, useIpWrappers);
   const ipInstances = instances.filter(instance => masterCells[instance.cellId]?.kind !== 'pad');
   const padInstances = instances.filter(instance => masterCells[instance.cellId]?.kind === 'pad');
@@ -287,23 +318,30 @@ export const generateSkillCode = (
       parentTransform: { x: number; y: number; orientation: string } | null,
       parentWidth: number,
       parentHeight: number,
+      parentCoordinateMode: 'origin' | 'centered' = 'origin',
     ) => {
       for (const inst of parentInstances) {
         const master = masterCells[inst.cellId];
         if (!master) continue;
         const resolved = parentTransform
-          ? composeCadenceTransform(parentTransform, inst, parentWidth, parentHeight)
+          ? composeCadenceTransform(parentTransform, inst, parentWidth, parentHeight, parentCoordinateMode)
           : { x: inst.x, y: inst.y, orientation: inst.orientation };
         if (originAnchored.has(inst.cellId)) {
           globalPlacements.set(inst.cellId, resolved);
           const childView = cellViews[inst.cellId];
           if (childView && childView.instances.length > 0) {
-            collectGlobalPlacements(childView.instances, resolved, master.width, master.height);
+            collectGlobalPlacements(
+              childView.instances,
+              resolved,
+              master.width,
+              master.height,
+              childView.coordinateMode ?? 'centered',
+            );
           }
         }
       }
     };
-    collectGlobalPlacements(instances, null, topWidth, topHeight);
+    collectGlobalPlacements(instances, null, topWidth, topHeight, 'origin');
   }
 
   // Strict bottom-up topological order so every child cellview exists before its parent opens it.
@@ -356,11 +394,19 @@ export const generateSkillCode = (
     if (!cell) return;
     const view = cellViews[cellId];
     const subInstances = view?.instances ?? [];
+    const viewShapes = view?.shapes ?? [];
+    const viewCoordinateMode = view?.coordinateMode ?? 'centered';
     const anchoredTransform = globalPlacements.get(cellId);
+    const ox = cell.originX ?? 0;
+    const oy = cell.originY ?? 0;
+    const exactOX = cleanNumber(ox);
+    const exactOY = cleanNumber(oy);
     const exactW = cleanNumber(cell.width);
     const exactH = cleanNumber(cell.height);
-    const exactCX = cleanNumber(cell.width / 2);
-    const exactCY = cleanNumber(cell.height / 2);
+    const exactMaxX = cleanNumber(ox + cell.width);
+    const exactMaxY = cleanNumber(oy + cell.height);
+    const exactCX = cleanNumber(ox + cell.width / 2);
+    const exactCY = cleanNumber(oy + cell.height / 2);
     const isPad = cell.kind === 'pad';
     const nameLabelHeight = fitLabelHeight(cell.cellName, cell.width, cell.height, 0.12);
 
@@ -391,6 +437,8 @@ export const generateSkillCode = (
         orientation: anchoredTransform.orientation,
         width: cell.width,
         height: cell.height,
+        originX: ox,
+        originY: oy,
       });
       const left = formatCoord(bounds.left, gridSize);
       const right = formatCoord(bounds.right, gridSize);
@@ -401,8 +449,42 @@ export const generateSkillCode = (
       code += `${indent}unless(boundary error("Floorplanner: cannot create prBoundary for %s/%s.\\n" ${lib} ${cellName}))\n`;
     } else {
       code += `${indent}; Native OA prBoundary object on ("prBoundary" "drawing").\n`;
-      code += `${indent}boundary = dbCreatePRBoundary(cv list(0:0 0:${exactH} ${exactW}:${exactH} ${exactW}:0))\n`;
+      code += `${indent}boundary = dbCreatePRBoundary(cv list(${exactOX}:${exactOY} ${exactOX}:${exactMaxY} ${exactMaxX}:${exactMaxY} ${exactMaxX}:${exactOY}))\n`;
       code += `${indent}unless(boundary error("Floorplanner: cannot create prBoundary for %s/%s.\\n" ${lib} ${cellName}))\n`;
+    }
+
+    // Emit user-drawn rectangles on their Virtuoso Layer/Purpose Pairs (e.g. ("text" "drawing")).
+    if (viewShapes.length > 0) {
+      code += `${indent}; Drawn layout shapes inside ${skillComment(cell.cellName)}\n`;
+      viewShapes.forEach(shape => {
+        const localMinX = viewCoordinateMode === 'origin' ? shape.x : shape.x + cell.width / 2;
+        const localMinY = viewCoordinateMode === 'origin' ? shape.y : shape.y + cell.height / 2;
+        const localMaxX = localMinX + shape.width;
+        const localMaxY = localMinY + shape.height;
+        const rect = anchoredTransform
+          ? transformLocalRect(localMinX, localMinY, localMaxX, localMaxY, anchoredTransform)
+          : { left: localMinX, bottom: localMinY, right: localMaxX, top: localMaxY };
+        const rx1 = formatCoord(rect.left, gridSize);
+        const ry1 = formatCoord(rect.bottom, gridSize);
+        const rx2 = formatCoord(rect.right, gridSize);
+        const ry2 = formatCoord(rect.top, gridSize);
+        const layerStr = skillString(shape.layer);
+        const purposeStr = skillString(shape.purpose);
+        code += `${indent}unless(errset(dbCreateRect(cv list(${layerStr} ${purposeStr}) list(${rx1}:${ry1} ${rx2}:${ry2})) t)\n`;
+        code += `${indent}  printf("WARNING: cannot create %s/%s rectangle in %s.\\n" ${layerStr} ${purposeStr} ${cellName})\n`;
+        code += `${indent})\n`;
+        if (shape.label?.trim()) {
+          const shapeText = skillString(shape.label.trim());
+          const shapeW = rect.right - rect.left;
+          const shapeH = rect.top - rect.bottom;
+          const scx = formatCoord((rect.left + rect.right) / 2, gridSize);
+          const scy = formatCoord((rect.bottom + rect.top) / 2, gridSize);
+          const sHeight = fitLabelHeight(shape.label.trim(), shapeW, shapeH, 0.14);
+          code += `${indent}unless(errset(dbCreateLabel(cv list("text" "drawing") ${scx}:${scy} ${shapeText} "centerCenter" "R0" "roman" ${sHeight}) t)\n`;
+          code += `${indent}  printf("WARNING: cannot create shape label %s in %s.\\n" ${shapeText} ${cellName})\n`;
+          code += `${indent})\n`;
+        }
+      });
     }
 
     // Instantiate any hierarchical sub-cells inside this cell view.
@@ -423,13 +505,13 @@ export const generateSkillCode = (
           placeY = '0';
           placeOrient = skillString('R0');
         } else if (anchoredTransform) {
-          const composed = composeCadenceTransform(anchoredTransform, childInst, cell.width, cell.height);
+          const composed = composeCadenceTransform(anchoredTransform, childInst, cell.width, cell.height, viewCoordinateMode);
           placeX = formatCoord(composed.x, gridSize);
           placeY = formatCoord(composed.y, gridSize);
           placeOrient = skillString(composed.orientation);
         } else {
-          placeX = formatCoord(childInst.x + cell.width / 2, gridSize);
-          placeY = formatCoord(childInst.y + cell.height / 2, gridSize);
+          placeX = formatCoord(viewCoordinateMode === 'origin' ? childInst.x : childInst.x + cell.width / 2, gridSize);
+          placeY = formatCoord(viewCoordinateMode === 'origin' ? childInst.y : childInst.y + cell.height / 2, gridSize);
           placeOrient = skillString(childInst.orientation);
         }
 
@@ -444,8 +526,8 @@ export const generateSkillCode = (
     // Optional pixel array region defined inside a sub-cell view.
     if (view?.pixelArray?.visible) {
       const pa = view.pixelArray;
-      const localMinX = pa.x + cell.width / 2;
-      const localMinY = pa.y + cell.height / 2;
+      const localMinX = viewCoordinateMode === 'origin' ? pa.x : pa.x + cell.width / 2;
+      const localMinY = viewCoordinateMode === 'origin' ? pa.y : pa.y + cell.height / 2;
       const localMaxX = localMinX + pa.width;
       const localMaxY = localMinY + pa.height;
       const rect = anchoredTransform
@@ -480,6 +562,8 @@ export const generateSkillCode = (
         orientation: anchoredTransform.orientation,
         width: cell.width,
         height: cell.height,
+        originX: ox,
+        originY: oy,
       });
       const physicalWidth = bounds.right - bounds.left;
       const physicalHeight = bounds.top - bounds.bottom;
@@ -530,7 +614,7 @@ export const generateSkillCode = (
       const snapX = formatGridValue(inst.x, gridSize);
       const snapY = formatGridValue(inst.y, gridSize);
       const orientation = skillString(inst.orientation);
-      const bounds = getPhysicalBounds({ ...inst, width: masterCell.width, height: masterCell.height });
+      const bounds = getPhysicalBounds({ ...inst, width: masterCell.width, height: masterCell.height, originX: masterCell.originX, originY: masterCell.originY });
       const physicalWidth = bounds.right - bounds.left;
       const physicalHeight = bounds.top - bounds.bottom;
       const sizeTextValue = `${cleanNumber(masterCell.width)} x ${cleanNumber(masterCell.height)} um`;
@@ -618,6 +702,31 @@ export const generateSkillCode = (
   code += `    boundary = dbCreatePRBoundary(cv list(${-exactHalfW}:${-exactHalfH} ${-exactHalfW}:${exactHalfH} ${exactHalfW}:${exactHalfH} ${exactHalfW}:${-exactHalfH}))\n`;
   code += `    unless(boundary error("Floorplanner: cannot create the top-cell prBoundary.\\n"))\n\n`;
 
+  if (topShapes.length > 0) {
+    code += `    ; Drawn layout shapes directly inside ${safeTopName}\n`;
+    topShapes.forEach(shape => {
+      const rx1 = formatCoord(shape.x, gridSize);
+      const ry1 = formatCoord(shape.y, gridSize);
+      const rx2 = formatCoord(shape.x + shape.width, gridSize);
+      const ry2 = formatCoord(shape.y + shape.height, gridSize);
+      const layerStr = skillString(shape.layer);
+      const purposeStr = skillString(shape.purpose);
+      code += `    unless(errset(dbCreateRect(cv list(${layerStr} ${purposeStr}) list(${rx1}:${ry1} ${rx2}:${ry2})) t)\n`;
+      code += `      printf("WARNING: cannot create %s/%s rectangle in %s.\\n" ${layerStr} ${purposeStr} ${topCell})\n`;
+      code += `    )\n`;
+      if (shape.label?.trim()) {
+        const shapeText = skillString(shape.label.trim());
+        const scx = formatCoord(shape.x + shape.width / 2, gridSize);
+        const scy = formatCoord(shape.y + shape.height / 2, gridSize);
+        const sHeight = fitLabelHeight(shape.label.trim(), shape.width, shape.height, 0.14);
+        code += `    unless(errset(dbCreateLabel(cv list("text" "drawing") ${scx}:${scy} ${shapeText} "centerCenter" "R0" "roman" ${sHeight}) t)\n`;
+        code += `      printf("WARNING: cannot create shape label %s in %s.\\n" ${shapeText} ${topCell})\n`;
+        code += `    )\n`;
+      }
+    });
+    code += `\n`;
+  }
+
   ipInstances.forEach(inst => {
     const instanceName = skillString(inst.name);
     if (useIpWrappers) {
@@ -672,7 +781,7 @@ export const generateSkillCode = (
     code += `    dbClose(master)\n\n`;
   }
 
-  if (ipInstances.length === 0 && padInstances.length === 0 && !pixelArray?.visible) {
+  if (ipInstances.length === 0 && padInstances.length === 0 && !pixelArray?.visible && topShapes.length === 0) {
     code += `    ; No generated child cells to place\n`;
   }
 

@@ -1,11 +1,21 @@
 import type { CadenceOrientation } from './alignment.ts';
 import type { Instance, PixelArray, Ruler } from '../store/useStore.ts';
+import type { LayoutShape } from './layoutLayers.ts';
+
+export type CellViewCoordinateMode = 'origin' | 'centered';
 
 export type CellViewContent = {
   instances: Instance[];
   rulers: Ruler[];
+  shapes?: LayoutShape[];
   pixelArray?: PixelArray | null;
   padInset?: number;
+  /**
+   * `'origin'`: Native Virtuoso cell coordinates where (0, 0) in the cellview IS the cell's
+   * (0, 0) origin when instantiated in parent cells.
+   * `'centered'` (legacy default when omitted): coordinates stored in `[-W/2..W/2] x [-H/2..H/2]`.
+   */
+  coordinateMode?: CellViewCoordinateMode;
 };
 
 type Matrix2x2 = readonly [number, number, number, number]; // [a, b, c, d] -> (ax + by, cx + dy)
@@ -49,21 +59,21 @@ export const getOrientationMatrix = (orientation: string): Matrix2x2 => {
 };
 
 /**
- * Composes a parent's placement transform with a child's placement inside that parent's
- * centered edit view (`[-parentW/2, parentW/2] x [-parentH/2, parentH/2]`).
- * Returns the child's exact placement in the parent's enclosing coordinate frame.
+ * Composes a parent's placement transform with a child's placement inside that parent.
+ * - `'origin'`: Child coordinates are already in parent's native `(0, 0)` cell frame.
+ * - `'centered'` (legacy default): Translates child from `[-parentW/2, parentW/2]` to `[0, parentW]`.
  */
 export const composeCadenceTransform = (
   parent: { x: number; y: number; orientation: string },
   child: { x: number; y: number; orientation: string },
   parentWidth: number,
   parentHeight: number,
+  coordinateMode: CellViewCoordinateMode = 'centered',
 ): { x: number; y: number; orientation: CadenceOrientation } => {
   const pm = getOrientationMatrix(parent.orientation);
   const cm = getOrientationMatrix(child.orientation);
-  // Translate child from parent's centered edit frame to parent's local [0..W, 0..H] master frame.
-  const localX = child.x + parentWidth / 2;
-  const localY = child.y + parentHeight / 2;
+  const localX = coordinateMode === 'origin' ? child.x : child.x + parentWidth / 2;
+  const localY = coordinateMode === 'origin' ? child.y : child.y + parentHeight / 2;
   return {
     x: parent.x + pm[0] * localX + pm[1] * localY,
     y: parent.y + pm[2] * localX + pm[3] * localY,

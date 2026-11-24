@@ -2,6 +2,7 @@ import type { ProjectSnapshot } from '../store/projectDocument.ts';
 import { getProjectSnapshot, useStore } from '../store/useStore.ts';
 import { SCALE_FACTOR } from './canvasConstants.ts';
 import { formatGridValue } from './grid.ts';
+import { resolveLayerStyle } from './layoutLayers.ts';
 
 const escapeXml = (value: string): string => value
   .replace(/&/g, '&amp;')
@@ -56,10 +57,17 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
   state.instances.forEach((inst) => {
     const m = state.masterCells[inst.cellId];
     if (m) {
-      const radius = Math.max(m.width, m.height) * sf;
+      const ox = m.originX ?? 0;
+      const oy = m.originY ?? 0;
+      const radius = Math.max(Math.abs(ox), Math.abs(ox + m.width), Math.abs(oy), Math.abs(oy + m.height)) * sf;
       updateBounds(inst.x * sf - radius, inst.y * sf - radius);
       updateBounds(inst.x * sf + radius, inst.y * sf + radius);
     }
+  });
+
+  (state.shapes ?? []).forEach((shape) => {
+    updateBounds(shape.x * sf, shape.y * sf);
+    updateBounds((shape.x + shape.width) * sf, (shape.y + shape.height) * sf);
   });
 
   // SVG Data Table computation
@@ -88,6 +96,7 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     masterCells: state.masterCells,
     instances: state.instances,
     rulers: state.rulers,
+    ...(state.shapes && state.shapes.length > 0 ? { shapes: state.shapes } : {}),
     pixelArray: state.pixelArray ?? null,
     ...(state.padInset !== undefined && state.padInset > 0 ? { padInset: state.padInset } : {}),
     ...(state.libraries && state.libraries.length > 0 ? { libraries: state.libraries } : {}),
@@ -159,23 +168,57 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
       case 'MYR90': scaleX = -1; rot = 90; break;
     }
     
+    const ox = (m.originX ?? 0) * sf;
+    const oy = (m.originY ?? 0) * sf;
     const w = m.width * sf;
     const h = m.height * sf;
     const x = inst.x * sf;
     const y = inst.y * sf;
+    const childView = state.cellViews?.[inst.cellId];
+    const childShapes = childView?.shapes ?? [];
     const outlineStyle = m.outlineStyle ?? 'solid';
     const outlineStroke = outlineStyle === 'none' ? 'none' : '#1e293b';
     const outlineDash = outlineStyle === 'dashed' ? ' stroke-dasharray="8,6"'
       : outlineStyle === 'dotted' ? ' stroke-dasharray="2,4"' : '';
+    const fillOpacity = childShapes.length > 0 && m.autoBounds ? 0.08 : (m.opacity ?? 0.5);
     
     const transform = `translate(${x} ${y}) rotate(${rot}) scale(${scaleX} ${scaleY})`;
     svg += `  <g transform="${transform}">\n`;
-    svg += `    <rect width="${w}" height="${h}" fill="${escapeXml(m.color)}" fill-opacity="${m.opacity ?? 0.5}" stroke="${outlineStroke}" stroke-width="1.5"${outlineDash} vector-effect="non-scaling-stroke" />\n`;
+    svg += `    <rect x="${ox}" y="${oy}" width="${w}" height="${h}" fill="${escapeXml(m.color)}" fill-opacity="${fillOpacity}" stroke="${outlineStroke}" stroke-width="1.5"${outlineDash} vector-effect="non-scaling-stroke" />\n`;
+    if (childShapes.length > 0) {
+      const shapeOffsetX = childView?.coordinateMode === 'centered' ? w / 2 : 0;
+      const shapeOffsetY = childView?.coordinateMode === 'centered' ? h / 2 : 0;
+      childShapes.forEach(shape => {
+        const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+        const sx = shape.x * sf + shapeOffsetX;
+        const sy = shape.y * sf + shapeOffsetY;
+        const sw = shape.width * sf;
+        const sh = shape.height * sf;
+        const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
+        svg += `    <rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1.25"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
+      });
+    }
     
     const instFS = Math.min(w * 0.15, h * 0.25, baseFS * 2);
-    svg += `    <text x="${w / 2}" y="${h / 2 - instFS * 0.6}" fill="#0f172a" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${escapeXml(m.cellName)}</text>\n`;
-    svg += `    <text x="${w / 2}" y="${h / 2 + instFS * 0.6}" fill="#334155" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="normal" font-size="${instFS * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1) translate(0, ${-h})">${m.width}x${m.height}</text>\n`;
+    const labelCX = ox + w / 2;
+    const labelCY = oy + h / 2;
+    svg += `    <text x="${labelCX}" y="${-labelCY - instFS * 0.6}" fill="#0f172a" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(m.cellName)}</text>\n`;
+    svg += `    <text x="${labelCX}" y="${-labelCY + instFS * 0.6}" fill="#334155" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="normal" font-size="${instFS * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${m.width}x${m.height}</text>\n`;
     svg += `  </g>\n`;
+  });
+
+  // Top-level drawn shapes
+  (state.shapes ?? []).forEach((shape) => {
+    const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+    const sx = shape.x * sf;
+    const sy = shape.y * sf;
+    const sw = shape.width * sf;
+    const sh = shape.height * sf;
+    const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
+    svg += `  <rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1.5"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
+    const tag = shape.label?.trim() || `${shape.layer}/${shape.purpose}`;
+    const tagFS = Math.min(sw * 0.12, sh * 0.22, baseFS * 1.1);
+    svg += `  <text x="${sx + sw / 2}" y="${-(sy + sh / 2)}" fill="${escapeXml(style.color)}" font-family="monospace" font-size="${tagFS}" font-weight="600" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(tag)}</text>\n`;
   });
   
   // Rulers

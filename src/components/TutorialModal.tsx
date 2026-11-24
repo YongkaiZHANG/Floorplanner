@@ -42,10 +42,11 @@ const shortcutGroups: Array<{ title: string; items: Array<[string, string]> }> =
   {
     title: 'Placement & Editing',
     items: [
-      ['N', 'Create a Master IP'],
-      ['I', 'Attach an IP master to cursor'],
+      ['N', 'Create a Master IP / Cell View'],
+      ['I', 'Instantiate a cell (cursor or at 0,0)'],
+      ['R / D', 'Draw Virtuoso rectangle on layer/purpose (when idle)'],
       ['C', 'Copy selected block into placement mode'],
-      ['R / Shift+R', 'Rotate primary selection ±90°'],
+      ['R / Shift+R', 'Rotate selected block or placing ghost ±90°'],
       ['Right-click / Shift+Right', 'Rotate block CW / CCW on canvas'],
       ['L', 'Lock or unlock selected blocks'],
       ['Alt + Arrow / +Shift', 'Nudge selection by 1× or 10× grid'],

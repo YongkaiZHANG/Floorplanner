@@ -82,6 +82,8 @@ export const findOverlapViolations = (
       ...instance,
       width: master.width,
       height: master.height,
+      originX: master.originX,
+      originY: master.originY,
     });
     return [{
       id: instance.id,
@@ -146,7 +148,13 @@ export const computeFloorplanMetrics = (snapshot: ProjectSnapshot): FloorplanMet
     if (master.kind === 'pad') {
       padCount += 1;
       padAreaUm2 += area;
-      const bounds = getPhysicalBounds({ ...instance, width: master.width, height: master.height });
+      const bounds = getPhysicalBounds({
+        ...instance,
+        width: master.width,
+        height: master.height,
+        originX: master.originX,
+        originY: master.originY,
+      });
       const side = classifyPadSide(bounds, snapshot.topWidth, snapshot.topHeight, padInset);
       padsBySide[side] += 1;
     } else {
@@ -217,6 +225,8 @@ export const generateFloorplanCsv = (snapshot: ProjectSnapshot): string => {
       ...instance,
       width: master.width,
       height: master.height,
+      originX: master.originX,
+      originY: master.originY,
     });
     const isPad = master.kind === 'pad';
     const side = isPad

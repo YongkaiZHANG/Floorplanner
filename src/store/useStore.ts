@@ -7,7 +7,11 @@ import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
 import type { ProjectHistory } from './projectHistory.ts';
 import { snapToGrid } from '../utils/grid.ts';
 import { wouldCreateHierarchyCycle } from '../utils/hierarchy.ts';
-import type { CellViewContent } from '../utils/hierarchy.ts';
+import type { CellViewContent, CellViewCoordinateMode } from '../utils/hierarchy.ts';
+import { computeCellContentBounds } from '../utils/layoutLayers.ts';
+import type { LayoutShape } from '../utils/layoutLayers.ts';
+
+export type { LayoutShape } from '../utils/layoutLayers.ts';
 
 export type Instance = {
   id: string;
@@ -24,6 +28,10 @@ export type Cell = {
   id: string;
   libName: string;
   cellName: string;
+  /** Local X coordinate of the cell's lower-left bounding box relative to cell origin (0, 0). Defaults to 0. */
+  originX?: number;
+  /** Local Y coordinate of the cell's lower-left bounding box relative to cell origin (0, 0). Defaults to 0. */
+  originY?: number;
   width: number;
   height: number;
   color: string;
@@ -32,6 +40,8 @@ export type Cell = {
   /** Canvas/SVG planning appearance; Cadence display colors remain technology-controlled. */
   opacity?: number;
   outlineStyle?: 'solid' | 'dashed' | 'dotted' | 'none';
+  /** When true, bounding box (originX, originY, width, height) automatically fits its drawn shapes & sub-instances. */
+  autoBounds?: boolean;
 };
 
 export type Ruler = {
@@ -55,7 +65,7 @@ export type PixelArray = {
 };
 
 export type PixelArraySize = Pick<PixelArray, 'width' | 'height'>;
-export type AppMode = 'select' | 'measure' | 'place' | 'pixel-array';
+export type AppMode = 'select' | 'measure' | 'place' | 'pixel-array' | 'rect';
 
 export type PadSide = 'top' | 'bottom' | 'left' | 'right';
 
@@ -117,6 +127,7 @@ export type RootViewSnapshot = {
   padInset: number;
   instances: Instance[];
   rulers: Ruler[];
+  shapes: LayoutShape[];
   pixelArray: PixelArray | null;
 };
 
@@ -136,6 +147,10 @@ export type ProjectState = {
   masterCells: Record<string, Cell>;
   instances: Instance[];
   rulers: Ruler[];
+  /** Drawn rectangles on Virtuoso layer/purpose pairs inside the currently active cellview. */
+  shapes: LayoutShape[];
+  /** Coordinate frame of the active IP cellview ('origin' = native (0,0) Virtuoso canvas; 'centered' = legacy). */
+  activeCoordinateMode: CellViewCoordinateMode;
   pixelArray: PixelArray | null;
   pendingPixelArraySize: PixelArraySize | null;
   /** Internal layouts for hierarchical master cells (keyed by master cell ID). */
@@ -153,7 +168,13 @@ export type ProjectState = {
   
   selectedInstanceId: string | null;
   selectedInstanceIds: string[];
+  selectedShapeId: string | null;
   pixelArraySelected: boolean;
+  /** Active Virtuoso layer/purpose palette state for Create Rectangle tool. */
+  activeDrawLayer: string;
+  activeDrawPurpose: string;
+  activeDrawLabel: string;
+  activeDrawColor: string;
   showCreateModal: boolean;
   showInstantiateModal: boolean;
   leftSidebarPinned: boolean;
@@ -199,9 +220,19 @@ export type ProjectState = {
   ascendToParent: () => void;
   navigateBreadcrumb: (index: number) => void;
   
-  addMasterCell: (libName: string, cellName: string, w: number, h: number, color: string, opacity?: number, outlineStyle?: Cell['outlineStyle'], openAfterCreate?: boolean) => void;
+  addMasterCell: (libName: string, cellName: string, w: number, h: number, color: string, opacity?: number, outlineStyle?: Cell['outlineStyle'], openAfterCreate?: boolean, autoBounds?: boolean) => void;
   updateMasterCell: (id: string, libName: string, cellName: string, w: number, h: number, color: string, opacity?: number, outlineStyle?: Cell['outlineStyle']) => void;
   deleteMasterCell: (id: string) => void;
+  setActiveDrawLpp: (layer: string, purpose: string, color?: string) => void;
+  setActiveDrawLabel: (label: string) => void;
+  setSelectedShape: (id: string | null) => void;
+  addShape: (shape: Omit<LayoutShape, 'id'>) => string;
+  updateShape: (id: string, patch: Partial<Omit<LayoutShape, 'id'>>) => void;
+  deleteShape: (id: string) => void;
+  toggleShapeLock: (id: string) => void;
+  nudgeSelectedShape: (dx: number, dy: number) => void;
+  fitActiveCellBoundsToContents: () => void;
+  setCellAutoBounds: (cellId: string, autoBounds: boolean) => void;
   placeInstance: (cellId: string, x?: number, y?: number, orientation?: string, customName?: string) => void;
   placeInstanceMosaic: (cellId: string, originX: number, originY: number, orientation: string, config: PendingInstanceArray) => void;
   createPadRow: (config: PadRowConfig) => void;
@@ -280,7 +311,9 @@ export const clampInstancePosition = (
   h: number, 
   topW: number, 
   topH: number,
-  gridSize: number
+  gridSize: number,
+  originX = 0,
+  originY = 0,
 ) => {
   const t = getTransformProps(orientation);
   const rad = t.rotation * Math.PI / 180;
@@ -288,17 +321,17 @@ export const clampInstancePosition = (
   const sin = Math.round(Math.sin(rad));
 
   const transformPoint = (px: number, py: number) => {
-    let sx = px * t.scaleX;
-    let sy = py * t.scaleY;
-    let rx = sx * cos - sy * sin;
-    let ry = sx * sin + sy * cos;
+    const sx = px * t.scaleX;
+    const sy = py * t.scaleY;
+    const rx = sx * cos - sy * sin;
+    const ry = sx * sin + sy * cos;
     return { x: rx, y: ry };
   };
 
-  const p1 = transformPoint(0, 0);
-  const p2 = transformPoint(w, 0);
-  const p3 = transformPoint(w, h);
-  const p4 = transformPoint(0, h);
+  const p1 = transformPoint(originX, originY);
+  const p2 = transformPoint(originX + w, originY);
+  const p3 = transformPoint(originX + w, originY + h);
+  const p4 = transformPoint(originX, originY + h);
 
   const minX = Math.min(p1.x, p2.x, p3.x, p4.x);
   const maxX = Math.max(p1.x, p2.x, p3.x, p4.x);
@@ -548,9 +581,13 @@ const buildCellViewContent = (
   rulers: Ruler[],
   pixelArray: PixelArray | null,
   padInset: number,
+  shapes: LayoutShape[] = [],
+  coordinateMode?: CellViewCoordinateMode,
 ): CellViewContent => ({
   instances,
   rulers,
+  ...(shapes.length > 0 ? { shapes } : {}),
+  ...(coordinateMode ? { coordinateMode } : {}),
   ...(pixelArray ? { pixelArray } : {}),
   ...(padInset > 0 ? { padInset } : {}),
 });
@@ -558,8 +595,19 @@ const buildCellViewContent = (
 const isEmptyCellView = (view: CellViewContent): boolean => (
   view.instances.length === 0
   && view.rulers.length === 0
+  && (view.shapes?.length ?? 0) === 0
   && !view.pixelArray
   && !(view.padInset && view.padInset > 0)
+);
+
+const normalizeShapesForGrid = (shapes: readonly LayoutShape[], gridSize: number): LayoutShape[] => (
+  shapes.map(shape => ({
+    ...shape,
+    x: snapToGrid(shape.x, gridSize),
+    y: snapToGrid(shape.y, gridSize),
+    width: Math.max(gridSize, snapToGrid(shape.width, gridSize)),
+    height: Math.max(gridSize, snapToGrid(shape.height, gridSize)),
+  }))
 );
 
 const normalizeCellViews = (
@@ -574,6 +622,8 @@ const normalizeCellViews = (
       view.rulers,
       view.pixelArray ?? null,
       view.padInset ?? 0,
+      view.shapes ?? [],
+      view.coordinateMode,
     );
     if (!isEmptyCellView(normalized)) {
       result[cellId] = normalized;
@@ -583,11 +633,18 @@ const normalizeCellViews = (
 };
 
 const mergeActiveViewIntoCellViews = (
-  state: Pick<ProjectState, 'activeCellId' | 'masterCells' | 'cellViews' | 'instances' | 'rulers' | 'pixelArray' | 'padInset'>,
+  state: Pick<ProjectState, 'activeCellId' | 'masterCells' | 'cellViews' | 'instances' | 'rulers' | 'shapes' | 'activeCoordinateMode' | 'pixelArray' | 'padInset'>,
 ): Record<string, CellViewContent> => {
   const merged: Record<string, CellViewContent> = { ...state.cellViews };
   if (state.activeCellId && state.masterCells[state.activeCellId]) {
-    const activeView = buildCellViewContent(state.instances, state.rulers, state.pixelArray, state.padInset);
+    const activeView = buildCellViewContent(
+      state.instances,
+      state.rulers,
+      state.pixelArray,
+      state.padInset,
+      state.shapes,
+      state.activeCoordinateMode,
+    );
     if (isEmptyCellView(activeView)) {
       delete merged[state.activeCellId];
     } else {
@@ -605,15 +662,94 @@ const clampInstancesToContainer = (
   gridSize: number,
   padInset: number,
   onlyCellId?: string,
+  unbounded = false,
 ): Instance[] => instances.map(instance => {
   if (onlyCellId && instance.cellId !== onlyCellId) return instance;
   const master = masterCells[instance.cellId];
   if (!master) return instance;
+  if (unbounded) {
+    return {
+      ...instance,
+      x: snapToGrid(instance.x, gridSize),
+      y: snapToGrid(instance.y, gridSize),
+    };
+  }
   const position = master.kind === 'pad'
     ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, containerW, containerH, gridSize, instance.orientation, padInset)
-    : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, containerW, containerH, gridSize);
+    : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, containerW, containerH, gridSize, master.originX ?? 0, master.originY ?? 0);
   return { ...instance, x: position.x, y: position.y };
 });
+
+/**
+ * Updates the active IP master cell's `(originX, originY, width, height)` when shapes
+ * or sub-instances are drawn/modified inside its cellview.
+ * - If `master.autoBounds` is true: tightly fits the exact bounding box of its contents.
+ * - Otherwise: expands only when new content extends outside the existing bounding box.
+ */
+const syncMasterBoundsForActiveCell = (
+  state: Pick<ProjectState, 'activeCellId' | 'masterCells' | 'topWidth' | 'topHeight' | 'gridSize'>,
+  nextShapes: readonly LayoutShape[],
+  nextInstances: readonly Instance[],
+  nextPixelArray: PixelArray | null,
+  forceTightFit = false,
+): { masterCells: Record<string, Cell>; topWidth: number; topHeight: number } | null => {
+  if (!state.activeCellId) return null;
+  const master = state.masterCells[state.activeCellId];
+  if (!master) return null;
+  const contentBounds = computeCellContentBounds(nextShapes, nextInstances, state.masterCells, nextPixelArray);
+  if (!contentBounds) return null;
+
+  const curOx = master.originX ?? 0;
+  const curOy = master.originY ?? 0;
+  const curMaxX = curOx + master.width;
+  const curMaxY = curOy + master.height;
+
+  let nextOx: number;
+  let nextOy: number;
+  let nextW: number;
+  let nextH: number;
+
+  if (master.autoBounds || forceTightFit) {
+    nextOx = contentBounds.originX;
+    nextOy = contentBounds.originY;
+    nextW = contentBounds.width;
+    nextH = contentBounds.height;
+  } else {
+    const minX = Math.min(curOx, contentBounds.originX);
+    const minY = Math.min(curOy, contentBounds.originY);
+    const maxX = Math.max(curMaxX, contentBounds.originX + contentBounds.width);
+    const maxY = Math.max(curMaxY, contentBounds.originY + contentBounds.height);
+    nextOx = minX;
+    nextOy = minY;
+    nextW = maxX - minX;
+    nextH = maxY - minY;
+  }
+
+  if (
+    Math.abs(nextOx - curOx) <= 1e-9
+    && Math.abs(nextOy - curOy) <= 1e-9
+    && Math.abs(nextW - master.width) <= 1e-9
+    && Math.abs(nextH - master.height) <= 1e-9
+  ) {
+    return null;
+  }
+
+  const nextMaster: Cell = {
+    ...master,
+    width: nextW,
+    height: nextH,
+    ...(Math.abs(nextOx) > 1e-9 ? { originX: nextOx } : { originX: undefined }),
+    ...(Math.abs(nextOy) > 1e-9 ? { originY: nextOy } : { originY: undefined }),
+  };
+  if (nextMaster.originX === undefined) delete nextMaster.originX;
+  if (nextMaster.originY === undefined) delete nextMaster.originY;
+
+  return {
+    masterCells: { ...state.masterCells, [state.activeCellId]: nextMaster },
+    topWidth: nextW,
+    topHeight: nextH,
+  };
+};
 
 const deriveLibraries = (
   rootTopLibName: string,
@@ -656,6 +792,8 @@ export const getProjectSnapshot = (
     | 'masterCells'
     | 'instances'
     | 'rulers'
+    | 'shapes'
+    | 'activeCoordinateMode'
     | 'pixelArray'
     | 'cellViews'
     | 'activeCellId'
@@ -673,6 +811,7 @@ export const getProjectSnapshot = (
         padInset: state.padInset,
         instances: state.instances,
         rulers: state.rulers,
+        shapes: state.shapes,
         pixelArray: state.pixelArray,
       };
   const requiredLibs = new Set([root.topLibName, ...Object.values(state.masterCells).map(m => m.libName)]);
@@ -687,6 +826,7 @@ export const getProjectSnapshot = (
     masterCells: state.masterCells,
     instances: root.instances,
     rulers: root.rulers,
+    ...(root.shapes.length > 0 ? { shapes: root.shapes } : {}),
     pixelArray: root.pixelArray,
     ...(root.padInset > 0 ? { padInset: root.padInset } : {}),
     ...(hasExplicitExtraLibs ? { libraries: allLibraries } : {}),
@@ -697,6 +837,7 @@ export const getProjectSnapshot = (
 type CommitPatch = Partial<ProjectSnapshot> & {
   rootView?: RootViewSnapshot | null;
   activeCellId?: string | null;
+  activeCoordinateMode?: CellViewCoordinateMode;
   openViewIds?: Array<string | null>;
   viewBreadcrumb?: string[];
 };
@@ -717,6 +858,8 @@ const commitProjectPatch = (
   const nextStateLike: ProjectState = {
     ...state,
     ...patch,
+    shapes: patch.shapes !== undefined ? patch.shapes : state.shapes,
+    activeCoordinateMode: patch.activeCoordinateMode !== undefined ? patch.activeCoordinateMode : state.activeCoordinateMode,
     libraries: nextLibraries,
     padInset: patch.padInset !== undefined ? patch.padInset : state.padInset,
     pixelArray: patch.pixelArray !== undefined ? patch.pixelArray : state.pixelArray,
@@ -746,6 +889,7 @@ const applyCanonicalSnapshot = (
     const activeMaster = snapshot.masterCells[state.activeCellId];
     const activeView = cellViews[state.activeCellId];
     const instances = activeView?.instances ?? [];
+    const shapes = activeView?.shapes ?? [];
     const filteredBreadcrumb = state.viewBreadcrumb.filter(id => Boolean(snapshot.masterCells[id]));
     const viewBreadcrumb = filteredBreadcrumb.at(-1) === state.activeCellId
       ? filteredBreadcrumb
@@ -763,6 +907,7 @@ const applyCanonicalSnapshot = (
         padInset: snapshot.padInset ?? 0,
         instances: snapshot.instances,
         rulers: snapshot.rulers,
+        shapes: snapshot.shapes ?? [],
         pixelArray: snapshot.pixelArray ?? null,
       },
       topWidth: activeMaster.width,
@@ -772,12 +917,15 @@ const applyCanonicalSnapshot = (
       padInset: activeView?.padInset ?? 0,
       instances,
       rulers: activeView?.rulers ?? [],
+      shapes,
+      activeCoordinateMode: activeView?.coordinateMode ?? ((activeView?.instances.length ?? 0) > 0 && shapes.length === 0 ? 'centered' : 'origin') as CellViewCoordinateMode,
       pixelArray: activeView?.pixelArray ?? null,
       activeCellId: state.activeCellId,
       openViewIds: ensureOpenViewTab(state.openViewIds, state.activeCellId, snapshot.masterCells),
       viewBreadcrumb,
       history,
       ...selectionAfterInstancesChange(state, instances),
+      selectedShapeId: state.selectedShapeId && shapes.some(s => s.id === state.selectedShapeId) ? state.selectedShapeId : null,
       edgeAlignmentSession: null,
       pendingPixelArraySize: null,
       placementMasterId: null,
@@ -787,6 +935,7 @@ const applyCanonicalSnapshot = (
       pixelArraySelected: false,
     };
   }
+  const rootShapes = snapshot.shapes ?? [];
   return {
     gridSize: snapshot.gridSize,
     topWidth: snapshot.topWidth,
@@ -798,6 +947,8 @@ const applyCanonicalSnapshot = (
     masterCells: snapshot.masterCells,
     instances: snapshot.instances,
     rulers: snapshot.rulers,
+    shapes: rootShapes,
+    activeCoordinateMode: 'origin' as CellViewCoordinateMode,
     pixelArray: snapshot.pixelArray ?? null,
     cellViews,
     activeCellId: null,
@@ -806,6 +957,7 @@ const applyCanonicalSnapshot = (
     rootView: null,
     history,
     ...selectionAfterInstancesChange(state, snapshot.instances),
+    selectedShapeId: state.selectedShapeId && rootShapes.some(s => s.id === state.selectedShapeId) ? state.selectedShapeId : null,
     edgeAlignmentSession: null,
     pendingPixelArraySize: null,
     placementMasterId: null,
@@ -834,6 +986,7 @@ const switchToCellView = (
         padInset: state.padInset,
         instances: state.instances,
         rulers: state.rulers,
+        shapes: state.shapes,
         pixelArray: state.pixelArray,
       }
     : (state.rootView ?? {
@@ -844,12 +997,14 @@ const switchToCellView = (
         padInset: state.padInset,
         instances: state.instances,
         rulers: state.rulers,
+        shapes: state.shapes,
         pixelArray: state.pixelArray,
       });
 
   const resetInteraction = {
     selectedInstanceId: null,
     selectedInstanceIds: [],
+    selectedShapeId: null,
     pixelArraySelected: false,
     edgeAlignmentSession: null,
     placementMasterId: null,
@@ -864,6 +1019,7 @@ const switchToCellView = (
   if (targetCellId === null) {
     return {
       ...savedRoot,
+      activeCoordinateMode: 'origin' as CellViewCoordinateMode,
       cellViews: flushedCellViews,
       activeCellId: null,
       openViewIds,
@@ -875,14 +1031,20 @@ const switchToCellView = (
 
   const targetMaster = state.masterCells[targetCellId];
   const targetView = flushedCellViews[targetCellId];
+  const targetShapes = targetView?.shapes ?? [];
+  const targetInstances = targetView?.instances ?? [];
+  const targetCoordMode: CellViewCoordinateMode = targetView?.coordinateMode
+    ?? (targetInstances.length > 0 && targetShapes.length === 0 ? 'centered' : 'origin');
   return {
     topWidth: targetMaster.width,
     topHeight: targetMaster.height,
     topLibName: targetMaster.libName,
     topCellName: targetMaster.cellName,
     padInset: targetView?.padInset ?? 0,
-    instances: targetView?.instances ?? [],
+    instances: targetInstances,
     rulers: targetView?.rulers ?? [],
+    shapes: targetShapes,
+    activeCoordinateMode: targetCoordMode,
     pixelArray: targetView?.pixelArray ?? null,
     cellViews: flushedCellViews,
     activeCellId: targetCellId,
@@ -931,7 +1093,7 @@ const getAlignable = (state: ProjectState, id: string) => {
   if (!instance) throw new Error('The alignment instance no longer exists');
   const master = state.masterCells[instance.cellId];
   if (!master) throw new Error('The alignment master cell no longer exists');
-  return { ...instance, width: master.width, height: master.height };
+  return { ...instance, width: master.width, height: master.height, originX: master.originX, originY: master.originY };
 };
 
 const alignmentPositionPatch = (
@@ -968,7 +1130,7 @@ export const boundsOverlap = (
  * Pixel Array is intentionally exempt because it is the only cell allowed to overlap.
  */
 export const findOverlappingInstance = (
-  candidate: { id?: string; x: number; y: number; orientation: string; width: number; height: number },
+  candidate: { id?: string; x: number; y: number; orientation: string; width: number; height: number; originX?: number; originY?: number },
   instances: readonly Instance[],
   masterCells: Record<string, Cell>,
   ignoreIds?: ReadonlySet<string>,
@@ -980,6 +1142,8 @@ export const findOverlappingInstance = (
     orientation: candidate.orientation,
     width: candidate.width,
     height: candidate.height,
+    originX: candidate.originX,
+    originY: candidate.originY,
   });
   for (const existing of instances) {
     if (candidate.id && existing.id === candidate.id) continue;
@@ -990,6 +1154,8 @@ export const findOverlappingInstance = (
       ...existing,
       width: master.width,
       height: master.height,
+      originX: master.originX,
+      originY: master.originY,
     });
     if (boundsOverlap(candidateBounds, existingBounds)) {
       return existing;
@@ -1013,7 +1179,13 @@ const assertMovedInstancesDoNotOverlap = (
     if (!master) return [];
     return [{
       inst,
-      bounds: getPhysicalBounds({ ...inst, width: master.width, height: master.height }),
+      bounds: getPhysicalBounds({
+        ...inst,
+        width: master.width,
+        height: master.height,
+        originX: master.originX,
+        originY: master.originY,
+      }),
     }];
   });
   for (let i = 0; i < boxes.length; i += 1) {
@@ -1077,15 +1249,20 @@ const alignmentGroupPositionPatch = (
     if (!master) throw new Error(`The master for ${instance.name} no longer exists`);
     const requestedX = instance.x + deltaX;
     const requestedY = instance.y + deltaY;
-    const checked = clampInstancePosition(
-      requestedX, requestedY, instance.orientation, master.width, master.height,
-      state.topWidth, state.topHeight, state.gridSize,
-    );
+    const checked = state.activeCellId
+      ? { x: snapToGrid(requestedX, state.gridSize), y: snapToGrid(requestedY, state.gridSize) }
+      : clampInstancePosition(
+          requestedX, requestedY, instance.orientation, master.width, master.height,
+          state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0,
+        );
     if (Math.abs(checked.x - requestedX) > 1e-9 || Math.abs(checked.y - requestedY) > 1e-9) {
       throw new RangeError(`Cannot shift the selected group without moving ${instance.name} off-grid or outside the top cell`);
     }
-    if (master.kind === 'pad') {
-      const bounds = getPhysicalBounds({ ...instance, x: checked.x, y: checked.y, width: master.width, height: master.height });
+    if (master.kind === 'pad' && !state.activeCellId) {
+      const bounds = getPhysicalBounds({
+        ...instance, x: checked.x, y: checked.y, width: master.width, height: master.height,
+        originX: master.originX, originY: master.originY,
+      });
       if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
         throw new RangeError(`Cannot shift the group because pad ${instance.name} would leave the top-cell perimeter`);
       }
@@ -1219,6 +1396,8 @@ export const useStore = create<ProjectState>((set) => ({
   masterCells: {},
   instances: [],
   rulers: [],
+  shapes: [],
+  activeCoordinateMode: 'origin',
   pixelArray: null,
   pendingPixelArraySize: null,
   cellViews: {},
@@ -1229,7 +1408,12 @@ export const useStore = create<ProjectState>((set) => ({
   rootView: null,
   selectedInstanceId: null,
   selectedInstanceIds: [],
+  selectedShapeId: null,
   pixelArraySelected: false,
+  activeDrawLayer: 'text',
+  activeDrawPurpose: 'drawing',
+  activeDrawLabel: '',
+  activeDrawColor: '',
   showCreateModal: false,
   showInstantiateModal: false,
   leftSidebarPinned: false,
@@ -1252,7 +1436,8 @@ export const useStore = create<ProjectState>((set) => ({
   setGridSize: (size) => set((state) => {
     if (!Number.isFinite(size) || size <= 0) return state;
     const padInset = normalizePadInset(state.padInset, state.topWidth, state.topHeight, size);
-    const instances = clampInstancesToContainer(state.instances, state.masterCells, state.topWidth, state.topHeight, size, padInset);
+    const instances = clampInstancesToContainer(state.instances, state.masterCells, state.topWidth, state.topHeight, size, padInset, undefined, Boolean(state.activeCellId));
+    const shapes = normalizeShapesForGrid(state.shapes, size);
     const pixelArray = state.pixelArray
       ? normalizePixelArray(state.pixelArray, state.topWidth, state.topHeight, size)
       : null;
@@ -1263,6 +1448,7 @@ export const useStore = create<ProjectState>((set) => ({
         ...state.rootView,
         padInset: rootInset,
         instances: clampInstancesToContainer(state.rootView.instances, state.masterCells, state.rootView.topWidth, state.rootView.topHeight, size, rootInset),
+        shapes: normalizeShapesForGrid(state.rootView.shapes, size),
         pixelArray: state.rootView.pixelArray
           ? normalizePixelArray(state.rootView.pixelArray, state.rootView.topWidth, state.rootView.topHeight, size)
           : null,
@@ -1275,17 +1461,20 @@ export const useStore = create<ProjectState>((set) => ({
       const container = state.masterCells[cellId];
       if (!container) continue;
       const viewInset = normalizePadInset(view.padInset ?? 0, container.width, container.height, size);
-      const viewInstances = clampInstancesToContainer(view.instances, state.masterCells, container.width, container.height, size, viewInset);
+      const isOriginView = view.coordinateMode === 'origin';
+      const viewInstances = clampInstancesToContainer(view.instances, state.masterCells, container.width, container.height, size, viewInset, undefined, isOriginView);
+      const viewShapes = normalizeShapesForGrid(view.shapes ?? [], size);
       const viewPixelArray = view.pixelArray
         ? normalizePixelArray(view.pixelArray, container.width, container.height, size)
         : null;
-      nextCellViews[cellId] = buildCellViewContent(viewInstances, view.rulers, viewPixelArray, viewInset);
+      nextCellViews[cellId] = buildCellViewContent(viewInstances, view.rulers, viewPixelArray, viewInset, viewShapes, view.coordinateMode);
     }
 
     return commitProjectPatch(state, 'Change grid', {
       gridSize: size,
       padInset,
       instances,
+      shapes,
       pixelArray,
       ...(nextRootView !== state.rootView ? { rootView: nextRootView } : {}),
       cellViews: nextCellViews,
@@ -1302,7 +1491,7 @@ export const useStore = create<ProjectState>((set) => ({
       throw new RangeError('Cell width and height must be positive finite numbers');
     }
     const padInset = normalizePadInset(state.padInset, w, h, state.gridSize);
-    const instances = clampInstancesToContainer(state.instances, state.masterCells, w, h, state.gridSize, padInset);
+    const instances = clampInstancesToContainer(state.instances, state.masterCells, w, h, state.gridSize, padInset, undefined, Boolean(state.activeCellId));
     const pixelArray = state.pixelArray
       ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
       : null;
@@ -1326,7 +1515,7 @@ export const useStore = create<ProjectState>((set) => ({
         if (!container) continue;
         nextCellViews[cellId] = {
           ...view,
-          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId),
+          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId, view.coordinateMode === 'origin'),
         };
       }
       return commitProjectPatch(state, `Resize ${masterCells[activeId].cellName}`, {
@@ -1391,7 +1580,7 @@ export const useStore = create<ProjectState>((set) => ({
         ...state.masterCells,
         [activeId]: { ...state.masterCells[activeId], libName: nextLibName, cellName: nextCellName, width: w, height: h },
       };
-      const instances = clampInstancesToContainer(state.instances, masterCells, w, h, state.gridSize, padInset);
+      const instances = clampInstancesToContainer(state.instances, masterCells, w, h, state.gridSize, padInset, undefined, true);
       const pixelArray = state.pixelArray
         ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
         : null;
@@ -1408,7 +1597,7 @@ export const useStore = create<ProjectState>((set) => ({
         if (!container) continue;
         nextCellViews[cellId] = {
           ...view,
-          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId),
+          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId, view.coordinateMode === 'origin'),
         };
       }
       return commitProjectPatch(state, `Update ${nextCellName}`, {
@@ -1687,7 +1876,7 @@ export const useStore = create<ProjectState>((set) => ({
     return switchToCellView(state, targetId, nextBreadcrumb);
   }),
   
-  addMasterCell: (rawLibName, rawCellName, w, h, color, opacity = 0.5, outlineStyle = 'solid', openAfterCreate = false) => set((state) => {
+  addMasterCell: (rawLibName, rawCellName, w, h, color, opacity = 0.5, outlineStyle = 'solid', openAfterCreate = false, autoBounds = false) => set((state) => {
     const rootId = getRootIdentity(state);
     const libName = rawLibName.trim() || rootId.topLibName;
     const cellName = rawCellName.trim();
@@ -1707,7 +1896,7 @@ export const useStore = create<ProjectState>((set) => ({
     const committed = commitProjectPatch(state, `Create ${libName}/${cellName}`, {
       masterCells: {
         ...state.masterCells,
-        [id]: { id, libName, cellName, width: w, height: h, color, ...appearance }
+        [id]: { id, libName, cellName, width: w, height: h, color, ...appearance, ...(autoBounds ? { autoBounds: true } : {}) }
       },
     });
     if (!openAfterCreate) return committed;
@@ -1746,8 +1935,8 @@ export const useStore = create<ProjectState>((set) => ({
       ? normalizePadInset(state.padInset, w, h, state.gridSize)
       : state.padInset;
     const instances = editingActiveView
-      ? clampInstancesToContainer(state.instances, masterCells, w, h, state.gridSize, activePadInset)
-      : clampInstancesToContainer(state.instances, masterCells, state.topWidth, state.topHeight, state.gridSize, state.padInset, id);
+      ? clampInstancesToContainer(state.instances, masterCells, w, h, state.gridSize, activePadInset, undefined, true)
+      : clampInstancesToContainer(state.instances, masterCells, state.topWidth, state.topHeight, state.gridSize, state.padInset, id, Boolean(state.activeCellId));
     const pixelArray = editingActiveView && state.pixelArray
       ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
       : state.pixelArray;
@@ -1764,16 +1953,20 @@ export const useStore = create<ProjectState>((set) => ({
       if (!container) continue;
       if (viewCellId === id) {
         const viewInset = normalizePadInset(view.padInset ?? 0, w, h, state.gridSize);
+        const isOriginView = view.coordinateMode === 'origin';
         nextCellViews[viewCellId] = buildCellViewContent(
-          clampInstancesToContainer(view.instances, masterCells, w, h, state.gridSize, viewInset),
+          clampInstancesToContainer(view.instances, masterCells, w, h, state.gridSize, viewInset, undefined, isOriginView),
           view.rulers,
           view.pixelArray ? normalizePixelArray(view.pixelArray, w, h, state.gridSize) : null,
           viewInset,
+          view.shapes ?? [],
+          view.coordinateMode,
         );
       } else {
+        const isOriginView = view.coordinateMode === 'origin';
         nextCellViews[viewCellId] = {
           ...view,
-          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, id),
+          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, id, isOriginView),
         };
       }
     }
@@ -1819,7 +2012,14 @@ export const useStore = create<ProjectState>((set) => ({
     for (const [viewCellId, view] of Object.entries(flushedViews)) {
       if (viewCellId === id || !newMasterCells[viewCellId]) continue;
       const filteredInstances = view.instances.filter(inst => inst.cellId !== id);
-      const nextView = buildCellViewContent(filteredInstances, view.rulers, view.pixelArray ?? null, view.padInset ?? 0);
+      const nextView = buildCellViewContent(
+        filteredInstances,
+        view.rulers,
+        view.pixelArray ?? null,
+        view.padInset ?? 0,
+        view.shapes ?? [],
+        view.coordinateMode,
+      );
       if (!isEmptyCellView(nextView)) {
         cleanedCellViews[viewCellId] = nextView;
       }
@@ -1844,6 +2044,8 @@ export const useStore = create<ProjectState>((set) => ({
           padInset: state.rootView.padInset,
           instances: rootInstances,
           rulers: state.rootView.rulers,
+          shapes: state.rootView.shapes,
+          activeCoordinateMode: 'origin',
           pixelArray: state.rootView.pixelArray,
           masterCells: newMasterCells,
           cellViews: cleanedCellViews,
@@ -1854,6 +2056,7 @@ export const useStore = create<ProjectState>((set) => ({
         }),
         selectedInstanceId: null,
         selectedInstanceIds: [],
+        selectedShapeId: null,
         pixelArraySelected: false,
         edgeAlignmentSession: null,
         placementMasterId: null,
@@ -1887,6 +2090,200 @@ export const useStore = create<ProjectState>((set) => ({
     };
   }),
 
+  setActiveDrawLpp: (layer, purpose, color = '') => set({
+    activeDrawLayer: layer.trim() || 'text',
+    activeDrawPurpose: purpose.trim() || 'drawing',
+    activeDrawColor: color,
+  }),
+
+  setActiveDrawLabel: (label) => set({ activeDrawLabel: label }),
+
+  setSelectedShape: (id) => set((state) => {
+    if (!id || !state.shapes.some(shape => shape.id === id)) {
+      return { selectedShapeId: null };
+    }
+    return {
+      selectedShapeId: id,
+      selectedInstanceId: null,
+      selectedInstanceIds: [],
+      pixelArraySelected: false,
+      edgeAlignmentSession: null,
+    };
+  }),
+
+  addShape: (rawShape) => {
+    const id = uuidv4();
+    set((state) => {
+      const layer = rawShape.layer.trim() || 'text';
+      const purpose = rawShape.purpose.trim() || 'drawing';
+      if (!Number.isFinite(rawShape.x) || !Number.isFinite(rawShape.y) ||
+          !Number.isFinite(rawShape.width) || !Number.isFinite(rawShape.height)) {
+        throw new RangeError('Rectangle coordinates and dimensions must be finite numbers.');
+      }
+      const x = snapToGrid(rawShape.x, state.gridSize);
+      const y = snapToGrid(rawShape.y, state.gridSize);
+      const width = snapToGrid(rawShape.width, state.gridSize);
+      const height = snapToGrid(rawShape.height, state.gridSize);
+      if (width <= 1e-12 || height <= 1e-12) {
+        throw new RangeError('Rectangle width and height must be positive.');
+      }
+      const shape: LayoutShape = {
+        id,
+        layer,
+        purpose,
+        x: Object.is(x, -0) ? 0 : x,
+        y: Object.is(y, -0) ? 0 : y,
+        width,
+        height,
+        ...(rawShape.color?.trim() ? { color: rawShape.color.trim() } : {}),
+        ...(rawShape.label?.trim() ? { label: rawShape.label.trim() } : {}),
+        ...(rawShape.locked ? { locked: true } : {}),
+      };
+      const shapes = [...state.shapes, shape];
+      const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+      return {
+        ...commitProjectPatch(state, `Draw ${layer}/${purpose} rect`, {
+          shapes,
+          ...(state.activeCellId ? { activeCoordinateMode: 'origin' as CellViewCoordinateMode } : {}),
+          ...(boundsSync ?? {}),
+        }),
+        selectedShapeId: id,
+        selectedInstanceId: null,
+        selectedInstanceIds: [],
+        pixelArraySelected: false,
+      };
+    });
+    return id;
+  },
+
+  updateShape: (id, patch) => set((state) => {
+    const existing = state.shapes.find(s => s.id === id);
+    if (!existing) return state;
+    if (existing.locked && patch.locked === undefined) {
+      throw new Error('This shape is locked. Unlock it before editing.');
+    }
+    const nextLayer = patch.layer !== undefined ? (patch.layer.trim() || existing.layer) : existing.layer;
+    const nextPurpose = patch.purpose !== undefined ? (patch.purpose.trim() || existing.purpose) : existing.purpose;
+    const rawX = patch.x !== undefined ? patch.x : existing.x;
+    const rawY = patch.y !== undefined ? patch.y : existing.y;
+    const rawW = patch.width !== undefined ? patch.width : existing.width;
+    const rawH = patch.height !== undefined ? patch.height : existing.height;
+    if (!Number.isFinite(rawX) || !Number.isFinite(rawY) || !Number.isFinite(rawW) || !Number.isFinite(rawH)) {
+      throw new RangeError('Rectangle coordinates and dimensions must be finite numbers.');
+    }
+    const x = snapToGrid(rawX, state.gridSize);
+    const y = snapToGrid(rawY, state.gridSize);
+    const width = snapToGrid(rawW, state.gridSize);
+    const height = snapToGrid(rawH, state.gridSize);
+    if (width <= 1e-12 || height <= 1e-12) {
+      throw new RangeError('Rectangle width and height must be positive.');
+    }
+    const nextColor = patch.color !== undefined ? patch.color.trim() : existing.color;
+    const nextLabel = patch.label !== undefined ? patch.label.trim() : existing.label;
+    const nextLocked = patch.locked !== undefined ? patch.locked : existing.locked;
+    const updated: LayoutShape = {
+      id: existing.id,
+      layer: nextLayer,
+      purpose: nextPurpose,
+      x: Object.is(x, -0) ? 0 : x,
+      y: Object.is(y, -0) ? 0 : y,
+      width,
+      height,
+      ...(nextColor ? { color: nextColor } : {}),
+      ...(nextLabel ? { label: nextLabel } : {}),
+      ...(nextLocked ? { locked: true } : {}),
+    };
+    const shapes = state.shapes.map(s => (s.id === id ? updated : s));
+    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+    return commitProjectPatch(state, `Edit ${nextLayer}/${nextPurpose} rect`, {
+      shapes,
+      ...(boundsSync ?? {}),
+    });
+  }),
+
+  deleteShape: (id) => set((state) => {
+    const existing = state.shapes.find(s => s.id === id);
+    if (!existing) return state;
+    if (existing.locked) {
+      throw new Error('This shape is locked. Unlock it before deleting.');
+    }
+    const shapes = state.shapes.filter(s => s.id !== id);
+    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+    return {
+      ...commitProjectPatch(state, `Delete ${existing.layer}/${existing.purpose} rect`, {
+        shapes,
+        ...(boundsSync ?? {}),
+      }),
+      selectedShapeId: state.selectedShapeId === id ? null : state.selectedShapeId,
+    };
+  }),
+
+  toggleShapeLock: (id) => set((state) => {
+    const existing = state.shapes.find(s => s.id === id);
+    if (!existing) return state;
+    const shouldLock = !existing.locked;
+    const shapes = state.shapes.map(s => {
+      if (s.id !== id) return s;
+      if (shouldLock) return { ...s, locked: true };
+      const unlocked = { ...s };
+      delete unlocked.locked;
+      return unlocked;
+    });
+    return commitProjectPatch(state, `${shouldLock ? 'Lock' : 'Unlock'} ${existing.layer}/${existing.purpose} rect`, { shapes });
+  }),
+
+  nudgeSelectedShape: (dx, dy) => set((state) => {
+    if (!state.selectedShapeId) return state;
+    const existing = state.shapes.find(s => s.id === state.selectedShapeId);
+    if (!existing || existing.locked) return state;
+    const nextX = snapToGrid(existing.x + dx, state.gridSize);
+    const nextY = snapToGrid(existing.y + dy, state.gridSize);
+    const shapes = state.shapes.map(s => (
+      s.id === existing.id
+        ? { ...s, x: Object.is(nextX, -0) ? 0 : nextX, y: Object.is(nextY, -0) ? 0 : nextY }
+        : s
+    ));
+    const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray);
+    return commitProjectPatch(state, `Nudge ${existing.layer}/${existing.purpose} rect`, {
+      shapes,
+      ...(boundsSync ?? {}),
+    });
+  }),
+
+  fitActiveCellBoundsToContents: () => set((state) => {
+    if (!state.activeCellId) return state;
+    const boundsSync = syncMasterBoundsForActiveCell(state, state.shapes, state.instances, state.pixelArray, true);
+    if (!boundsSync) return state;
+    return commitProjectPatch(state, `Fit ${state.topCellName} bounds to contents`, boundsSync);
+  }),
+
+  setCellAutoBounds: (cellId, autoBounds) => set((state) => {
+    const existing = state.masterCells[cellId];
+    if (!existing) return state;
+    const nextMaster: Cell = { ...existing };
+    if (autoBounds) nextMaster.autoBounds = true;
+    else delete nextMaster.autoBounds;
+    let nextMasterCells = { ...state.masterCells, [cellId]: nextMaster };
+    let extra: { topWidth?: number; topHeight?: number } = {};
+    if (autoBounds && state.activeCellId === cellId) {
+      const synced = syncMasterBoundsForActiveCell(
+        { ...state, masterCells: nextMasterCells },
+        state.shapes,
+        state.instances,
+        state.pixelArray,
+        true,
+      );
+      if (synced) {
+        nextMasterCells = synced.masterCells;
+        extra = { topWidth: synced.topWidth, topHeight: synced.topHeight };
+      }
+    }
+    return commitProjectPatch(state, `${autoBounds ? 'Enable' : 'Disable'} auto-fit bounds on ${existing.cellName}`, {
+      masterCells: nextMasterCells,
+      ...extra,
+    });
+  }),
+
   placeInstance: (cellId, targetX = 0, targetY = 0, orientation = 'R0', customName) => set((state) => {
     const master = state.masterCells[cellId];
     if (!master) return state;
@@ -1898,12 +2295,18 @@ export const useStore = create<ProjectState>((set) => ({
     }
 
     const effectiveOrientation = orientation;
-    const clamped = master.kind === 'pad'
-      ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, effectiveOrientation, state.padInset)
-      : clampInstancePosition(targetX, targetY, effectiveOrientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+    const isSubCellCanvas = state.activeCellId !== null;
+    const clamped = isSubCellCanvas
+      ? {
+          x: Object.is(snapToGrid(targetX, state.gridSize), -0) ? 0 : snapToGrid(targetX, state.gridSize),
+          y: Object.is(snapToGrid(targetY, state.gridSize), -0) ? 0 : snapToGrid(targetY, state.gridSize),
+        }
+      : master.kind === 'pad'
+        ? snapPadToNearestEdge(targetX, targetY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, effectiveOrientation, state.padInset)
+        : clampInstancePosition(targetX, targetY, effectiveOrientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
 
     const blocker = findOverlappingInstance(
-      { x: clamped.x, y: clamped.y, orientation: effectiveOrientation, width: master.width, height: master.height },
+      { x: clamped.x, y: clamped.y, orientation: effectiveOrientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY },
       state.instances,
       state.masterCells,
     );
@@ -1936,10 +2339,17 @@ export const useStore = create<ProjectState>((set) => ({
       orientation: effectiveOrientation,
     };
     const instances = [...state.instances, newInst];
+    const boundsSync = isSubCellCanvas
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
     return {
-      ...commitProjectPatch(state, `Place ${newInst.name}`, { instances }),
+      ...commitProjectPatch(state, `Place ${newInst.name}`, {
+        instances,
+        ...(boundsSync ?? {}),
+      }),
       selectedInstanceId: master.kind === 'pad' ? null : newInst.id,
       selectedInstanceIds: master.kind === 'pad' ? [] : [newInst.id],
+      selectedShapeId: null,
       pixelArraySelected: false,
       // Cadence keeps placement mode active so you can place multiple. We won't change appMode.
     };
@@ -1967,17 +2377,23 @@ export const useStore = create<ProjectState>((set) => ({
     const usedNames = new Set(instances.map(i => i.name));
     const prefix = config.namePrefix?.trim() ?? '';
     const newIds: string[] = [];
+    const isSubCellCanvas = state.activeCellId !== null;
 
     for (let r = 0; r < rows; r += 1) {
       for (let c = 0; c < cols; c += 1) {
         const reqX = originX + c * config.deltaX;
         const reqY = originY + r * config.deltaY;
-        const placed = master.kind === 'pad'
-          ? snapPadToNearestEdge(reqX, reqY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset)
-          : clampInstancePosition(reqX, reqY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+        const placed = isSubCellCanvas
+          ? {
+              x: Object.is(snapToGrid(reqX, state.gridSize), -0) ? 0 : snapToGrid(reqX, state.gridSize),
+              y: Object.is(snapToGrid(reqY, state.gridSize), -0) ? 0 : snapToGrid(reqY, state.gridSize),
+            }
+          : master.kind === 'pad'
+            ? snapPadToNearestEdge(reqX, reqY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset)
+            : clampInstancePosition(reqX, reqY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
 
         const blocker = findOverlappingInstance(
-          { x: placed.x, y: placed.y, orientation, width: master.width, height: master.height },
+          { x: placed.x, y: placed.y, orientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY },
           instances,
           state.masterCells,
         );
@@ -2014,10 +2430,18 @@ export const useStore = create<ProjectState>((set) => ({
       }
     }
 
+    const boundsSync = isSubCellCanvas
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+
     return {
-      ...commitProjectPatch(state, `Place ${rows}×${cols} ${master.cellName}`, { instances }),
+      ...commitProjectPatch(state, `Place ${rows}×${cols} ${master.cellName}`, {
+        instances,
+        ...(boundsSync ?? {}),
+      }),
       selectedInstanceId: master.kind === 'pad' ? null : (newIds.at(-1) ?? null),
       selectedInstanceIds: master.kind === 'pad' ? [] : newIds,
+      selectedShapeId: null,
       pixelArraySelected: false,
     };
   }),
@@ -2355,6 +2779,7 @@ export const useStore = create<ProjectState>((set) => ({
   }),
 
   updateInstancePosition: (instanceId, x, y) => set((state) => {
+    const isSubCellCanvas = state.activeCellId !== null;
     const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
         if (inst.locked) {
@@ -2362,21 +2787,26 @@ export const useStore = create<ProjectState>((set) => ({
         }
         const master = state.masterCells[inst.cellId];
         if (!master) return inst;
-        const nextPos = master.kind === 'pad'
-          ? snapPadToNearestEdge(
-              x,
-              y,
-              master.width,
-              master.height,
-              state.topWidth,
-              state.topHeight,
-              state.gridSize,
-              inst.orientation,
-              state.padInset,
-            )
-          : clampInstancePosition(x, y, inst.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+        const nextPos = isSubCellCanvas
+          ? {
+              x: Object.is(snapToGrid(x, state.gridSize), -0) ? 0 : snapToGrid(x, state.gridSize),
+              y: Object.is(snapToGrid(y, state.gridSize), -0) ? 0 : snapToGrid(y, state.gridSize),
+            }
+          : master.kind === 'pad'
+            ? snapPadToNearestEdge(
+                x,
+                y,
+                master.width,
+                master.height,
+                state.topWidth,
+                state.topHeight,
+                state.gridSize,
+                inst.orientation,
+                state.padInset,
+              )
+            : clampInstancePosition(x, y, inst.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
         const blocker = findOverlappingInstance(
-          { id: inst.id, x: nextPos.x, y: nextPos.y, orientation: inst.orientation, width: master.width, height: master.height },
+          { id: inst.id, x: nextPos.x, y: nextPos.y, orientation: inst.orientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY },
           state.instances,
           state.masterCells,
         );
@@ -2389,7 +2819,13 @@ export const useStore = create<ProjectState>((set) => ({
       }
       return inst;
     });
-    return commitProjectPatch(state, `Move ${state.instances.find(instance => instance.id === instanceId)?.name ?? 'instance'}`, { instances });
+    const boundsSync = isSubCellCanvas
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    return commitProjectPatch(state, `Move ${state.instances.find(instance => instance.id === instanceId)?.name ?? 'instance'}`, {
+      instances,
+      ...(boundsSync ?? {}),
+    });
   }),
 
   moveInstancesByDelta: (instanceIds, deltaX, deltaY) => set((state) => {
@@ -2401,6 +2837,7 @@ export const useStore = create<ProjectState>((set) => ({
     const snappedDy = snapToGrid(deltaY, state.gridSize);
     if (Math.abs(snappedDx) <= 1e-12 && Math.abs(snappedDy) <= 1e-12) return state;
     const idSet = new Set(instanceIds);
+    const isSubCellCanvas = state.activeCellId !== null;
     const instances = state.instances.map(inst => {
       if (!idSet.has(inst.id)) return inst;
       if (inst.locked) {
@@ -2410,6 +2847,13 @@ export const useStore = create<ProjectState>((set) => ({
       if (!master) return inst;
       const requestedX = snapToGrid(inst.x + snappedDx, state.gridSize);
       const requestedY = snapToGrid(inst.y + snappedDy, state.gridSize);
+      if (isSubCellCanvas) {
+        return {
+          ...inst,
+          x: Object.is(requestedX, -0) ? 0 : requestedX,
+          y: Object.is(requestedY, -0) ? 0 : requestedY,
+        };
+      }
       const checked = clampInstancePosition(
         requestedX,
         requestedY,
@@ -2419,12 +2863,17 @@ export const useStore = create<ProjectState>((set) => ({
         state.topWidth,
         state.topHeight,
         state.gridSize,
+        master.originX ?? 0,
+        master.originY ?? 0,
       );
       if (Math.abs(checked.x - requestedX) > 1e-9 || Math.abs(checked.y - requestedY) > 1e-9) {
         throw new RangeError(`Cannot move the selected group without placing ${inst.name} outside the top cell`);
       }
       if (master.kind === 'pad') {
-        const bounds = getPhysicalBounds({ ...inst, x: checked.x, y: checked.y, width: master.width, height: master.height });
+        const bounds = getPhysicalBounds({
+          ...inst, x: checked.x, y: checked.y, width: master.width, height: master.height,
+          originX: master.originX, originY: master.originY,
+        });
         if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
           throw new RangeError(`Cannot move the group because pad ${inst.name} would leave the pad perimeter`);
         }
@@ -2432,7 +2881,13 @@ export const useStore = create<ProjectState>((set) => ({
       return { ...inst, x: checked.x, y: checked.y };
     });
     assertMovedInstancesDoNotOverlap(instances, state.masterCells, idSet, 'move selection');
-    return commitProjectPatch(state, `Move ${instanceIds.length} block${instanceIds.length === 1 ? '' : 's'}`, { instances });
+    const boundsSync = isSubCellCanvas
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    return commitProjectPatch(state, `Move ${instanceIds.length} block${instanceIds.length === 1 ? '' : 's'}`, {
+      instances,
+      ...(boundsSync ?? {}),
+    });
   }),
 
   renameInstance: (instanceId, rawName) => set((state) => {
@@ -2471,6 +2926,7 @@ export const useStore = create<ProjectState>((set) => ({
   }),
   
   updateInstanceOrientation: (instanceId, orientation) => set((state) => {
+    const isSubCellCanvas = state.activeCellId !== null;
     const instances = state.instances.map(inst => {
       if (inst.id === instanceId) {
         if (inst.locked) {
@@ -2478,15 +2934,20 @@ export const useStore = create<ProjectState>((set) => ({
         }
         const master = state.masterCells[inst.cellId];
         if (!master) return inst;
-        const currentBounds = getPhysicalBounds({ ...inst, width: master.width, height: master.height });
-        const nextLocalBounds = getPhysicalBounds({ ...inst, x: 0, y: 0, orientation, width: master.width, height: master.height });
+        const currentBounds = getPhysicalBounds({ ...inst, width: master.width, height: master.height, originX: master.originX, originY: master.originY });
+        const nextLocalBounds = getPhysicalBounds({ ...inst, x: 0, y: 0, orientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY });
         const centeredX = currentBounds.centerX - nextLocalBounds.centerX;
         const centeredY = currentBounds.centerY - nextLocalBounds.centerY;
-        const clamped = master.kind === 'pad'
-          ? snapPadToNearestEdge(centeredX, centeredY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset)
-          : clampInstancePosition(centeredX, centeredY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+        const clamped = isSubCellCanvas
+          ? {
+              x: Object.is(snapToGrid(centeredX, state.gridSize), -0) ? 0 : snapToGrid(centeredX, state.gridSize),
+              y: Object.is(snapToGrid(centeredY, state.gridSize), -0) ? 0 : snapToGrid(centeredY, state.gridSize),
+            }
+          : master.kind === 'pad'
+            ? snapPadToNearestEdge(centeredX, centeredY, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, orientation, state.padInset)
+            : clampInstancePosition(centeredX, centeredY, orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
         const blocker = findOverlappingInstance(
-          { id: inst.id, x: clamped.x, y: clamped.y, orientation, width: master.width, height: master.height },
+          { id: inst.id, x: clamped.x, y: clamped.y, orientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY },
           state.instances,
           state.masterCells,
         );
@@ -2499,16 +2960,22 @@ export const useStore = create<ProjectState>((set) => ({
       }
       return inst;
     });
-    return commitProjectPatch(state, `Orient ${state.instances.find(instance => instance.id === instanceId)?.name ?? 'instance'}`, { instances });
+    const boundsSync = isSubCellCanvas
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    return commitProjectPatch(state, `Orient ${state.instances.find(instance => instance.id === instanceId)?.name ?? 'instance'}`, {
+      instances,
+      ...(boundsSync ?? {}),
+    });
   }),
 
   setSelectedInstance: (id, additive = false) => set((state) => {
-    if (!id) return { selectedInstanceId: null, selectedInstanceIds: [], pixelArraySelected: false };
+    if (!id) return { selectedInstanceId: null, selectedInstanceIds: [], selectedShapeId: null, pixelArraySelected: false };
     if (!additive) {
       if (state.selectedInstanceIds.length > 1 && state.selectedInstanceIds.includes(id)) {
-        return { selectedInstanceId: id, pixelArraySelected: false };
+        return { selectedInstanceId: id, selectedShapeId: null, pixelArraySelected: false };
       }
-      return { selectedInstanceId: id, selectedInstanceIds: [id], pixelArraySelected: false };
+      return { selectedInstanceId: id, selectedInstanceIds: [id], selectedShapeId: null, pixelArraySelected: false };
     }
 
     const isSelected = state.selectedInstanceIds.includes(id);
@@ -2520,6 +2987,7 @@ export const useStore = create<ProjectState>((set) => ({
       selectedInstanceId: isSelected
         ? (state.selectedInstanceId === id ? selectedInstanceIds.at(-1) ?? null : state.selectedInstanceId)
         : id,
+      selectedShapeId: null,
       pixelArraySelected: false,
     };
   }),
@@ -2527,25 +2995,33 @@ export const useStore = create<ProjectState>((set) => ({
   setSelection: (ids) => set({
     selectedInstanceIds: ids,
     selectedInstanceId: ids.at(-1) ?? null,
+    selectedShapeId: null,
     pixelArraySelected: false,
   }),
 
 
   setPixelArraySelected: (selected) => set((state) => ({
     pixelArraySelected: Boolean(selected && state.pixelArray?.visible),
-    ...(selected ? { selectedInstanceId: null, selectedInstanceIds: [] } : {}),
+    ...(selected ? { selectedInstanceId: null, selectedInstanceIds: [], selectedShapeId: null } : {}),
   })),
 
   selectAllInstances: () => set((state) => ({
     selectedInstanceIds: state.instances.map(instance => instance.id),
     selectedInstanceId: state.instances.at(-1)?.id ?? null,
+    selectedShapeId: null,
     pixelArraySelected: false,
   })),
 
   deleteInstance: (id) => set((state) => {
     const instances = state.instances.filter(inst => inst.id !== id);
+    const boundsSync = state.activeCellId
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
     return {
-      ...commitProjectPatch(state, `Delete ${state.instances.find(instance => instance.id === id)?.name ?? 'instance'}`, { instances }),
+      ...commitProjectPatch(state, `Delete ${state.instances.find(instance => instance.id === id)?.name ?? 'instance'}`, {
+        instances,
+        ...(boundsSync ?? {}),
+      }),
       ...selectionAfterInstancesChange(state, instances),
       edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, instances),
     };
@@ -2557,8 +3033,14 @@ export const useStore = create<ProjectState>((set) => ({
     const removableCount = state.instances.filter(instance => selectedIds.has(instance.id) && !instance.locked).length;
     if (removableCount === 0) return state;
     const instances = state.instances.filter(instance => !(selectedIds.has(instance.id) && !instance.locked));
+    const boundsSync = state.activeCellId
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
     return {
-      ...commitProjectPatch(state, `Delete ${removableCount} block${removableCount === 1 ? '' : 's'}`, { instances }),
+      ...commitProjectPatch(state, `Delete ${removableCount} block${removableCount === 1 ? '' : 's'}`, {
+        instances,
+        ...(boundsSync ?? {}),
+      }),
       ...selectionAfterInstancesChange(state, instances),
       edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, instances),
     };
@@ -2567,6 +3049,7 @@ export const useStore = create<ProjectState>((set) => ({
   nudgeSelection: (dx, dy) => set((state) => {
     if (state.selectedInstanceIds.length === 0) return state;
     const selectedIds = new Set(state.selectedInstanceIds);
+    const isSubCellCanvas = state.activeCellId !== null;
     let error = false;
     const instances = state.instances.map(inst => {
       if (!selectedIds.has(inst.id)) return inst;
@@ -2579,6 +3062,13 @@ export const useStore = create<ProjectState>((set) => ({
       try {
         const requestedX = snapToGrid(inst.x + dx, state.gridSize);
         const requestedY = snapToGrid(inst.y + dy, state.gridSize);
+        if (isSubCellCanvas) {
+          return {
+            ...inst,
+            x: Object.is(requestedX, -0) ? 0 : requestedX,
+            y: Object.is(requestedY, -0) ? 0 : requestedY,
+          };
+        }
         const clamped = clampInstancePosition(
           requestedX,
           requestedY,
@@ -2588,13 +3078,18 @@ export const useStore = create<ProjectState>((set) => ({
           state.topWidth,
           state.topHeight,
           state.gridSize,
+          master.originX ?? 0,
+          master.originY ?? 0,
         );
         if (Math.abs(clamped.x - requestedX) > 1e-9 || Math.abs(clamped.y - requestedY) > 1e-9) {
           error = true;
           return inst;
         }
         if (master.kind === 'pad') {
-          const bounds = getPhysicalBounds({ ...inst, x: clamped.x, y: clamped.y, width: master.width, height: master.height });
+          const bounds = getPhysicalBounds({
+            ...inst, x: clamped.x, y: clamped.y, width: master.width, height: master.height,
+            originX: master.originX, originY: master.originY,
+          });
           if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
             error = true;
             return inst;
@@ -2612,7 +3107,13 @@ export const useStore = create<ProjectState>((set) => ({
     } catch {
       return state; // Cancel nudge atomically if any block would overlap another cell
     }
-    return commitProjectPatch(state, `Nudge ${state.selectedInstanceIds.length} block${state.selectedInstanceIds.length === 1 ? '' : 's'}`, { instances });
+    const boundsSync = isSubCellCanvas
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    return commitProjectPatch(state, `Nudge ${state.selectedInstanceIds.length} block${state.selectedInstanceIds.length === 1 ? '' : 's'}`, {
+      instances,
+      ...(boundsSync ?? {}),
+    });
   }),
 
   copySelection: () => set((state) => {
@@ -2643,7 +3144,7 @@ export const useStore = create<ProjectState>((set) => ({
         name: getNextInstanceName(instances),
       };
       
-      const bounds = getPhysicalBounds({ ...item, width: master.width, height: master.height });
+      const bounds = getPhysicalBounds({ ...item, width: master.width, height: master.height, originX: master.originX, originY: master.originY });
       const stepX = Math.max(offset, bounds.right - bounds.left + offset);
       const stepY = Math.max(offset, bounds.top - bounds.bottom + offset);
       const candidateOffsets: Array<[number, number]> = [
@@ -2659,14 +3160,20 @@ export const useStore = create<ProjectState>((set) => ({
         [0, -stepY * 2],
       ];
 
+      const isSubCellCanvas = state.activeCellId !== null;
       let placedPos: { x: number; y: number } | null = null;
       for (const [dx, dy] of candidateOffsets) {
         try {
-          const clamped = master.kind === 'pad'
-            ? snapPadToNearestEdge(item.x + dx, item.y + dy, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset)
-            : clampInstancePosition(item.x + dx, item.y + dy, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize);
+          const clamped = isSubCellCanvas
+            ? {
+                x: Object.is(snapToGrid(item.x + dx, state.gridSize), -0) ? 0 : snapToGrid(item.x + dx, state.gridSize),
+                y: Object.is(snapToGrid(item.y + dy, state.gridSize), -0) ? 0 : snapToGrid(item.y + dy, state.gridSize),
+              }
+            : master.kind === 'pad'
+              ? snapPadToNearestEdge(item.x + dx, item.y + dy, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset)
+              : clampInstancePosition(item.x + dx, item.y + dy, item.orientation, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, master.originX ?? 0, master.originY ?? 0);
           const blocker = findOverlappingInstance(
-            { x: clamped.x, y: clamped.y, orientation: item.orientation, width: master.width, height: master.height },
+            { x: clamped.x, y: clamped.y, orientation: item.orientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY },
             instances,
             state.masterCells,
           );
@@ -2727,7 +3234,7 @@ export const useStore = create<ProjectState>((set) => ({
       if (!selectedIds.has(instance.id)) return [];
       const master = state.masterCells[instance.cellId];
       if (!master) return [];
-      return [{ ...instance, width: master.width, height: master.height }];
+      return [{ ...instance, width: master.width, height: master.height, originX: master.originX, originY: master.originY }];
     });
     if (selected.length < 2) return state;
     const positions = alignInstances(selected, operation, {
@@ -2745,7 +3252,10 @@ export const useStore = create<ProjectState>((set) => ({
       }
       const master = state.masterCells[instance.cellId];
       if (master?.kind === 'pad') {
-        const bounds = getPhysicalBounds({ ...instance, x: position.x, y: position.y, width: master.width, height: master.height });
+        const bounds = getPhysicalBounds({
+          ...instance, x: position.x, y: position.y, width: master.width, height: master.height,
+          originX: master.originX, originY: master.originY,
+        });
         if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
           throw new RangeError(`Cannot align because pad ${instance.name} would leave the top-cell perimeter`);
         }
@@ -2926,7 +3436,7 @@ export const useStore = create<ProjectState>((set) => ({
       if (!selectedIds.has(instance.id)) return [];
       const master = state.masterCells[instance.cellId];
       if (!master) return [];
-      return [{ ...instance, width: master.width, height: master.height }];
+      return [{ ...instance, width: master.width, height: master.height, originX: master.originX, originY: master.originY }];
     });
     if (selected.length < 3) return state;
     const positions = distributeInstances(selected, axis, {
@@ -2943,7 +3453,10 @@ export const useStore = create<ProjectState>((set) => ({
       }
       const master = state.masterCells[instance.cellId];
       if (master?.kind === 'pad') {
-        const bounds = getPhysicalBounds({ ...instance, x: position.x, y: position.y, width: master.width, height: master.height });
+        const bounds = getPhysicalBounds({
+          ...instance, x: position.x, y: position.y, width: master.width, height: master.height,
+          originX: master.originX, originY: master.originY,
+        });
         if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
           throw new RangeError(`Cannot distribute because pad ${instance.name} would leave the top-cell perimeter`);
         }
@@ -2972,6 +3485,7 @@ export const useStore = create<ProjectState>((set) => ({
       { ...master, libName: master.libName?.trim() || topLibName },
     ]));
     const instances = clampInstancesToContainer(data.instances ?? [], masterCells, topWidth, topHeight, gridSize, padInset);
+    const shapes = normalizeShapesForGrid(data.shapes ?? [], gridSize);
     const pixelArray = data.pixelArray
       ? normalizePixelArray(data.pixelArray, topWidth, topHeight, gridSize)
       : null;
@@ -2980,11 +3494,13 @@ export const useStore = create<ProjectState>((set) => ({
       const container = masterCells[cellId];
       if (!container) continue;
       const viewInset = normalizePadInset(rawView.padInset ?? 0, container.width, container.height, gridSize);
-      const viewInstances = clampInstancesToContainer(rawView.instances ?? [], masterCells, container.width, container.height, gridSize, viewInset);
+      const isOriginView = rawView.coordinateMode === 'origin';
+      const viewInstances = clampInstancesToContainer(rawView.instances ?? [], masterCells, container.width, container.height, gridSize, viewInset, undefined, isOriginView);
+      const viewShapes = normalizeShapesForGrid(rawView.shapes ?? [], gridSize);
       const viewPixelArray = rawView.pixelArray
         ? normalizePixelArray(rawView.pixelArray, container.width, container.height, gridSize)
         : null;
-      const normalized = buildCellViewContent(viewInstances, rawView.rulers ?? [], viewPixelArray, viewInset);
+      const normalized = buildCellViewContent(viewInstances, rawView.rulers ?? [], viewPixelArray, viewInset, viewShapes, rawView.coordinateMode);
       if (!isEmptyCellView(normalized)) {
         loadedCellViews[cellId] = normalized;
       }
@@ -3002,6 +3518,8 @@ export const useStore = create<ProjectState>((set) => ({
       masterCells,
       instances,
       rulers: data.rulers ?? [],
+      shapes,
+      activeCoordinateMode: 'origin',
       pixelArray,
       cellViews: loadedCellViews,
       activeCellId: null,
@@ -3017,6 +3535,7 @@ export const useStore = create<ProjectState>((set) => ({
       edgeAlignmentSession: null,
       selectedInstanceId: null,
       selectedInstanceIds: [],
+      selectedShapeId: null,
       pixelArraySelected: false,
       appMode: 'select',
     };

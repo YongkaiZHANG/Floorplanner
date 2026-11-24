@@ -1,6 +1,7 @@
 import type { Cell, Instance, PixelArray, Ruler } from './useStore.ts';
 import { getTopologicalCellOrder } from '../utils/hierarchy.ts';
 import type { CellViewContent } from '../utils/hierarchy.ts';
+import type { LayoutShape } from '../utils/layoutLayers.ts';
 
 export const PROJECT_FILE_VERSION = 1 as const;
 export const PROJECT_RECOVERY_KEY = 'ic-floorplanner:recovery:v1';
@@ -14,6 +15,8 @@ export type ProjectSnapshot = {
   masterCells: Record<string, Cell>;
   instances: Instance[];
   rulers: Ruler[];
+  /** Optional drawn layout shapes (rectangles on Virtuoso layer/purpose pairs) in the Top Cell. */
+  shapes?: LayoutShape[];
   pixelArray?: PixelArray | null;
   /** Optional seal-ring / edge margin (um) from the top-cell outer boundary to edge pads. */
   padInset?: number;
@@ -80,6 +83,23 @@ const assertRulers = (rawRulers: unknown[]): Ruler[] => {
   });
 };
 
+const assertShapes = (rawShapes: unknown[]): LayoutShape[] => {
+  const shapeIds = new Set<string>();
+  return rawShapes.map((raw, index) => {
+    if (!isRecord(raw) || !nonEmptyString(raw.id) || !nonEmptyString(raw.layer) ||
+        !nonEmptyString(raw.purpose) || !finite(raw.x) || !finite(raw.y) ||
+        !finite(raw.width) || raw.width <= 0 || !finite(raw.height) || raw.height <= 0 ||
+        (raw.color !== undefined && typeof raw.color !== 'string') ||
+        (raw.label !== undefined && typeof raw.label !== 'string') ||
+        (raw.locked !== undefined && typeof raw.locked !== 'boolean')) {
+      throw new Error(`Invalid layout shape at index ${index}.`);
+    }
+    if (shapeIds.has(raw.id)) throw new Error(`Duplicate shape id: ${raw.id}.`);
+    shapeIds.add(raw.id);
+    return raw as LayoutShape;
+  });
+};
+
 const assertPixelArray = (raw: unknown, containerWidth: number, containerHeight: number): PixelArray => {
   if (!isRecord(raw) || !finite(raw.x) || !finite(raw.y) ||
       !finite(raw.width) || raw.width <= 0 || raw.width >= containerWidth ||
@@ -115,6 +135,9 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     if (!isRecord(raw) || raw.id !== key || !nonEmptyString(raw.libName) ||
         !nonEmptyString(raw.cellName) || !finite(raw.width) || raw.width <= 0 ||
         !finite(raw.height) || raw.height <= 0 || !nonEmptyString(raw.color) ||
+        (raw.originX !== undefined && !finite(raw.originX)) ||
+        (raw.originY !== undefined && !finite(raw.originY)) ||
+        (raw.autoBounds !== undefined && typeof raw.autoBounds !== 'boolean') ||
         (raw.kind !== undefined && raw.kind !== 'ip' && raw.kind !== 'pad') ||
         (raw.opacity !== undefined && (!finite(raw.opacity) || raw.opacity < 0 || raw.opacity > 1)) ||
         (raw.outlineStyle !== undefined && !['solid', 'dashed', 'dotted', 'none'].includes(String(raw.outlineStyle)))) {
@@ -125,6 +148,13 @@ const assertProject = (value: unknown): ProjectSnapshot => {
 
   const instances = assertInstances(value.instances, masterCells);
   const rulers = assertRulers(value.rulers);
+
+  let shapes: LayoutShape[] | undefined;
+  if (value.shapes !== undefined) {
+    if (!Array.isArray(value.shapes)) throw new Error('Shapes must be an array.');
+    const parsedShapes = assertShapes(value.shapes);
+    if (parsedShapes.length > 0) shapes = parsedShapes;
+  }
 
   let pixelArray: PixelArray | null = null;
   if (value.pixelArray !== undefined && value.pixelArray !== null) {
@@ -164,6 +194,15 @@ const assertProject = (value: unknown): ProjectSnapshot => {
       }
       const viewInstances = assertInstances(rawView.instances, masterCells);
       const viewRulers = assertRulers(rawView.rulers);
+      let viewShapes: LayoutShape[] | undefined;
+      if (rawView.shapes !== undefined) {
+        if (!Array.isArray(rawView.shapes)) throw new Error(`Invalid shapes in cell view ${master.cellName}.`);
+        const parsed = assertShapes(rawView.shapes);
+        if (parsed.length > 0) viewShapes = parsed;
+      }
+      if (rawView.coordinateMode !== undefined && rawView.coordinateMode !== 'origin' && rawView.coordinateMode !== 'centered') {
+        throw new Error(`Invalid coordinateMode in cell view ${master.cellName}.`);
+      }
       const viewPixelArray = rawView.pixelArray !== undefined && rawView.pixelArray !== null
         ? assertPixelArray(rawView.pixelArray, master.width, master.height)
         : undefined;
@@ -173,6 +212,8 @@ const assertProject = (value: unknown): ProjectSnapshot => {
       parsedViews[cellId] = {
         instances: viewInstances,
         rulers: viewRulers,
+        ...(viewShapes ? { shapes: viewShapes } : {}),
+        ...(rawView.coordinateMode ? { coordinateMode: rawView.coordinateMode } : {}),
         ...(rawView.pixelArray === undefined ? {} : { pixelArray: viewPixelArray ?? null }),
         ...(viewPadInset === undefined ? {} : { padInset: viewPadInset }),
       };
@@ -192,6 +233,7 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     masterCells,
     instances,
     rulers,
+    ...(shapes === undefined ? {} : { shapes }),
     ...(value.pixelArray === undefined ? {} : { pixelArray }),
     ...(padInset === undefined ? {} : { padInset }),
     ...(libraries === undefined ? {} : { libraries }),
