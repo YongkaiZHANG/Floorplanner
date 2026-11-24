@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { alignInstanceToCoordinate, alignInstanceToTarget, alignInstances, distributeInstances, getAlignmentEdgeAxis, getEdgeCoordinate, getPhysicalBounds } from '../utils/alignment.ts';
-import type { AlignmentEdge, AlignmentOperation, CadenceOrientation, DistributionAxis } from '../utils/alignment.ts';
+import { alignInstanceToCoordinate, alignInstanceToTarget, alignInstances, distributeInstances, getAlignmentEdgeAxis, getEdgeCoordinate, getPhysicalBounds, isActiveMosaic } from '../utils/alignment.ts';
+import type { AlignmentEdge, AlignmentOperation, CadenceOrientation, DistributionAxis, InstanceMosaic, MoveConstraintMode } from '../utils/alignment.ts';
 import type { ProjectSnapshot } from './projectDocument.ts';
 import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
 import type { ProjectHistory } from './projectHistory.ts';
@@ -17,6 +17,7 @@ import type { CellViewContent, CellViewCoordinateMode } from '../utils/hierarchy
 import { computeCellContentBounds, estimateTextBoxSize } from '../utils/layoutLayers.ts';
 import type { LayoutShape, LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers.ts';
 
+export type { InstanceMosaic, MoveConstraintMode } from '../utils/alignment.ts';
 export type { LayoutShape, LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers.ts';
 
 export type Instance = {
@@ -28,6 +29,8 @@ export type Instance = {
   orientation: string;
   /** Locked instances cannot be moved, rotated, aligned, or deleted until unlocked. */
   locked?: boolean;
+  /** Optional Virtuoso mosaic array (rows × cols with local rowPitch ΔY and colPitch ΔX). */
+  mosaic?: InstanceMosaic;
 };
 
 export type Cell = {
@@ -133,12 +136,30 @@ export type EdgeAlignmentSession = {
 };
 
 export type PendingInstanceArray = {
-  /** Optional custom name or prefix (e.g. "U_ADC" -> "U_ADC", or "U_ADC_0_0" for mosaics). */
+  /** Optional custom name or prefix (e.g. "U_ADC" -> "U_ADC", or "U_ADC_0_0" for exploded arrays). */
   namePrefix?: string;
   rows: number;
   cols: number;
   deltaX: number;
   deltaY: number;
+  /** When true, creates a single editable Virtuoso mosaic (dbCreateSimpleMosaic) instead of exploded instances. */
+  asMosaic?: boolean;
+};
+
+export type PendingCopyGroup = {
+  /** Anchor coordinate in active cellview space (also used for orthogonal copy guide & stepping). */
+  anchorX: number;
+  anchorY: number;
+  /** Captured instances with offsets relative to (anchorX, anchorY). */
+  instances: Array<{
+    cellId: string;
+    dx: number;
+    dy: number;
+    orientation: string;
+    mosaic?: InstanceMosaic;
+  }>;
+  /** Captured rectangles & text labels with offsets relative to (anchorX, anchorY). */
+  shapes: Array<Omit<LayoutShape, 'id' | 'locked' | 'x' | 'y'> & { dx: number; dy: number }>;
 };
 
 export type RootViewSnapshot = {
@@ -217,6 +238,8 @@ export type ProjectState = {
   leftSidebarPinned: boolean;
   rightSidebarPinned: boolean;
   orthogonalRuler: boolean;
+  /** Virtuoso Move constraint mode (`'orthogonal'` default, `'free'`, `'horizontal'`, `'vertical'`). */
+  moveConstraint: MoveConstraintMode;
   showAutoDim: boolean;
   showOverlapDrc: boolean;
   showGrid: boolean;
@@ -227,10 +250,13 @@ export type ProjectState = {
   placementOrientation: string;
   pendingInstanceArray: PendingInstanceArray | null;
   pendingManualPadGroup: PendingManualPadGroup | null;
+  pendingCopyGroup: PendingCopyGroup | null;
   history: ProjectHistory;
   edgeAlignmentSession: EdgeAlignmentSession | null;
   lastAlignmentSpacing: string;
   clipboard: Instance[];
+  shapeClipboard: LayoutShape[];
+  clipboardWasCut: boolean;
   
   setGridSize: (size: number) => void;
   setAppMode: (mode: AppMode) => void;
@@ -300,6 +326,8 @@ export type ProjectState = {
   renameInstance: (instanceId: string, name: string) => void;
   toggleInstanceLock: (instanceIds: string[]) => void;
   updateInstanceOrientation: (instanceId: string, orientation: string) => void;
+  updateInstanceMosaic: (instanceId: string, mosaic: InstanceMosaic | null) => void;
+  flattenMosaicInstance: (instanceId: string) => void;
   setSelectedInstance: (id: string | null, additive?: boolean) => void;
   setSelection: (ids: string[]) => void;
   selectAllInstances: () => void;
@@ -307,7 +335,14 @@ export type ProjectState = {
   deleteSelectedInstances: () => void;
   nudgeSelection: (dx: number, dy: number) => void;
   copySelection: () => void;
+  cutSelection: () => boolean;
   pasteClipboard: () => void;
+  startInteractiveCopy: () => boolean;
+  rotatePendingCopyGroup: (quarterTurns: number) => void;
+  placeCopyGroupAt: (targetX: number, targetY: number) => void;
+  cancelPendingCopyGroup: () => void;
+  setMoveConstraint: (mode: MoveConstraintMode) => void;
+  cycleMoveConstraint: () => void;
 
   
   addRuler: (startX: number, startY: number, endX: number, endY: number, referenceX?: number, referenceY?: number) => void;
@@ -745,6 +780,18 @@ const snapUnboundedPosition = (x: number, y: number, gridSize: number): { x: num
   };
 };
 
+const normalizeMosaicForGrid = (mosaic: InstanceMosaic | undefined, gridSize: number): InstanceMosaic | undefined => {
+  if (!isActiveMosaic(mosaic)) return undefined;
+  const rp = snapToGrid(mosaic.rowPitch, gridSize);
+  const cp = snapToGrid(mosaic.colPitch, gridSize);
+  return {
+    rows: Math.max(1, Math.floor(mosaic.rows)),
+    cols: Math.max(1, Math.floor(mosaic.cols)),
+    rowPitch: Object.is(rp, -0) ? 0 : rp,
+    colPitch: Object.is(cp, -0) ? 0 : cp,
+  };
+};
+
 const clampInstancesToContainer = (
   instances: Instance[],
   masterCells: Record<string, Cell>,
@@ -758,12 +805,19 @@ const clampInstancesToContainer = (
   if (onlyCellId && instance.cellId !== onlyCellId) return instance;
   const master = masterCells[instance.cellId];
   if (!master) return instance;
+  const normalizedMosaic = normalizeMosaicForGrid(instance.mosaic, gridSize);
   if (unbounded || master.kind !== 'pad') {
     const snapped = snapUnboundedPosition(instance.x, instance.y, gridSize);
-    return { ...instance, x: snapped.x, y: snapped.y };
+    const next: Instance = { ...instance, x: snapped.x, y: snapped.y };
+    if (normalizedMosaic) next.mosaic = normalizedMosaic;
+    else delete next.mosaic;
+    return next;
   }
   const position = snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, containerW, containerH, gridSize, instance.orientation, padInset, master.originX ?? 0, master.originY ?? 0);
-  return { ...instance, x: position.x, y: position.y };
+  const next: Instance = { ...instance, x: position.x, y: position.y };
+  if (normalizedMosaic) next.mosaic = normalizedMosaic;
+  else delete next.mosaic;
+  return next;
 });
 
 /** Returns true when a Virtuoso cellview has no geometry yet (empty 0x0 auto-bounds cell). */
@@ -1153,6 +1207,7 @@ const applyCanonicalSnapshot = (
       placementMasterId: null,
       pendingInstanceArray: null,
       pendingManualPadGroup: null,
+      pendingCopyGroup: null,
       appMode: 'select' as AppMode,
       pixelArraySelected: false,
     };
@@ -1186,6 +1241,7 @@ const applyCanonicalSnapshot = (
     placementMasterId: null,
     pendingInstanceArray: null,
     pendingManualPadGroup: null,
+    pendingCopyGroup: null,
     appMode: 'select' as AppMode,
     pixelArraySelected: false,
   };
@@ -1239,6 +1295,7 @@ const switchToCellView = (
     placementMasterId: null,
     pendingInstanceArray: null,
     pendingManualPadGroup: null,
+    pendingCopyGroup: null,
     pendingPixelArraySize: null,
     appMode: 'select' as AppMode,
   };
@@ -1366,7 +1423,7 @@ export const boundsOverlap = (
  * Used for non-blocking DRC preview hints — cells are allowed to overlap in Virtuoso.
  */
 export const findOverlappingInstance = (
-  candidate: { id?: string; x: number; y: number; orientation: string; width: number; height: number; originX?: number; originY?: number },
+  candidate: { id?: string; x: number; y: number; orientation: string; width: number; height: number; originX?: number; originY?: number; mosaic?: InstanceMosaic },
   instances: readonly Instance[],
   masterCells: Record<string, Cell>,
   ignoreIds?: ReadonlySet<string>,
@@ -1383,6 +1440,7 @@ export const findOverlappingInstance = (
     height: candidate.height,
     originX: candidate.originX,
     originY: candidate.originY,
+    mosaic: candidate.mosaic,
   });
   for (const existing of instances) {
     if (candidate.id && existing.id === candidate.id) continue;
@@ -1640,15 +1698,19 @@ export const useStore = create<ProjectState>((set) => ({
   placementOrientation: 'R0',
   pendingInstanceArray: null,
   pendingManualPadGroup: null,
+  pendingCopyGroup: null,
   history: { past: [], future: [] },
   edgeAlignmentSession: null,
   lastAlignmentSpacing: readStoredAlignmentSpacing(),
   orthogonalRuler: false,
+  moveConstraint: 'orthogonal',
   showAutoDim: false,
   showOverlapDrc: false,
   showGrid: true,
   snapToVisibleGrid: false,
   clipboard: [],
+  shapeClipboard: [],
+  clipboardWasCut: false,
 
   setGridSize: (size) => set((state) => {
     if (!Number.isFinite(size) || size <= 0) return state;
@@ -1704,7 +1766,7 @@ export const useStore = create<ProjectState>((set) => ({
     appMode: mode,
     edgeAlignmentSession: null,
     ...(mode === 'pixel-array' ? {} : { pendingPixelArraySize: null }),
-    ...(mode === 'place' ? {} : { pendingManualPadGroup: null }),
+    ...(mode === 'place' ? {} : { pendingManualPadGroup: null, pendingCopyGroup: null }),
     ...(mode === 'text' || mode === 'rect' ? { partialSelectMode: false } : {}),
   }),
   setTopDimensions: (w, h) => set((state) => {
@@ -1908,6 +1970,7 @@ export const useStore = create<ProjectState>((set) => ({
       appMode: masterId ? 'place' : 'select',
       pendingPixelArraySize: null,
       pendingManualPadGroup: null,
+      pendingCopyGroup: null,
       edgeAlignmentSession: null,
     };
   }),
@@ -2315,7 +2378,9 @@ export const useStore = create<ProjectState>((set) => ({
     }
 
     const propagatedMasterCells = propagateAutoBounds(newMasterCells, cleanedCellViews);
-    const clearingPlacement = state.placementMasterId === id || state.pendingManualPadGroup?.masterId === id;
+    const clearingPlacement = state.placementMasterId === id
+      || state.pendingManualPadGroup?.masterId === id
+      || Boolean(state.pendingCopyGroup?.instances.some(item => item.cellId === id));
     const deletingOpenPath = state.activeCellId === id || state.viewBreadcrumb.includes(id);
     const cleanedOpenViewIds = ensureOpenViewTab(
       state.openViewIds.filter(tabId => tabId !== id),
@@ -2353,6 +2418,7 @@ export const useStore = create<ProjectState>((set) => ({
         placementMasterId: null,
         pendingInstanceArray: null,
         pendingManualPadGroup: null,
+        pendingCopyGroup: null,
         pendingPixelArraySize: null,
         appMode: 'select',
       };
@@ -2378,6 +2444,7 @@ export const useStore = create<ProjectState>((set) => ({
         placementMasterId: null,
         pendingInstanceArray: null,
         pendingManualPadGroup: null,
+        pendingCopyGroup: null,
         appMode: state.appMode === 'place' ? 'select' : state.appMode,
       } : {}),
     };
@@ -2798,8 +2865,13 @@ export const useStore = create<ProjectState>((set) => ({
     }
     const rows = Math.max(1, Math.floor(config.rows));
     const cols = Math.max(1, Math.floor(config.cols));
-    if (rows * cols > 500) {
-      throw new RangeError('Mosaic array cannot exceed 500 instances at once.');
+    const maxTiles = config.asMosaic ? 10000 : 500;
+    if (rows * cols > maxTiles) {
+      throw new RangeError(
+        config.asMosaic
+          ? 'Mosaic array cannot exceed 10,000 elements.'
+          : 'Exploded array cannot exceed 500 instances at once.',
+      );
     }
     if (!Number.isFinite(config.deltaX) || !Number.isFinite(config.deltaY)) {
       throw new RangeError('Mosaic pitch values must be finite numbers.');
@@ -2808,8 +2880,58 @@ export const useStore = create<ProjectState>((set) => ({
     const instances = [...state.instances];
     const usedNames = new Set(instances.map(i => i.name));
     const prefix = config.namePrefix?.trim() ?? '';
-    const newIds: string[] = [];
     const isSubCellCanvas = state.activeCellId !== null;
+
+    if (config.asMosaic && (isSubCellCanvas || master.kind !== 'pad')) {
+      const placed = snapUnboundedPosition(originX, originY, state.gridSize);
+      let name: string;
+      if (prefix) {
+        name = prefix;
+        let suffix = 1;
+        while (usedNames.has(name)) {
+          name = `${prefix}_${suffix}`;
+          suffix += 1;
+        }
+      } else {
+        name = getNextInstanceName(instances);
+      }
+      const snappedRowPitch = snapToGrid(config.deltaY, state.gridSize);
+      const snappedColPitch = snapToGrid(config.deltaX, state.gridSize);
+      const inst: Instance = {
+        id: uuidv4(),
+        cellId,
+        name,
+        x: placed.x,
+        y: placed.y,
+        orientation,
+        ...(rows > 1 || cols > 1
+          ? {
+              mosaic: {
+                rows,
+                cols,
+                rowPitch: Object.is(snappedRowPitch, -0) ? 0 : snappedRowPitch,
+                colPitch: Object.is(snappedColPitch, -0) ? 0 : snappedColPitch,
+              },
+            }
+          : {}),
+      };
+      instances.push(inst);
+      const boundsSync = isSubCellCanvas
+        ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+        : null;
+      return {
+        ...commitProjectPatch(state, `Place ${rows}×${cols} mosaic ${inst.name}`, {
+          instances,
+          ...(boundsSync ?? {}),
+        }),
+        selectedInstanceId: inst.id,
+        selectedInstanceIds: [inst.id],
+        selectedShapeId: null,
+        pixelArraySelected: false,
+      };
+    }
+
+    const newIds: string[] = [];
 
     for (let r = 0; r < rows; r += 1) {
       for (let c = 0; c < cols; c += 1) {
@@ -3334,6 +3456,113 @@ export const useStore = create<ProjectState>((set) => ({
     });
   }),
 
+  updateInstanceMosaic: (instanceId, rawMosaic) => set((state) => {
+    const existing = state.instances.find(inst => inst.id === instanceId);
+    if (!existing) return state;
+    if (existing.locked) {
+      throw new Error(`${existing.name} is locked. Unlock it before editing mosaic array properties.`);
+    }
+    const master = state.masterCells[existing.cellId];
+    if (!master) return state;
+    const isSubCellCanvas = state.activeCellId !== null;
+    if (!isSubCellCanvas && master.kind === 'pad' && rawMosaic && (rawMosaic.rows > 1 || rawMosaic.cols > 1)) {
+      throw new Error('Top-level edge-bound pads cannot be converted into a mosaic. Place pads inside a padring cellview to array them.');
+    }
+
+    let nextMosaic: InstanceMosaic | undefined;
+    if (rawMosaic) {
+      const rows = Math.floor(rawMosaic.rows);
+      const cols = Math.floor(rawMosaic.cols);
+      if (!Number.isFinite(rawMosaic.rows) || !Number.isFinite(rawMosaic.cols) || rows < 1 || cols < 1 || rows > 500 || cols > 500 || rows * cols > 10000) {
+        throw new RangeError('Mosaic rows and columns must be integers between 1 and 500 (max 10,000 elements).');
+      }
+      if (!Number.isFinite(rawMosaic.rowPitch) || !Number.isFinite(rawMosaic.colPitch)) {
+        throw new RangeError('Mosaic pitch values must be finite numbers.');
+      }
+      if (rows > 1 || cols > 1) {
+        const snappedRowPitch = snapToGrid(rawMosaic.rowPitch, state.gridSize);
+        const snappedColPitch = snapToGrid(rawMosaic.colPitch, state.gridSize);
+        nextMosaic = {
+          rows,
+          cols,
+          rowPitch: Object.is(snappedRowPitch, -0) ? 0 : snappedRowPitch,
+          colPitch: Object.is(snappedColPitch, -0) ? 0 : snappedColPitch,
+        };
+      }
+    }
+
+    const instances = state.instances.map(inst => {
+      if (inst.id !== instanceId) return inst;
+      const updated: Instance = { ...inst };
+      if (nextMosaic) updated.mosaic = nextMosaic;
+      else delete updated.mosaic;
+      return updated;
+    });
+    const boundsSync = isSubCellCanvas
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    const label = nextMosaic
+      ? `Mosaic ${existing.name} (${nextMosaic.rows}×${nextMosaic.cols})`
+      : `Convert ${existing.name} to single instance`;
+    return commitProjectPatch(state, label, {
+      instances,
+      ...(boundsSync ?? {}),
+    });
+  }),
+
+  flattenMosaicInstance: (instanceId) => set((state) => {
+    const existing = state.instances.find(inst => inst.id === instanceId);
+    if (!existing) return state;
+    if (existing.locked) {
+      throw new Error(`${existing.name} is locked. Unlock it before flattening.`);
+    }
+    if (!isActiveMosaic(existing.mosaic)) return state;
+    const { rows, cols, rowPitch, colPitch } = existing.mosaic;
+    if (rows * cols > 500) {
+      throw new RangeError('Cannot flatten a mosaic larger than 500 instances.');
+    }
+    const remaining = state.instances.filter(inst => inst.id !== instanceId);
+    const usedNames = new Set(remaining.map(inst => inst.name));
+    const flattened: Instance[] = [];
+    for (let r = 0; r < rows; r += 1) {
+      for (let c = 0; c < cols; c += 1) {
+        const offset = applyCadenceOrientationVector(existing.orientation, c * colPitch, r * rowPitch);
+        const pos = snapUnboundedPosition(existing.x + offset.dx, existing.y + offset.dy, state.gridSize);
+        const baseName = `${existing.name}_${r}_${c}`;
+        let name = baseName;
+        let suffix = 1;
+        while (usedNames.has(name)) {
+          name = `${baseName}_${suffix}`;
+          suffix += 1;
+        }
+        usedNames.add(name);
+        flattened.push({
+          id: uuidv4(),
+          cellId: existing.cellId,
+          name,
+          x: pos.x,
+          y: pos.y,
+          orientation: existing.orientation,
+        });
+      }
+    }
+    const instances = [...remaining, ...flattened];
+    const boundsSync = state.activeCellId
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    const newIds = flattened.map(inst => inst.id);
+    return {
+      ...commitProjectPatch(state, `Flatten mosaic ${existing.name} (${rows}×${cols})`, {
+        instances,
+        ...(boundsSync ?? {}),
+      }),
+      selectedInstanceIds: newIds,
+      selectedInstanceId: newIds.at(-1) ?? null,
+      selectedShapeId: null,
+      pixelArraySelected: false,
+    };
+  }),
+
   setSelectedInstance: (id, additive = false) => set((state) => {
     if (!id) return { selectedInstanceId: null, selectedInstanceIds: [], selectedShapeId: null, pixelArraySelected: false };
     if (!additive) {
@@ -3470,40 +3699,113 @@ export const useStore = create<ProjectState>((set) => ({
   }),
 
   copySelection: () => set((state) => {
-    if (state.selectedInstanceIds.length === 0) return state;
-    const selectedIds = new Set(state.selectedInstanceIds);
-    const clipboard = state.instances.filter(inst => selectedIds.has(inst.id));
-    return { clipboard };
+    if (state.selectedInstanceIds.length > 0) {
+      const selectedIds = new Set(state.selectedInstanceIds);
+      const clipboard = state.instances
+        .filter(inst => selectedIds.has(inst.id))
+        .map(inst => ({ ...inst, ...(inst.mosaic ? { mosaic: { ...inst.mosaic } } : {}) }));
+      return { clipboard, shapeClipboard: [], clipboardWasCut: false };
+    }
+    if (state.selectedShapeId) {
+      const shape = state.shapes.find(s => s.id === state.selectedShapeId);
+      if (!shape) return state;
+      return { clipboard: [], shapeClipboard: [{ ...shape }], clipboardWasCut: false };
+    }
+    return state;
   }),
 
+  cutSelection: () => {
+    let didCut = false;
+    set((state) => {
+      if (state.selectedInstanceIds.length > 0) {
+        const selectedIds = new Set(state.selectedInstanceIds);
+        const cutTargets = state.instances.filter(inst => selectedIds.has(inst.id) && !inst.locked);
+        if (cutTargets.length === 0) return state;
+        const cutIdSet = new Set(cutTargets.map(inst => inst.id));
+        const remaining = state.instances.filter(inst => !cutIdSet.has(inst.id));
+        const boundsSync = state.activeCellId
+          ? syncMasterBoundsForActiveCell(state, state.shapes, remaining, state.pixelArray)
+          : null;
+        didCut = true;
+        return {
+          ...commitProjectPatch(state, `Cut ${cutTargets.length} block${cutTargets.length === 1 ? '' : 's'}`, {
+            instances: remaining,
+            ...(boundsSync ?? {}),
+          }),
+          clipboard: cutTargets.map(inst => ({ ...inst, ...(inst.mosaic ? { mosaic: { ...inst.mosaic } } : {}) })),
+          shapeClipboard: [],
+          clipboardWasCut: true,
+          ...selectionAfterInstancesChange(state, remaining),
+          edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, remaining),
+        };
+      }
+      if (state.selectedShapeId) {
+        const target = state.shapes.find(s => s.id === state.selectedShapeId);
+        if (!target || target.locked) return state;
+        const shapes = state.shapes.filter(s => s.id !== target.id);
+        const boundsSync = state.activeCellId
+          ? syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray)
+          : null;
+        didCut = true;
+        return {
+          ...commitProjectPatch(state, `Cut ${target.kind === 'text' ? 'text label' : `${target.layer}/${target.purpose} rect`}`, {
+            shapes,
+            ...(boundsSync ?? {}),
+          }),
+          clipboard: [],
+          shapeClipboard: [{ ...target }],
+          clipboardWasCut: true,
+          selectedShapeId: null,
+        };
+      }
+      return state;
+    });
+    return didCut;
+  },
+
   pasteClipboard: () => set((state) => {
-    if (!state.clipboard || state.clipboard.length === 0) return state;
-    
+    const hasInstances = state.clipboard && state.clipboard.length > 0;
+    const hasShapes = state.shapeClipboard && state.shapeClipboard.length > 0;
+    if (!hasInstances && !hasShapes) return state;
+
     const offset = 20 * state.gridSize;
-    const mergedViews = state.activeCellId ? mergeActiveViewIntoCellViews(state) : state.cellViews;
-    let instances = [...state.instances];
-    const newSelectedIds: string[] = [];
-    
-    for (const item of state.clipboard) {
-      const master = state.masterCells[item.cellId];
-      if (!master) continue; // master deleted
-      if (state.activeCellId && wouldCreateHierarchyCycle(state.activeCellId, item.cellId, mergedViews)) {
-        continue; // prevent pasting a recursive hierarchy cycle or self-instance
+    const isSubCellCanvas = state.activeCellId !== null;
+
+    if (hasInstances) {
+      const mergedViews = state.activeCellId ? mergeActiveViewIntoCellViews(state) : state.cellViews;
+      const validItems = state.clipboard.filter(item => {
+        const master = state.masterCells[item.cellId];
+        if (!master || isCellEmpty(master)) return false;
+        if (state.activeCellId && wouldCreateHierarchyCycle(state.activeCellId, item.cellId, mergedViews)) {
+          return false;
+        }
+        return true;
+      });
+      if (validItems.length === 0) return state;
+
+      // Compute group bounding box so multi-object paste preserves exact relative spacing.
+      let minLeft = Infinity;
+      let maxRight = -Infinity;
+      let minBottom = Infinity;
+      let maxTop = -Infinity;
+      for (const item of validItems) {
+        const master = state.masterCells[item.cellId]!;
+        const bounds = getPhysicalBounds({
+          ...item,
+          width: master.width,
+          height: master.height,
+          originX: master.originX,
+          originY: master.originY,
+        });
+        if (bounds.left < minLeft) minLeft = bounds.left;
+        if (bounds.right > maxRight) maxRight = bounds.right;
+        if (bounds.bottom < minBottom) minBottom = bounds.bottom;
+        if (bounds.top > maxTop) maxTop = bounds.top;
       }
-      if (isCellEmpty(master)) {
-        continue; // prevent pasting an empty cellview
-      }
-      
-      const newInst = {
-        ...item,
-        id: uuidv4(),
-        name: getNextInstanceName(instances),
-      };
-      
-      const bounds = getPhysicalBounds({ ...item, width: master.width, height: master.height, originX: master.originX, originY: master.originY });
-      const stepX = Math.max(offset, bounds.right - bounds.left + offset);
-      const stepY = Math.max(offset, bounds.top - bounds.bottom + offset);
+      const stepX = Math.max(offset, (maxRight - minLeft) + offset);
+      const stepY = Math.max(offset, (maxTop - minBottom) + offset);
       const candidateOffsets: Array<[number, number]> = [
+        ...(state.clipboardWasCut ? ([[0, 0]] as Array<[number, number]>) : []),
         [stepX, 0],
         [0, -stepY],
         [-stepX, 0],
@@ -3516,52 +3818,336 @@ export const useStore = create<ProjectState>((set) => ({
         [0, -stepY * 2],
       ];
 
-      const isSubCellCanvas = state.activeCellId !== null;
-      let placedPos: { x: number; y: number } | null = null;
-      let fallbackPos: { x: number; y: number } | null = null;
+      let chosenPositions: Array<{ x: number; y: number }> | null = null;
+      let fallbackPositions: Array<{ x: number; y: number }> | null = null;
       for (const [dx, dy] of candidateOffsets) {
         try {
-          const candidate = isSubCellCanvas || master.kind !== 'pad'
-            ? snapUnboundedPosition(item.x + dx, item.y + dy, state.gridSize)
-            : snapPadToNearestEdge(item.x + dx, item.y + dy, master.width, master.height, state.topWidth, state.topHeight, state.gridSize, item.orientation, state.padInset, master.originX ?? 0, master.originY ?? 0);
-          if (!fallbackPos) fallbackPos = candidate;
-          const blocker = findOverlappingInstance(
-            { x: candidate.x, y: candidate.y, orientation: item.orientation, width: master.width, height: master.height, originX: master.originX, originY: master.originY },
-            instances,
-            state.masterCells,
-          );
-          if (!blocker) {
-            placedPos = candidate;
+          const candidates = validItems.map(item => {
+            const master = state.masterCells[item.cellId]!;
+            return isSubCellCanvas || master.kind !== 'pad'
+              ? snapUnboundedPosition(item.x + dx, item.y + dy, state.gridSize)
+              : snapPadToNearestEdge(
+                  item.x + dx,
+                  item.y + dy,
+                  master.width,
+                  master.height,
+                  state.topWidth,
+                  state.topHeight,
+                  state.gridSize,
+                  item.orientation,
+                  state.padInset,
+                  master.originX ?? 0,
+                  master.originY ?? 0,
+                );
+          });
+          if (!fallbackPositions) fallbackPositions = candidates;
+          const anyOverlap = validItems.some((item, idx) => {
+            const master = state.masterCells[item.cellId]!;
+            return Boolean(findOverlappingInstance(
+              {
+                x: candidates[idx].x,
+                y: candidates[idx].y,
+                orientation: item.orientation,
+                width: master.width,
+                height: master.height,
+                originX: master.originX,
+                originY: master.originY,
+                mosaic: item.mosaic,
+              },
+              state.instances,
+              state.masterCells,
+            ));
+          });
+          if (!anyOverlap) {
+            chosenPositions = candidates;
             break;
           }
         } catch {
-          // Try next candidate spot
+          // Try next candidate shift
         }
       }
-      const finalPos = placedPos ?? fallbackPos;
-      if (!finalPos) continue;
-      newInst.x = finalPos.x;
-      newInst.y = finalPos.y;
-      
-      instances.push(newInst);
-      newSelectedIds.push(newInst.id);
+
+      const finalPositions = chosenPositions ?? fallbackPositions;
+      if (!finalPositions) return state;
+
+      const instances = [...state.instances];
+      const newSelectedIds: string[] = [];
+      validItems.forEach((item, idx) => {
+        const newInst: Instance = {
+          id: uuidv4(),
+          cellId: item.cellId,
+          name: getNextInstanceName(instances),
+          x: finalPositions[idx].x,
+          y: finalPositions[idx].y,
+          orientation: item.orientation,
+          ...(item.mosaic ? { mosaic: { ...item.mosaic } } : {}),
+        };
+        instances.push(newInst);
+        newSelectedIds.push(newInst.id);
+      });
+
+      if (newSelectedIds.length === 0) return state;
+      const boundsSync = isSubCellCanvas
+        ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+        : null;
+      return {
+        ...commitProjectPatch(state, `Paste ${newSelectedIds.length} block${newSelectedIds.length === 1 ? '' : 's'}`, {
+          instances,
+          ...(boundsSync ?? {}),
+        }),
+        clipboardWasCut: false,
+        selectedInstanceIds: newSelectedIds,
+        selectedInstanceId: newSelectedIds.at(-1) ?? null,
+        selectedShapeId: null,
+        pixelArraySelected: false,
+      };
     }
-    
-    if (newSelectedIds.length === 0) return state;
-    const boundsSync = state.activeCellId
-      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+
+    // Paste shapes / text labels
+    const pastedShapes: LayoutShape[] = [];
+    const shiftX = state.clipboardWasCut
+      ? 0
+      : Math.max(offset, Math.max(...state.shapeClipboard.map(s => s.width)) + offset);
+    for (const shape of state.shapeClipboard) {
+      const nextPos = snapUnboundedPosition(shape.x + shiftX, shape.y, state.gridSize);
+      const cloned: LayoutShape = {
+        ...shape,
+        id: uuidv4(),
+        x: nextPos.x,
+        y: nextPos.y,
+      };
+      delete cloned.locked;
+      pastedShapes.push(cloned);
+    }
+    if (pastedShapes.length === 0) return state;
+    const shapes = [...state.shapes, ...pastedShapes];
+    const boundsSync = isSubCellCanvas
+      ? syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true)
       : null;
-    
     return {
-      ...commitProjectPatch(state, `Paste ${newSelectedIds.length} block${newSelectedIds.length === 1 ? '' : 's'}`, {
-        instances,
+      ...commitProjectPatch(state, `Paste ${pastedShapes.length} shape${pastedShapes.length === 1 ? '' : 's'}`, {
+        shapes,
         ...(boundsSync ?? {}),
       }),
-      selectedInstanceIds: newSelectedIds,
-      selectedInstanceId: newSelectedIds.at(-1) ?? null,
-      selectedShapeId: null,
+      clipboardWasCut: false,
+      selectedShapeId: pastedShapes.at(-1)?.id ?? null,
+      selectedInstanceId: null,
+      selectedInstanceIds: [],
       pixelArraySelected: false,
     };
+  }),
+
+  startInteractiveCopy: () => {
+    let started = false;
+    set((state) => {
+      if (state.selectedInstanceIds.length > 0) {
+        const selectedSet = new Set(state.selectedInstanceIds);
+        const selected = state.instances.filter(inst => selectedSet.has(inst.id) && state.masterCells[inst.cellId]);
+        if (selected.length === 0) return state;
+        const primary = selected.find(inst => inst.id === state.selectedInstanceId) ?? selected[0];
+        const anchorX = primary.x;
+        const anchorY = primary.y;
+        const pendingCopyGroup: PendingCopyGroup = {
+          anchorX,
+          anchorY,
+          instances: selected.map(inst => ({
+            cellId: inst.cellId,
+            dx: inst.x - anchorX,
+            dy: inst.y - anchorY,
+            orientation: inst.orientation,
+            ...(inst.mosaic ? { mosaic: { ...inst.mosaic } } : {}),
+          })),
+          shapes: [],
+        };
+        started = true;
+        return {
+          pendingCopyGroup,
+          appMode: 'place' as AppMode,
+          placementMasterId: null,
+          pendingInstanceArray: null,
+          pendingManualPadGroup: null,
+          pendingPixelArraySize: null,
+          edgeAlignmentSession: null,
+          partialSelectMode: false,
+        };
+      }
+      if (state.selectedShapeId) {
+        const shape = state.shapes.find(s => s.id === state.selectedShapeId);
+        if (!shape) return state;
+        const rest = { ...shape } as Record<string, unknown>;
+        delete rest.id;
+        delete rest.locked;
+        delete rest.x;
+        delete rest.y;
+        const pendingCopyGroup: PendingCopyGroup = {
+          anchorX: shape.x,
+          anchorY: shape.y,
+          instances: [],
+          shapes: [{ ...(rest as Omit<LayoutShape, 'id' | 'locked' | 'x' | 'y'>), dx: 0, dy: 0 }],
+        };
+        started = true;
+        return {
+          pendingCopyGroup,
+          appMode: 'place' as AppMode,
+          placementMasterId: null,
+          pendingInstanceArray: null,
+          pendingManualPadGroup: null,
+          pendingPixelArraySize: null,
+          edgeAlignmentSession: null,
+          partialSelectMode: false,
+        };
+      }
+      return state;
+    });
+    return started;
+  },
+
+  rotatePendingCopyGroup: (quarterTurns) => set((state) => {
+    const group = state.pendingCopyGroup;
+    if (!group) return state;
+    const rotOrient = rotateOrientationByQuarterTurns('R0', quarterTurns);
+    const nextInstances = group.instances.map(item => {
+      const rotatedDelta = applyCadenceOrientationVector(rotOrient, item.dx, item.dy);
+      const snapped = snapUnboundedPosition(rotatedDelta.dx, rotatedDelta.dy, state.gridSize);
+      return {
+        ...item,
+        dx: snapped.x,
+        dy: snapped.y,
+        orientation: rotateOrientationByQuarterTurns(item.orientation, quarterTurns),
+      };
+    });
+    const nextShapes = group.shapes.map(shape => {
+      if (shape.kind === 'text') {
+        const rotatedDelta = applyCadenceOrientationVector(rotOrient, shape.dx, shape.dy);
+        const snapped = snapUnboundedPosition(rotatedDelta.dx, rotatedDelta.dy, state.gridSize);
+        return {
+          ...shape,
+          dx: snapped.x,
+          dy: snapped.y,
+          orientation: rotateOrientationByQuarterTurns(shape.orientation ?? 'R0', quarterTurns) as CadenceOrientation,
+        };
+      }
+      const p1 = applyCadenceOrientationVector(rotOrient, shape.dx, shape.dy);
+      const p2 = applyCadenceOrientationVector(rotOrient, shape.dx + shape.width, shape.dy + shape.height);
+      const minX = snapToGrid(Math.min(p1.dx, p2.dx), state.gridSize);
+      const minY = snapToGrid(Math.min(p1.dy, p2.dy), state.gridSize);
+      const width = snapToGrid(Math.abs(p2.dx - p1.dx), state.gridSize);
+      const height = snapToGrid(Math.abs(p2.dy - p1.dy), state.gridSize);
+      return {
+        ...shape,
+        dx: Object.is(minX, -0) ? 0 : minX,
+        dy: Object.is(minY, -0) ? 0 : minY,
+        width: Math.max(state.gridSize, width),
+        height: Math.max(state.gridSize, height),
+      };
+    });
+    return {
+      pendingCopyGroup: {
+        ...group,
+        instances: nextInstances,
+        shapes: nextShapes,
+      },
+    };
+  }),
+
+  placeCopyGroupAt: (targetX, targetY) => set((state) => {
+    const group = state.pendingCopyGroup;
+    if (!group) return state;
+    const isSubCellCanvas = state.activeCellId !== null;
+    const mergedViews = isSubCellCanvas ? mergeActiveViewIntoCellViews(state) : state.cellViews;
+    const snappedTarget = snapUnboundedPosition(targetX, targetY, state.gridSize);
+
+    const instances = [...state.instances];
+    const newInstanceIds: string[] = [];
+    for (const item of group.instances) {
+      const master = state.masterCells[item.cellId];
+      if (!master || isCellEmpty(master)) continue;
+      if (state.activeCellId === item.cellId || (state.activeCellId && wouldCreateHierarchyCycle(state.activeCellId, item.cellId, mergedViews))) {
+        throw new Error(`Cannot copy ${master.libName}/${master.cellName} inside ${state.topCellName} because it creates a hierarchy cycle.`);
+      }
+      const reqX = snappedTarget.x + item.dx;
+      const reqY = snappedTarget.y + item.dy;
+      const placed = isSubCellCanvas || master.kind !== 'pad'
+        ? snapUnboundedPosition(reqX, reqY, state.gridSize)
+        : snapPadToNearestEdge(
+            reqX,
+            reqY,
+            master.width,
+            master.height,
+            state.topWidth,
+            state.topHeight,
+            state.gridSize,
+            item.orientation,
+            state.padInset,
+            master.originX ?? 0,
+            master.originY ?? 0,
+          );
+      const newInst: Instance = {
+        id: uuidv4(),
+        cellId: item.cellId,
+        name: getNextInstanceName(instances),
+        x: placed.x,
+        y: placed.y,
+        orientation: item.orientation,
+        ...(item.mosaic ? { mosaic: { ...item.mosaic } } : {}),
+      };
+      instances.push(newInst);
+      newInstanceIds.push(newInst.id);
+    }
+
+    const shapes = [...state.shapes];
+    const newShapeIds: string[] = [];
+    for (const shapeItem of group.shapes) {
+      const pos = snapUnboundedPosition(snappedTarget.x + shapeItem.dx, snappedTarget.y + shapeItem.dy, state.gridSize);
+      const { dx: _dx, dy: _dy, ...rest } = shapeItem;
+      void _dx;
+      void _dy;
+      const newShape: LayoutShape = {
+        ...rest,
+        id: uuidv4(),
+        x: pos.x,
+        y: pos.y,
+      };
+      shapes.push(newShape);
+      newShapeIds.push(newShape.id);
+    }
+
+    const totalPlaced = newInstanceIds.length + newShapeIds.length;
+    if (totalPlaced === 0) return state;
+
+    const boundsSync = isSubCellCanvas
+      ? syncMasterBoundsForActiveCell(state, shapes, instances, state.pixelArray, false, newShapeIds.length > 0)
+      : null;
+
+    return {
+      ...commitProjectPatch(state, `Copy ${totalPlaced} object${totalPlaced === 1 ? '' : 's'}`, {
+        instances,
+        shapes,
+        ...(boundsSync ?? {}),
+      }),
+      pendingCopyGroup: {
+        ...group,
+        anchorX: snappedTarget.x,
+        anchorY: snappedTarget.y,
+      },
+      selectedInstanceIds: newInstanceIds,
+      selectedInstanceId: newInstanceIds.at(-1) ?? null,
+      selectedShapeId: newInstanceIds.length === 0 ? (newShapeIds.at(-1) ?? null) : null,
+      pixelArraySelected: false,
+    };
+  }),
+
+  cancelPendingCopyGroup: () => set((state) => ({
+    pendingCopyGroup: null,
+    appMode: state.appMode === 'place' && !state.placementMasterId ? 'select' : state.appMode,
+  })),
+
+  setMoveConstraint: (mode) => set({ moveConstraint: mode }),
+
+  cycleMoveConstraint: () => set((state) => {
+    const order: readonly MoveConstraintMode[] = ['orthogonal', 'free', 'horizontal', 'vertical'];
+    const idx = order.indexOf(state.moveConstraint);
+    return { moveConstraint: order[(idx + 1) % order.length] };
   }),
 
 
@@ -4170,6 +4756,7 @@ export const useStore = create<ProjectState>((set) => ({
       placementMasterId: null,
       pendingInstanceArray: null,
       pendingManualPadGroup: null,
+      pendingCopyGroup: null,
       history: { past: [], future: [] },
       edgeAlignmentSession: null,
       selectedInstanceId: null,

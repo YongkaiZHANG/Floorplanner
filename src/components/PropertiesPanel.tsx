@@ -1,6 +1,6 @@
 import React from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
-import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiExternalLink, FiCrosshair } from 'react-icons/fi';
+import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiExternalLink, FiCrosshair, FiGrid } from 'react-icons/fi';
 import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
 import { findBoundaryViolations, findOverlapViolations } from '../utils/floorplanMetrics';
@@ -11,6 +11,7 @@ import {
   VIRTUOSO_LAYER_PRESETS,
 } from '../utils/layoutLayers';
 import type { LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers';
+import { getPhysicalBounds, isActiveMosaic } from '../utils/alignment';
 import type { CadenceOrientation } from '../utils/alignment';
 
 const ORIENTATIONS = ['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'];
@@ -35,6 +36,8 @@ export const PropertiesPanel: React.FC = () => {
     renameInstance,
     toggleInstanceLock,
     updateInstanceOrientation,
+    updateInstanceMosaic,
+    flattenMosaicInstance,
     deleteSelectedInstances,
     updateShape,
     deleteShape,
@@ -71,6 +74,10 @@ export const PropertiesPanel: React.FC = () => {
   const [draftName, setDraftName] = React.useState('');
   const [draftX, setDraftX] = React.useState('0');
   const [draftY, setDraftY] = React.useState('0');
+  const [draftMosaicRows, setDraftMosaicRows] = React.useState('1');
+  const [draftMosaicCols, setDraftMosaicCols] = React.useState('1');
+  const [draftMosaicColPitch, setDraftMosaicColPitch] = React.useState('0');
+  const [draftMosaicRowPitch, setDraftMosaicRowPitch] = React.useState('0');
 
   const [draftArrayX, setDraftArrayX] = React.useState('0');
   const [draftArrayY, setDraftArrayY] = React.useState('0');
@@ -91,7 +98,13 @@ export const PropertiesPanel: React.FC = () => {
     setDraftName(selectedInstance.name);
     setDraftX(formatGridValue(selectedInstance.x, gridSize));
     setDraftY(formatGridValue(selectedInstance.y, gridSize));
-  }, [selectedInstance, gridSize]);
+    const cell = masterCells[selectedInstance.cellId];
+    const m = selectedInstance.mosaic;
+    setDraftMosaicRows(String(m?.rows ?? 1));
+    setDraftMosaicCols(String(m?.cols ?? 1));
+    setDraftMosaicColPitch(formatGridValue(m ? m.colPitch : (cell?.width ?? 0), gridSize));
+    setDraftMosaicRowPitch(formatGridValue(m ? m.rowPitch : (cell?.height ?? 0), gridSize));
+  }, [selectedInstance, masterCells, gridSize]);
 
   React.useEffect(() => {
     if (!selectedShape) return;
@@ -183,6 +196,62 @@ export const PropertiesPanel: React.FC = () => {
       setDraftArrayW(formatGridValue(pixelArray.width, gridSize));
       setDraftArrayH(formatGridValue(pixelArray.height, gridSize));
       alert(error instanceof Error ? error.message : 'Unable to update the pixel array.');
+    }
+  };
+
+  const commitMosaic = () => {
+    if (skipNextBlurCommitRef.current) {
+      skipNextBlurCommitRef.current = false;
+      return;
+    }
+    if (!selectedInstance || !masterCell) return;
+    const rows = Math.floor(Number.parseFloat(draftMosaicRows));
+    const cols = Math.floor(Number.parseFloat(draftMosaicCols));
+    const colPitch = Number.parseFloat(draftMosaicColPitch);
+    const rowPitch = Number.parseFloat(draftMosaicRowPitch);
+    const resetDrafts = () => {
+      const m = selectedInstance.mosaic;
+      setDraftMosaicRows(String(m?.rows ?? 1));
+      setDraftMosaicCols(String(m?.cols ?? 1));
+      setDraftMosaicColPitch(formatGridValue(m ? m.colPitch : masterCell.width, gridSize));
+      setDraftMosaicRowPitch(formatGridValue(m ? m.rowPitch : masterCell.height, gridSize));
+    };
+    if (!Number.isFinite(rows) || !Number.isFinite(cols) || rows < 1 || cols < 1 || !Number.isFinite(colPitch) || !Number.isFinite(rowPitch)) {
+      resetDrafts();
+      return;
+    }
+    const cur = selectedInstance.mosaic;
+    const unchanged = rows === (cur?.rows ?? 1)
+      && cols === (cur?.cols ?? 1)
+      && (rows === 1 && cols === 1
+        ? !cur
+        : Math.abs(colPitch - (cur?.colPitch ?? masterCell.width)) <= 1e-9
+          && Math.abs(rowPitch - (cur?.rowPitch ?? masterCell.height)) <= 1e-9);
+    if (unchanged) {
+      resetDrafts();
+      return;
+    }
+    try {
+      updateInstanceMosaic(
+        selectedInstance.id,
+        rows === 1 && cols === 1 ? null : { rows, cols, rowPitch, colPitch },
+      );
+    } catch (error) {
+      resetDrafts();
+      alert(error instanceof Error ? error.message : 'Unable to update mosaic array.');
+    }
+  };
+
+  const handleMosaicKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') event.currentTarget.blur();
+    if (event.key === 'Escape' && selectedInstance && masterCell) {
+      skipNextBlurCommitRef.current = true;
+      const m = selectedInstance.mosaic;
+      setDraftMosaicRows(String(m?.rows ?? 1));
+      setDraftMosaicCols(String(m?.cols ?? 1));
+      setDraftMosaicColPitch(formatGridValue(m ? m.colPitch : masterCell.width, gridSize));
+      setDraftMosaicRowPitch(formatGridValue(m ? m.rowPitch : masterCell.height, gridSize));
+      event.currentTarget.blur();
     }
   };
 
@@ -870,7 +939,21 @@ export const PropertiesPanel: React.FC = () => {
               </div>
               <div className="prop-row">
                 <span className="prop-label">Size (um)</span>
-                <span className="prop-value">{formatGridValue(masterCell.width, gridSize)} × {formatGridValue(masterCell.height, gridSize)}</span>
+                <span className="prop-value">
+                  {(() => {
+                    if (isActiveMosaic(selectedInstance.mosaic) && masterCell.width > 0 && masterCell.height > 0) {
+                      const b = getPhysicalBounds({
+                        ...selectedInstance,
+                        width: masterCell.width,
+                        height: masterCell.height,
+                        originX: masterCell.originX,
+                        originY: masterCell.originY,
+                      });
+                      return `${formatGridValue(b.width, gridSize)} × ${formatGridValue(b.height, gridSize)} (${selectedInstance.mosaic.rows}×${selectedInstance.mosaic.cols})`;
+                    }
+                    return `${formatGridValue(masterCell.width, gridSize)} × ${formatGridValue(masterCell.height, gridSize)}`;
+                  })()}
+                </span>
               </div>
               {masterCell.kind === 'pad' && (
                 <div className="prop-row">
@@ -1019,6 +1102,113 @@ export const PropertiesPanel: React.FC = () => {
                 <p className="rotation-hint">Mouse shortcut: right-click the block to rotate clockwise; Shift-right-click rotates counterclockwise.</p>
               </div>
             </div>
+
+            {(activeCellId !== null || masterCell.kind !== 'pad') && (
+              <div className="prop-section">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                  <h4 className="sub-title" style={{ marginBottom: 0 }}>Mosaic Array (Virtuoso)</h4>
+                  {isActiveMosaic(selectedInstance.mosaic) && (
+                    <span className="selection-count">
+                      {selectedInstance.mosaic.rows}×{selectedInstance.mosaic.cols}
+                    </span>
+                  )}
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="label">Rows</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      step={1}
+                      className="input-field"
+                      value={draftMosaicRows}
+                      disabled={Boolean(selectedInstance.locked)}
+                      onChange={e => setDraftMosaicRows(e.target.value)}
+                      onBlur={commitMosaic}
+                      onKeyDown={handleMosaicKeyDown}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Columns</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      step={1}
+                      className="input-field"
+                      value={draftMosaicCols}
+                      disabled={Boolean(selectedInstance.locked)}
+                      onChange={e => setDraftMosaicCols(e.target.value)}
+                      onBlur={commitMosaic}
+                      onKeyDown={handleMosaicKeyDown}
+                    />
+                  </div>
+                </div>
+                <div className="form-row" style={{ marginTop: '10px' }}>
+                  <div className="form-group">
+                    <label className="label">Col Pitch ΔX (um)</label>
+                    <input
+                      type="number"
+                      step={gridSize}
+                      className="input-field"
+                      value={draftMosaicColPitch}
+                      disabled={Boolean(selectedInstance.locked)}
+                      onChange={e => setDraftMosaicColPitch(e.target.value)}
+                      onBlur={commitMosaic}
+                      onKeyDown={handleMosaicKeyDown}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="label">Row Pitch ΔY (um)</label>
+                    <input
+                      type="number"
+                      step={gridSize}
+                      className="input-field"
+                      value={draftMosaicRowPitch}
+                      disabled={Boolean(selectedInstance.locked)}
+                      onChange={e => setDraftMosaicRowPitch(e.target.value)}
+                      onBlur={commitMosaic}
+                      onKeyDown={handleMosaicKeyDown}
+                    />
+                  </div>
+                </div>
+                {isActiveMosaic(selectedInstance.mosaic) && (
+                  <div className="rotation-actions" style={{ marginTop: '10px' }}>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={Boolean(selectedInstance.locked)}
+                      onClick={() => {
+                        try {
+                          flattenMosaicInstance(selectedInstance.id);
+                        } catch (error) {
+                          alert(error instanceof Error ? error.message : 'Unable to flatten mosaic.');
+                        }
+                      }}
+                      title="Explode mosaic into individual editable instances"
+                    >
+                      <FiGrid /> Flatten ({selectedInstance.mosaic.rows * selectedInstance.mosaic.cols})
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={Boolean(selectedInstance.locked)}
+                      onClick={() => {
+                        try {
+                          updateInstanceMosaic(selectedInstance.id, null);
+                        } catch (error) {
+                          alert(error instanceof Error ? error.message : 'Unable to reset mosaic.');
+                        }
+                      }}
+                      title="Reset back to a single 1×1 instance"
+                    >
+                      Reset 1×1
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="prop-section">
               <button

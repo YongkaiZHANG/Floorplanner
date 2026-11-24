@@ -46,6 +46,20 @@ const finite = (value: unknown): value is number =>
 const nonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
 
+const assertMosaic = (raw: unknown, instanceName: string) => {
+  if (raw === undefined) return;
+  if (
+    !isRecord(raw)
+    || !finite(raw.rows) || !Number.isInteger(raw.rows) || raw.rows < 1 || raw.rows > 500
+    || !finite(raw.cols) || !Number.isInteger(raw.cols) || raw.cols < 1 || raw.cols > 500
+    || raw.rows * raw.cols > 10000
+    || !finite(raw.rowPitch)
+    || !finite(raw.colPitch)
+  ) {
+    throw new Error(`Invalid mosaic configuration on instance ${instanceName}.`);
+  }
+};
+
 const assertInstances = (
   rawInstances: unknown[],
   masterCells: Record<string, Cell>,
@@ -59,6 +73,7 @@ const assertInstances = (
         (raw.locked !== undefined && typeof raw.locked !== 'boolean')) {
       throw new Error(`Invalid instance at index ${index}.`);
     }
+    assertMosaic(raw.mosaic, raw.name);
     if (!masterCells[raw.cellId]) throw new Error(`Instance ${raw.name} references a missing master.`);
     if (ids.has(raw.id)) throw new Error(`Duplicate instance id: ${raw.id}.`);
     if (names.has(raw.name)) throw new Error(`Duplicate instance name: ${raw.name}.`);

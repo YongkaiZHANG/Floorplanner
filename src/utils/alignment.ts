@@ -22,6 +22,57 @@ export type AlignmentEdge = AlignmentOperation;
 
 export type DistributionAxis = 'horizontal' | 'vertical';
 
+export type MoveConstraintMode = 'orthogonal' | 'free' | 'horizontal' | 'vertical';
+
+export interface ConstrainedDelta {
+  dx: number;
+  dy: number;
+  activeAxis: 'horizontal' | 'vertical' | 'free';
+}
+
+export interface InstanceMosaic {
+  /** Number of rows (>= 1, repeated along local Y axis by rowPitch). */
+  rows: number;
+  /** Number of columns (>= 1, repeated along local X axis by colPitch). */
+  cols: number;
+  /** Center-to-center / origin-to-origin row pitch ΔY in local master coordinates (um). */
+  rowPitch: number;
+  /** Center-to-center / origin-to-origin column pitch ΔX in local master coordinates (um). */
+  colPitch: number;
+}
+
+export const isActiveMosaic = (mosaic?: InstanceMosaic | null): mosaic is InstanceMosaic => (
+  Boolean(mosaic && (mosaic.rows > 1 || mosaic.cols > 1))
+);
+
+/**
+ * Applies a Cadence Virtuoso move snap constraint to a raw displacement vector (dx, dy).
+ * - `'orthogonal'` (Virtuoso default): locks motion to whichever axis has the larger displacement.
+ * - `'horizontal'`: allows only X movement (dy = 0).
+ * - `'vertical'`: allows only Y movement (dx = 0).
+ * - `'free'`: unconstrained diagonal/any-angle movement.
+ */
+export const applyMoveConstraint = (
+  dx: number,
+  dy: number,
+  mode: MoveConstraintMode,
+): ConstrainedDelta => {
+  const clean = (value: number) => (Object.is(value, -0) ? 0 : value);
+  if (mode === 'free') {
+    return { dx: clean(dx), dy: clean(dy), activeAxis: 'free' };
+  }
+  if (mode === 'horizontal') {
+    return { dx: clean(dx), dy: 0, activeAxis: 'horizontal' };
+  }
+  if (mode === 'vertical') {
+    return { dx: 0, dy: clean(dy), activeAxis: 'vertical' };
+  }
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return { dx: clean(dx), dy: 0, activeAxis: 'horizontal' };
+  }
+  return { dx: 0, dy: clean(dy), activeAxis: 'vertical' };
+};
+
 export const HORIZONTAL_ALIGNMENT_EDGES = ['left', 'horizontal-center', 'right'] as const;
 export const VERTICAL_ALIGNMENT_EDGES = ['bottom', 'vertical-center', 'top'] as const;
 
@@ -37,6 +88,8 @@ export interface AlignableInstance {
   originY?: number;
   /** Runtime-validated so it can accept the store's current string field directly. */
   orientation: string;
+  /** Optional Virtuoso mosaic array metadata (rows × cols with local rowPitch/colPitch). */
+  mosaic?: InstanceMosaic;
 }
 
 export interface ArrangementOptions {
@@ -93,10 +146,24 @@ const assertInstance = (instance: AlignableInstance) => {
 const getLocalBounds = (instance: AlignableInstance): LocalBounds => {
   const ox = instance.originX ?? 0;
   const oy = instance.originY ?? 0;
-  const x1 = ox;
-  const y1 = oy;
-  const x2 = ox + instance.width;
-  const y2 = oy + instance.height;
+  let minColOffset = 0;
+  let maxColOffset = 0;
+  let minRowOffset = 0;
+  let maxRowOffset = 0;
+  if (instance.mosaic) {
+    const rows = Math.max(1, Math.floor(instance.mosaic.rows));
+    const cols = Math.max(1, Math.floor(instance.mosaic.cols));
+    const colSpan = (cols - 1) * instance.mosaic.colPitch;
+    const rowSpan = (rows - 1) * instance.mosaic.rowPitch;
+    minColOffset = Math.min(0, colSpan);
+    maxColOffset = Math.max(0, colSpan);
+    minRowOffset = Math.min(0, rowSpan);
+    maxRowOffset = Math.max(0, rowSpan);
+  }
+  const x1 = ox + minColOffset;
+  const y1 = oy + minRowOffset;
+  const x2 = ox + instance.width + maxColOffset;
+  const y2 = oy + instance.height + maxRowOffset;
   switch (instance.orientation) {
     case 'R0': return { minX: x1, maxX: x2, minY: y1, maxY: y2 };
     case 'R90': return { minX: -y2, maxX: -y1, minY: x1, maxY: x2 };

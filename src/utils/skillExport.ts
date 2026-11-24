@@ -1,5 +1,5 @@
 import type { Cell, Instance, PixelArray } from '../store/useStore.ts';
-import { getPhysicalBounds } from './alignment.ts';
+import { getPhysicalBounds, isActiveMosaic } from './alignment.ts';
 import { formatGridValue, isOnGrid } from './grid.ts';
 import {
   composeCadenceTransform,
@@ -153,6 +153,18 @@ const validateInstancesList = (
     }
     if (!VALID_ORIENTATIONS.has(instance.orientation)) {
       throw new Error(`Instance ${instance.name} has invalid orientation ${instance.orientation}.`);
+    }
+    if (instance.mosaic) {
+      const { rows, cols, rowPitch, colPitch } = instance.mosaic;
+      if (!Number.isInteger(rows) || rows < 1 || !Number.isInteger(cols) || cols < 1) {
+        throw new Error(`Mosaic instance ${instance.name} must have positive integer rows and columns.`);
+      }
+      if (!Number.isFinite(rowPitch) || !Number.isFinite(colPitch)) {
+        throw new Error(`Mosaic instance ${instance.name} has invalid pitch values.`);
+      }
+      if (!isOnGrid(rowPitch, gridSize) || !isOnGrid(colPitch, gridSize)) {
+        throw new Error(`Mosaic instance ${instance.name} pitch is off the ${formatGridValue(gridSize, gridSize)} um placement grid.`);
+      }
     }
   });
 };
@@ -320,10 +332,19 @@ export const generateSkillCode = (
   const globalPlacements = new Map<string, { x: number; y: number; orientation: string }>();
 
   if (hierarchyMode === 'zero-origin-direct') {
+    const mosaicMasterIds = new Set<string>();
+    for (const inst of instances) {
+      if (isActiveMosaic(inst.mosaic)) mosaicMasterIds.add(inst.cellId);
+    }
+    for (const view of Object.values(cellViews)) {
+      for (const inst of view.instances) {
+        if (isActiveMosaic(inst.mosaic)) mosaicMasterIds.add(inst.cellId);
+      }
+    }
     const usageCounts = getHierarchyUsageCounts(instances, cellViews);
     for (const [cellId, count] of usageCounts.entries()) {
       const master = masterCells[cellId];
-      if (count === 1 && master && master.kind !== 'pad') {
+      if (count === 1 && master && master.kind !== 'pad' && !mosaicMasterIds.has(cellId)) {
         originAnchored.add(cellId);
       }
     }
@@ -572,7 +593,15 @@ export const generateSkillCode = (
 
         code += `${indent}master = dbOpenCellViewByType(${childLib} ${childCell} "layout" "maskLayout" "r")\n`;
         code += `${indent}unless(master error("Floorplanner: cannot open sub-cell %s/%s/layout.\\n" ${childLib} ${childCell}))\n`;
-        code += `${indent}inst = dbCreateInst(cv master ${childInstName} ${placeX}:${placeY} ${placeOrient} 1)\n`;
+        if (isActiveMosaic(childInst.mosaic)) {
+          const mRows = childInst.mosaic.rows;
+          const mCols = childInst.mosaic.cols;
+          const mRowPitch = formatCoord(childInst.mosaic.rowPitch, gridSize);
+          const mColPitch = formatCoord(childInst.mosaic.colPitch, gridSize);
+          code += `${indent}inst = dbCreateSimpleMosaic(cv master ${childInstName} ${placeX}:${placeY} ${placeOrient} ${mRows} ${mCols} ${mRowPitch} ${mColPitch})\n`;
+        } else {
+          code += `${indent}inst = dbCreateInst(cv master ${childInstName} ${placeX}:${placeY} ${placeOrient} 1)\n`;
+        }
         code += `${indent}unless(inst error("Floorplanner: cannot place sub-instance %s inside %s.\\n" ${childInstName} ${cellName}))\n`;
         code += `${indent}dbClose(master)\n`;
       });
@@ -687,7 +716,15 @@ export const generateSkillCode = (
       code += `    master = dbOpenCellViewByType(${masterLib} ${masterName} "layout" "maskLayout" "r")\n`;
       code += `    unless(master error("Floorplanner: cannot open IP master %s/%s/layout.\\n" ${masterLib} ${masterName}))\n`;
       code += `    ; Original canvas transform is stored inside the wrapper.\n`;
-      code += `    inst = dbCreateInst(cv master ${internalName} ${snapX}:${snapY} ${orientation} 1)\n`;
+      if (isActiveMosaic(inst.mosaic)) {
+        const mRows = inst.mosaic.rows;
+        const mCols = inst.mosaic.cols;
+        const mRowPitch = formatCoord(inst.mosaic.rowPitch, gridSize);
+        const mColPitch = formatCoord(inst.mosaic.colPitch, gridSize);
+        code += `    inst = dbCreateSimpleMosaic(cv master ${internalName} ${snapX}:${snapY} ${orientation} ${mRows} ${mCols} ${mRowPitch} ${mColPitch})\n`;
+      } else {
+        code += `    inst = dbCreateInst(cv master ${internalName} ${snapX}:${snapY} ${orientation} 1)\n`;
+      }
       code += `    unless(inst error("Floorplanner: cannot place IP master inside %s.\\n" ${wrapperCell}))\n`;
       code += `    dbClose(master)\n`;
       const masterView = cellViews[masterCell.id];
@@ -829,7 +866,15 @@ export const generateSkillCode = (
         : `    ; DIRECT IP ${skillComment(inst.name)} -> ${skillComment(masterCell.libName)}/${skillComment(masterCell.cellName)}\n`;
       code += `    master = dbOpenCellViewByType(${masterLib} ${masterName} "layout" "maskLayout" "r")\n`;
       code += `    unless(master error("Floorplanner: cannot open IP master %s/%s/layout.\\n" ${masterLib} ${masterName}))\n`;
-      code += `    inst = dbCreateInst(cv master ${instanceName} ${placeX}:${placeY} ${placeOrient} 1)\n`;
+      if (isActiveMosaic(inst.mosaic)) {
+        const mRows = inst.mosaic.rows;
+        const mCols = inst.mosaic.cols;
+        const mRowPitch = formatCoord(inst.mosaic.rowPitch, gridSize);
+        const mColPitch = formatCoord(inst.mosaic.colPitch, gridSize);
+        code += `    inst = dbCreateSimpleMosaic(cv master ${instanceName} ${placeX}:${placeY} ${placeOrient} ${mRows} ${mCols} ${mRowPitch} ${mColPitch})\n`;
+      } else {
+        code += `    inst = dbCreateInst(cv master ${instanceName} ${placeX}:${placeY} ${placeOrient} 1)\n`;
+      }
       code += `    unless(inst error("Floorplanner: cannot place direct IP instance %s.\\n" ${instanceName}))\n`;
       code += `    dbClose(master)\n\n`;
     }

@@ -43,17 +43,19 @@ const shortcutGroups: Array<{ title: string; items: Array<[string, string]> }> =
     title: 'Placement & Editing',
     items: [
       ['N', 'Create a Master IP / Cell View'],
-      ['I', 'Instantiate a cell (cursor or at 0,0)'],
+      ['I', 'Instantiate a cell or editable Mosaic (cursor or 0,0)'],
       ['X / Shift+B', 'Descend Edit-in-Place into cell / Return up'],
       ['R / D', 'Draw Virtuoso rectangle on layer/purpose (when idle)'],
       ['L', 'Create Text Label on text/drawing or custom layer'],
       ['F4 / S', 'Partial Select shape edges / Stretch selected edges'],
-      ['C', 'Copy selected block into placement mode'],
-      ['R / Shift+R', 'Rotate selected block or placing ghost ±90°'],
-      ['Right-click / Shift+Right', 'Rotate block or text CW / CCW on canvas'],
+      ['C', 'Interactive Copy of selected block(s) or shape (R rotates)'],
+      ['F3 / Shift+Drag', 'Cycle Move Mode (Ortho default / Free / H / V) / Temp Free'],
+      ['R / Shift+R', 'Rotate selected block or placing/copying ghost ±90°'],
+      ['Right-click / Shift+Right', 'Rotate block, text, or copy group CW / CCW'],
       ['Shift + L', 'Lock or unlock selected blocks or shapes'],
       ['Alt + Arrow / +Shift', 'Nudge selection by 1× or 10× grid'],
-      ['Ctrl/Cmd + C / V', 'Copy & paste selected instances'],
+      ['Ctrl/Cmd + C / X', 'Cut unlocked selected block(s) or shape to clipboard'],
+      ['Ctrl/Cmd + V', 'Paste cut/copied block(s) or shape from clipboard'],
       ['Delete / Backspace', 'Delete unlocked selected blocks or shapes'],
     ],
   },
@@ -349,7 +351,11 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose, onLoadDem
               <div className="tutorial-card-grid">
                 <article className="tutorial-card">
                   <FiMove />
-                  <div><strong>Multi-block canvas dragging</strong><p>Marquee-select or Shift-click multiple blocks, then drag any selected block to move the entire group together in one Undo step while respecting die bounds and pad perimeters.</p></div>
+                  <div><strong>Orthogonal Move Modes &amp; Multi-Copy (C / F3)</strong><p>Dragging defaults to Virtuoso Orthogonal move (cycle Ortho / Free / Horiz / Vert with <kbd>F3</kbd> or hold <kbd>Shift</kbd> for temporary Free). Press <kbd>C</kbd> to interactively copy multiple selected objects together, or <kbd>Ctrl+C</kbd> / <kbd>Ctrl+V</kbd> to cut and paste.</p></div>
+                </article>
+                <article className="tutorial-card">
+                  <FiGrid />
+                  <div><strong>Editable Mosaic Cells (dbCreateSimpleMosaic)</strong><p>Create live array mosaics from Create Instance (<kbd>I</kbd>) or turn any placed instance into a mosaic in Properties — adjust rows, columns, and ΔX / ΔY pitch anytime, flatten when needed, and export native <code>dbCreateSimpleMosaic</code> SKILL.</p></div>
                 </article>
                 <article className="tutorial-card">
                   <FiLock />

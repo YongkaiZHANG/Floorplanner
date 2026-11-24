@@ -3,6 +3,7 @@ import { isCellEmpty, rotateOrientationByQuarterTurns, useStore } from '../store
 import type { Cell, PadSide, PendingInstanceArray } from '../store/useStore';
 import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiExternalLink, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight, FiArrowDownCircle, FiSquare, FiType } from 'react-icons/fi';
 import './Sidebar.css';
+import { isActiveMosaic } from '../utils/alignment';
 import { formatGridValue } from '../utils/grid';
 import { wouldCreateHierarchyCycle } from '../utils/hierarchy';
 import { resolveLayerStyle } from '../utils/layoutLayers';
@@ -58,6 +59,7 @@ export const Sidebar: React.FC = () => {
   const [instCols, setInstCols] = useState('1');
   const [instDeltaX, setInstDeltaX] = useState('20');
   const [instDeltaY, setInstDeltaY] = useState('20');
+  const [instAsMosaic, setInstAsMosaic] = useState(true);
 
   const [editingCellId, setEditingCellId] = useState<string | null>(null);
   const [newLibName, setNewLibName] = useState(topLibName);
@@ -363,6 +365,7 @@ export const Sidebar: React.FC = () => {
           cols,
           deltaX,
           deltaY,
+          asMosaic: instAsMosaic,
         });
       } else {
         placeInstance(target.id, 0, 0, instOrientation, instNamePrefix.trim() || undefined);
@@ -396,6 +399,7 @@ export const Sidebar: React.FC = () => {
           cols,
           deltaX: Number.isFinite(deltaX) ? deltaX : target.width,
           deltaY: Number.isFinite(deltaY) ? deltaY : target.height,
+          asMosaic: rows > 1 || cols > 1 ? instAsMosaic : undefined,
         }
       : null;
     handleStartPlacement(target.id, instOrientation, arrayConfig);
@@ -443,6 +447,7 @@ export const Sidebar: React.FC = () => {
     setInstCols('1');
     setInstNamePrefix('');
     setInstOrientation('R0');
+    setInstAsMosaic(true);
     const first = eligibleInstantiateCells[0];
     if (first && !eligibleInstantiateCells.some(c => c.id === instantiateSelection)) {
       setInstantiateSelection(first.id);
@@ -918,7 +923,9 @@ export const Sidebar: React.FC = () => {
                     <div className="inst-header">
                       <FiTarget className="inst-icon" />
                       <span className="inst-name">{inst.name}</span>
-                      <span className="inst-master">({master.cellName})</span>
+                      <span className="inst-master">
+                        ({master.cellName}{isActiveMosaic(inst.mosaic) ? ` · ${inst.mosaic.rows}×${inst.mosaic.cols}` : ''})
+                      </span>
                       {inst.locked && (
                         <span className="inst-lock-badge" title="Locked">
                           <FiLock />
@@ -1347,25 +1354,35 @@ export const Sidebar: React.FC = () => {
                 <div className="form-row">
                   <div className="form-group">
                     <label className="label">Rows</label>
-                    <input type="number" min="1" max="100" step="1" className="input-field" value={instRows} onChange={e => setInstRows(e.target.value)} />
+                    <input type="number" min="1" max="500" step="1" className="input-field" value={instRows} onChange={e => setInstRows(e.target.value)} />
                   </div>
                   <div className="form-group">
                     <label className="label">Columns</label>
-                    <input type="number" min="1" max="100" step="1" className="input-field" value={instCols} onChange={e => setInstCols(e.target.value)} />
+                    <input type="number" min="1" max="500" step="1" className="input-field" value={instCols} onChange={e => setInstCols(e.target.value)} />
                   </div>
                   {(Number(instRows) > 1 || Number(instCols) > 1) && (
                     <>
                       <div className="form-group">
-                        <label className="label">ΔX (um)</label>
+                        <label className="label">ΔX Pitch (um)</label>
                         <input type="number" step="any" className="input-field" value={instDeltaX} onChange={e => setInstDeltaX(e.target.value)} />
                       </div>
                       <div className="form-group">
-                        <label className="label">ΔY (um)</label>
+                        <label className="label">ΔY Pitch (um)</label>
                         <input type="number" step="any" className="input-field" value={instDeltaY} onChange={e => setInstDeltaY(e.target.value)} />
                       </div>
                     </>
                   )}
                 </div>
+                {(Number(instRows) > 1 || Number(instCols) > 1) && (
+                  <label className="checkbox-label" style={{ marginBottom: '10px' }}>
+                    <input
+                      type="checkbox"
+                      checked={instAsMosaic}
+                      onChange={e => setInstAsMosaic(e.target.checked)}
+                    />
+                    Editable Mosaic cell (adjust rows/columns/pitch anytime · SKILL <code>dbCreateSimpleMosaic</code>)
+                  </label>
+                )}
                 <small className="field-help">Tip: Use <strong>Place at (0, 0)</strong> to drop a co-origin IP cell directly at chip origin, or <strong>Hide &amp; Place</strong> to click interactively (<strong>R</strong> / right-click rotates).</small>
                 <div className="modal-actions">
                   <button type="button" className="btn" onClick={() => setShowInstantiateModal(false)}>Cancel</button>

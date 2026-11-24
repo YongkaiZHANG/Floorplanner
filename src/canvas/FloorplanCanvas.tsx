@@ -2,8 +2,8 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
 import { useStore, computePadGroupPositions, getTransformProps, isCellEmpty, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
 import type { Instance } from '../store/useStore';
-import { getAlignmentEdgeAxis, getPhysicalBounds } from '../utils/alignment';
-import type { AlignmentEdge, CadenceOrientation } from '../utils/alignment';
+import { applyMoveConstraint, getAlignmentEdgeAxis, getPhysicalBounds, isActiveMosaic } from '../utils/alignment';
+import type { AlignmentEdge, CadenceOrientation, MoveConstraintMode } from '../utils/alignment';
 import { collapseCollinearPadCandidates, labelRectsOverlap } from '../utils/autoDim';
 import type { ScreenLabelRect } from '../utils/autoDim';
 import { SCALE_FACTOR } from '../utils/canvasConstants';
@@ -42,7 +42,7 @@ import { panViewportByArrow } from '../utils/viewport';
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { FiArrowUp, FiCrosshair, FiEye, FiEyeOff, FiGrid, FiMaximize2, FiMinus, FiPlus, FiX } from 'react-icons/fi';
+import { FiArrowUp, FiCrosshair, FiEye, FiEyeOff, FiGrid, FiMaximize2, FiMinus, FiMove, FiPlus, FiX } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
@@ -98,6 +98,8 @@ export const FloorplanCanvas: React.FC = () => {
   const partialMarqueeDraggedRef = useRef(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number; stageX: number; stageY: number } | null>(null);
   const [isSpaceDown, setIsSpaceDown] = useState(false);
+  const shiftKeyHeldRef = useRef(false);
+  const [shiftHeld, setShiftHeld] = useState(false);
   const [multiDragDelta, setMultiDragDelta] = useState<{ anchorId: string; dx: number; dy: number } | null>(null);
   const multiDragBoundsRef = useRef<{
     anchorId: string;
@@ -107,6 +109,16 @@ export const FloorplanCanvas: React.FC = () => {
     maxDx: number;
     minDy: number;
     maxDy: number;
+  } | null>(null);
+  const singleDragAnchorRef = useRef<{ id: string; startX: number; startY: number } | null>(null);
+  const shapeDragAnchorRef = useRef<{ id: string; startX: number; startY: number } | null>(null);
+  const pixelArrayDragAnchorRef = useRef<{ startX: number; startY: number } | null>(null);
+  const [dragGuide, setDragGuide] = useState<{
+    startX: number;
+    startY: number;
+    curX: number;
+    curY: number;
+    axis: 'horizontal' | 'vertical';
   } | null>(null);
 
   const { 
@@ -170,10 +182,15 @@ export const FloorplanCanvas: React.FC = () => {
     placeInstanceMosaic,
     pendingManualPadGroup,
     placeManualPadGroup,
+    pendingCopyGroup,
+    placeCopyGroupAt,
+    rotatePendingCopyGroup,
     leftSidebarPinned,
     rightSidebarPinned,
     setRightSidebarPinned,
     orthogonalRuler,
+    moveConstraint,
+    cycleMoveConstraint,
     showAutoDim,
     showOverlapDrc,
     showGrid,
@@ -472,8 +489,42 @@ export const FloorplanCanvas: React.FC = () => {
     };
   }, []);
 
+  // Reset transient measurement state whenever leaving Measure mode (e.g. via Topbar buttons).
+  useEffect(() => {
+    if (appMode !== 'measure') {
+      setIsMeasuring(false);
+      setMeasureStart(null);
+      setCurrentRuler(null);
+      setSnapIndicator(null);
+    }
+  }, [appMode]);
+
+  // Recompute live ruler preview immediately if user toggles Ortho (O) mid-measurement.
+  useEffect(() => {
+    if (appMode !== 'measure' || !isMeasuring || !measureStart || !mousePos) return;
+    const editCursor = isEditInPlace ? baseToEditPoint(mousePos.x, mousePos.y) : mousePos;
+    const end = resolveOrthogonalRulerEnd(
+      measureStart,
+      { x: editCursor.x, y: editCursor.y },
+      orthogonalRuler,
+    );
+    setCurrentRuler({
+      startX: measureStart.x,
+      startY: measureStart.y,
+      endX: end.x,
+      endY: end.y,
+      ...(end.referenceX !== undefined && end.referenceY !== undefined
+        ? { referenceX: end.referenceX, referenceY: end.referenceY }
+        : {}),
+    });
+  }, [orthogonalRuler]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') {
+        shiftKeyHeldRef.current = true;
+        setShiftHeld(true);
+      }
       // Don't trigger if user is typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement ||
           e.target instanceof HTMLSelectElement || (e.target instanceof HTMLElement && e.target.isContentEditable)) {
@@ -525,9 +576,9 @@ export const FloorplanCanvas: React.FC = () => {
       }
 
       if (e.ctrlKey || e.metaKey) {
-        if (key === 'c') {
+        if (key === 'c' || key === 'x') {
           e.preventDefault();
-          state.copySelection();
+          state.cutSelection();
           return;
         }
         if (key === 'v') {
@@ -590,12 +641,7 @@ export const FloorplanCanvas: React.FC = () => {
           break;
         case 'c':
           e.preventDefault();
-          if (state.selectedInstanceId) {
-            const inst = state.instances.find(i => i.id === state.selectedInstanceId);
-            if (inst) {
-              state.setPlacement(inst.cellId, inst.orientation);
-            }
-          }
+          state.startInteractiveCopy();
           break;
         case 'q':
           e.preventDefault();
@@ -620,6 +666,10 @@ export const FloorplanCanvas: React.FC = () => {
             e.preventDefault();
             setAppMode('stretch');
           }
+          break;
+        case 'f3':
+          e.preventDefault();
+          state.cycleMoveConstraint();
           break;
         case 'f4':
           e.preventDefault();
@@ -681,6 +731,10 @@ export const FloorplanCanvas: React.FC = () => {
                 e.shiftKey ? -1 : 1,
               ) as CadenceOrientation,
             });
+            break;
+          }
+          if (state.appMode === 'place' && state.pendingCopyGroup) {
+            state.rotatePendingCopyGroup(e.shiftKey ? -1 : 1);
             break;
           }
           if (state.appMode === 'place' && state.placementMasterId) {
@@ -753,6 +807,7 @@ export const FloorplanCanvas: React.FC = () => {
               setAppMode('select');
             }
           } else if (state.appMode === 'place') {
+            state.cancelPendingCopyGroup();
             state.setPlacement(null);
           } else if (state.appMode === 'pixel-array') {
             state.setAppMode('select');
@@ -777,10 +832,17 @@ export const FloorplanCanvas: React.FC = () => {
       if (e.code === 'Space') {
         setIsSpaceDown(false);
       }
+      if (e.key === 'Shift') {
+        shiftKeyHeldRef.current = false;
+        setShiftHeld(false);
+      }
     };
 
     const handleWindowBlur = () => {
       setIsSpaceDown(false);
+      shiftKeyHeldRef.current = false;
+      setShiftHeld(false);
+      setDragGuide(null);
       if (stretchDraggingRef.current) {
         stretchDraggingRef.current = false;
         stretchSessionRef.current = null;
@@ -893,13 +955,23 @@ export const FloorplanCanvas: React.FC = () => {
         segments.push({ a, b, axis: Math.abs(a.x - b.x) <= 1e-9 ? 'vertical' : 'horizontal' });
       }
 
-      // drawn shapes (for snapping rulers cleanly onto shape edges too)
+      // drawn shapes (for snapping rulers cleanly onto shape edges too, including rotated text labels)
       for (const shape of shapes) {
+        const sb = shape.orientation && shape.orientation !== 'R0'
+          ? getPhysicalBounds({
+              id: shape.id,
+              x: shape.x,
+              y: shape.y,
+              width: shape.width,
+              height: shape.height,
+              orientation: shape.orientation,
+            })
+          : { left: shape.x, right: shape.x + shape.width, bottom: shape.y, top: shape.y + shape.height };
         const shapeCorners = [
-          editToBasePoint(shape.x, shape.y),
-          editToBasePoint(shape.x + shape.width, shape.y),
-          editToBasePoint(shape.x + shape.width, shape.y + shape.height),
-          editToBasePoint(shape.x, shape.y + shape.height),
+          editToBasePoint(sb.left, sb.bottom),
+          editToBasePoint(sb.right, sb.bottom),
+          editToBasePoint(sb.right, sb.top),
+          editToBasePoint(sb.left, sb.top),
         ];
         for (let i = 0; i < 4; i++) {
           const a = shapeCorners[i];
@@ -992,11 +1064,73 @@ export const FloorplanCanvas: React.FC = () => {
     return { base: snappedBase, edit: snapPointToGrid(mapped.x, mapped.y, gridSize) };
   };
 
+  const resolveEffectiveMoveConstraint = (): MoveConstraintMode => {
+    if (shiftKeyHeldRef.current) {
+      return moveConstraint === 'free' ? 'orthogonal' : 'free';
+    }
+    return moveConstraint;
+  };
+
+  /**
+   * Applies the active Virtuoso Move constraint (`orthogonal` / `free` / `horizontal` / `vertical`)
+   * in screen-aligned base view coordinates so Horizontal/Vertical always match visual X/Y even inside rotated Edit-in-Place.
+   */
+  const constrainEditPointFromAnchor = (
+    anchorEditX: number,
+    anchorEditY: number,
+    targetEditX: number,
+    targetEditY: number,
+  ): { x: number; y: number; activeAxis: 'horizontal' | 'vertical' | 'free' } => {
+    const mode = resolveEffectiveMoveConstraint();
+    if (mode === 'free') {
+      return { x: targetEditX, y: targetEditY, activeAxis: 'free' };
+    }
+    const baseAnchor = editToBasePoint(anchorEditX, anchorEditY);
+    const baseTarget = editToBasePoint(targetEditX, targetEditY);
+    const constrained = applyMoveConstraint(baseTarget.x - baseAnchor.x, baseTarget.y - baseAnchor.y, mode);
+    if (!isEditInPlace) {
+      return {
+        x: anchorEditX + constrained.dx,
+        y: anchorEditY + constrained.dy,
+        activeAxis: constrained.activeAxis,
+      };
+    }
+    const editBack = baseToEditPoint(baseAnchor.x + constrained.dx, baseAnchor.y + constrained.dy);
+    return {
+      x: editBack.x,
+      y: editBack.y,
+      activeAxis: constrained.activeAxis,
+    };
+  };
+
   const snapScreenDragPosForEdit = (pos: { x: number; y: number }) => {
     const baseX = ((pos.x - stagePos.x) / stageScale) / SCALE_FACTOR;
     const baseY = ((pos.y - stagePos.y) / -stageScale) / SCALE_FACTOR;
     const editRaw = baseToEditPoint(baseX, baseY);
     const editSnapped = snapPointToGrid(editRaw.x, editRaw.y, activeSnapStep);
+    const baseBack = editToBasePoint(editSnapped.x, editSnapped.y);
+    return {
+      x: baseBack.x * SCALE_FACTOR * stageScale + stagePos.x,
+      y: baseBack.y * SCALE_FACTOR * -stageScale + stagePos.y,
+    };
+  };
+
+  const snapShapeDragPosForEdit = (pos: { x: number; y: number }, shapeId: string) => {
+    const baseX = ((pos.x - stagePos.x) / stageScale) / SCALE_FACTOR;
+    const baseY = ((pos.y - stagePos.y) / -stageScale) / SCALE_FACTOR;
+    const editRaw = baseToEditPoint(baseX, baseY);
+    const anchor = shapeDragAnchorRef.current;
+    const constrained = anchor && anchor.id === shapeId
+      ? constrainEditPointFromAnchor(anchor.startX, anchor.startY, editRaw.x, editRaw.y)
+      : { x: editRaw.x, y: editRaw.y, activeAxis: 'free' as const };
+    const editSnapped = snapPointToGrid(constrained.x, constrained.y, activeSnapStep);
+    if (anchor && anchor.id === shapeId && constrained.activeAxis !== 'free') {
+      const bStart = editToBasePoint(anchor.startX, anchor.startY);
+      const bCur = editToBasePoint(editSnapped.x, editSnapped.y);
+      setDragGuide({ startX: bStart.x, startY: bStart.y, curX: bCur.x, curY: bCur.y, axis: constrained.activeAxis });
+    } else if (dragGuide !== null) {
+      setDragGuide(null);
+    }
     const baseBack = editToBasePoint(editSnapped.x, editSnapped.y);
     return {
       x: baseBack.x * SCALE_FACTOR * stageScale + stagePos.x,
@@ -1421,6 +1555,7 @@ export const FloorplanCanvas: React.FC = () => {
   };
 
   const handleDragStart = (inst: Instance) => {
+    singleDragAnchorRef.current = { id: inst.id, startX: inst.x, startY: inst.y };
     if (selectedInstanceIds.length <= 1 || !selectedInstanceIds.includes(inst.id)) {
       multiDragBoundsRef.current = null;
       setMultiDragDelta(null);
@@ -1479,7 +1614,7 @@ export const FloorplanCanvas: React.FC = () => {
     setMultiDragDelta({ anchorId: inst.id, dx: 0, dy: 0 });
   };
 
-  // Drag bound logic: clamp physical bounds inside top cell and snap to exact grid steps
+  // Drag bound logic: apply Virtuoso Move mode (orthogonal default) and snap to exact grid steps
   const dragBoundFunc = (pos: {x: number, y: number}, cellId: string, orientation: string, instanceId: string) => {
     const master = masterCells[cellId];
     if (!master) return pos;
@@ -1494,6 +1629,7 @@ export const FloorplanCanvas: React.FC = () => {
 
     const groupDrag = multiDragBoundsRef.current;
     if (groupDrag && groupDrag.anchorId === instanceId) {
+      const constrained = constrainEditPointFromAnchor(groupDrag.startX, groupDrag.startY, umX, umY);
       const snapDelta = (raw: number, min: number, max: number) => {
         const minStep = Math.ceil((min - 1e-9) / activeSnapStep);
         const maxStep = Math.floor((max + 1e-9) / activeSnapStep);
@@ -1507,9 +1643,15 @@ export const FloorplanCanvas: React.FC = () => {
         const step = Math.max(minStep, Math.min(Math.round(raw / activeSnapStep), maxStep));
         return snapToGrid(step * activeSnapStep, gridSize);
       };
-      const dx = snapDelta(umX - groupDrag.startX, groupDrag.minDx, groupDrag.maxDx);
-      const dy = snapDelta(umY - groupDrag.startY, groupDrag.minDy, groupDrag.maxDy);
+      const dx = snapDelta(constrained.x - groupDrag.startX, groupDrag.minDx, groupDrag.maxDx);
+      const dy = snapDelta(constrained.y - groupDrag.startY, groupDrag.minDy, groupDrag.maxDy);
+      const baseStart = editToBasePoint(groupDrag.startX, groupDrag.startY);
       const baseBack = editToBasePoint(groupDrag.startX + dx, groupDrag.startY + dy);
+      if (constrained.activeAxis !== 'free') {
+        setDragGuide({ startX: baseStart.x, startY: baseStart.y, curX: baseBack.x, curY: baseBack.y, axis: constrained.activeAxis });
+      } else if (dragGuide !== null) {
+        setDragGuide(null);
+      }
       return {
         x: baseBack.x * SCALE_FACTOR * stageScale + stagePos.x,
         y: baseBack.y * SCALE_FACTOR * -stageScale + stagePos.y,
@@ -1517,21 +1659,36 @@ export const FloorplanCanvas: React.FC = () => {
     }
 
     try {
-      const snapped = isSubCellCanvas || master.kind !== 'pad'
-        ? snapPointToGrid(umX, umY, activeSnapStep)
-        : snapPadToNearestEdge(
-            umX,
-            umY,
-            master.width,
-            master.height,
-            topWidth,
-            topHeight,
-            gridSize,
-            orientation,
-            padInset,
-            master.originX ?? 0,
-            master.originY ?? 0,
-          );
+      const isFreeBlock = isSubCellCanvas || master.kind !== 'pad';
+      let snapped: { x: number; y: number };
+      if (isFreeBlock) {
+        const anchor = singleDragAnchorRef.current;
+        const constrained = anchor && anchor.id === instanceId
+          ? constrainEditPointFromAnchor(anchor.startX, anchor.startY, umX, umY)
+          : { x: umX, y: umY, activeAxis: 'free' as const };
+        snapped = snapPointToGrid(constrained.x, constrained.y, activeSnapStep);
+        if (anchor && anchor.id === instanceId && constrained.activeAxis !== 'free') {
+          const bStart = editToBasePoint(anchor.startX, anchor.startY);
+          const bCur = editToBasePoint(snapped.x, snapped.y);
+          setDragGuide({ startX: bStart.x, startY: bStart.y, curX: bCur.x, curY: bCur.y, axis: constrained.activeAxis });
+        } else if (dragGuide !== null) {
+          setDragGuide(null);
+        }
+      } else {
+        snapped = snapPadToNearestEdge(
+          umX,
+          umY,
+          master.width,
+          master.height,
+          topWidth,
+          topHeight,
+          gridSize,
+          orientation,
+          padInset,
+          master.originX ?? 0,
+          master.originY ?? 0,
+        );
+      }
       const baseBack = editToBasePoint(snapped.x, snapped.y);
       return {
         x: baseBack.x * SCALE_FACTOR * stageScale + stagePos.x,
@@ -1585,15 +1742,25 @@ export const FloorplanCanvas: React.FC = () => {
     const worldX = (pos.x - stagePos.x) / stageScale;
     const worldY = (pos.y - stagePos.y) / -stageScale;
     const editPos = baseToEditPoint(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR);
+    const anchor = pixelArrayDragAnchorRef.current;
+    const constrained = anchor
+      ? constrainEditPointFromAnchor(anchor.startX, anchor.startY, editPos.x, editPos.y)
+      : { x: editPos.x, y: editPos.y, activeAxis: 'free' as const };
     try {
       const snapped = clampBoxInsideActiveBoundary(
-        editPos.x,
-        editPos.y,
+        constrained.x,
+        constrained.y,
         pixelArray.width,
         pixelArray.height,
         activeSnapStep,
       );
       const baseBack = editToBasePoint(snapped.x, snapped.y);
+      if (anchor && constrained.activeAxis !== 'free') {
+        const bStart = editToBasePoint(anchor.startX, anchor.startY);
+        setDragGuide({ startX: bStart.x, startY: bStart.y, curX: baseBack.x, curY: baseBack.y, axis: constrained.activeAxis });
+      } else if (dragGuide !== null) {
+        setDragGuide(null);
+      }
       return {
         x: baseBack.x * SCALE_FACTOR * stageScale + stagePos.x,
         y: baseBack.y * SCALE_FACTOR * -stageScale + stagePos.y,
@@ -1605,6 +1772,8 @@ export const FloorplanCanvas: React.FC = () => {
 
   const handleDragEnd = (e: KonvaEventObject<DragEvent>, instanceId: string) => {
     const node = e.target;
+    singleDragAnchorRef.current = null;
+    setDragGuide(null);
     const groupDrag = multiDragBoundsRef.current;
     if (groupDrag && groupDrag.anchorId === instanceId) {
       multiDragBoundsRef.current = null;
@@ -1683,7 +1852,15 @@ export const FloorplanCanvas: React.FC = () => {
       const mA = masterCells[a.cellId];
       const mB = masterCells[b.cellId];
       if (!mA || !mB) return 0;
-      return (mB.width * mB.height) - (mA.width * mA.height);
+      const bA = mA.width > 0 && mA.height > 0
+        ? getPhysicalBounds({ ...a, width: mA.width, height: mA.height, originX: mA.originX, originY: mA.originY })
+        : null;
+      const bB = mB.width > 0 && mB.height > 0
+        ? getPhysicalBounds({ ...b, width: mB.width, height: mB.height, originX: mB.originX, originY: mB.originY })
+        : null;
+      const areaA = bA ? bA.width * bA.height : 0;
+      const areaB = bB ? bB.width * bB.height : 0;
+      return areaB - areaA;
     })
   ), [instances, masterCells]);
 
@@ -2130,7 +2307,7 @@ export const FloorplanCanvas: React.FC = () => {
     const hasReferenceExtension = referenceX !== null && referenceY !== null
       && (Math.abs(referenceX - ex) > 1e-6 || Math.abs(referenceY - ey) > 1e-6);
     const isHovered = r.id != null && hoveredRulerId === r.id;
-    const rulerColor = isHovered ? '#fbbf24' : '#eab308';
+    const rulerColor = isHovered ? '#ea580c' : '#b45309';
     
     const dx = pEnd.x - pStart.x;
     const dy = pEnd.y - pStart.y;
@@ -2146,9 +2323,9 @@ export const FloorplanCanvas: React.FC = () => {
       const nx = -uy;
       const ny = ux;
       
-      // Calculate adaptive tick spacing based on zoom level
+      // Calculate adaptive tick spacing based on zoom level, capped to prevent UI freeze at extreme zoom
       const targetScreenSpacing = 100; // Wider spacing for text legibility
-      const rawSpacing = targetScreenSpacing / (SCALE_FACTOR * stageScale);
+      const rawSpacing = Math.max(targetScreenSpacing / (SCALE_FACTOR * stageScale), dist / 100);
       const mag = Math.pow(10, Math.floor(Math.log10(rawSpacing)));
       const norm = rawSpacing / mag;
       
@@ -2162,7 +2339,7 @@ export const FloorplanCanvas: React.FC = () => {
       // Clamp the minimum tick spacing to the grid size
       tickSpacing = Math.max(tickSpacing, gridSize);
       
-      const numTicks = Math.floor(dist / tickSpacing);
+      const numTicks = Math.min(120, Math.floor(dist / tickSpacing));
       
       for (let i = 1; i <= numTicks; i++) {
         const tickDist = i * tickSpacing;
@@ -2178,7 +2355,8 @@ export const FloorplanCanvas: React.FC = () => {
             key={`tick-line-${key}-${i}`}
             points={[tx - nx * tickLen, ty - ny * tickLen, tx + nx * tickLen, ty + ny * tickLen]} 
             stroke={rulerColor} 
-            strokeWidth={1 / stageScale} 
+            strokeWidth={1.25 / stageScale}
+            listening={false}
           />
         );
         
@@ -2191,10 +2369,11 @@ export const FloorplanCanvas: React.FC = () => {
             y={ty + ny * 10 / stageScale}
             text={strVal}
             fill={rulerColor}
-            fontSize={12 / stageScale}
+            fontSize={11.5 / stageScale}
             fontFamily={CANVAS_FONT_MONO}
             scaleY={-1}
-            offsetY={-6 / stageScale} // slight vertical centering tweak
+            offsetY={-6 / stageScale}
+            listening={false}
           />
         );
       }
@@ -2202,10 +2381,10 @@ export const FloorplanCanvas: React.FC = () => {
       // Start and End perpendicular ticks (End markers)
       const endTickLen = 9 / stageScale;
       ticks.push(
-        <Line key={`start-tick-${key}`} points={[sx - nx * endTickLen, sy - ny * endTickLen, sx + nx * endTickLen, sy + ny * endTickLen]} stroke={rulerColor} strokeWidth={1 / stageScale} />
+        <Line key={`start-tick-${key}`} points={[sx - nx * endTickLen, sy - ny * endTickLen, sx + nx * endTickLen, sy + ny * endTickLen]} stroke={rulerColor} strokeWidth={1.6 / stageScale} listening={false} />
       );
       ticks.push(
-        <Line key={`end-tick-${key}`} points={[ex - nx * endTickLen, ey - ny * endTickLen, ex + nx * endTickLen, ey + ny * endTickLen]} stroke={rulerColor} strokeWidth={1 / stageScale} />
+        <Line key={`end-tick-${key}`} points={[ex - nx * endTickLen, ey - ny * endTickLen, ex + nx * endTickLen, ey + ny * endTickLen]} stroke={rulerColor} strokeWidth={1.6 / stageScale} listening={false} />
       );
 
       // Start text (0)
@@ -2216,10 +2395,11 @@ export const FloorplanCanvas: React.FC = () => {
           y={sy + ny * 10 / stageScale}
           text="0"
           fill={rulerColor}
-          fontSize={12 / stageScale}
+          fontSize={11.5 / stageScale}
           fontFamily={CANVAS_FONT_MONO}
           scaleY={-1}
           offsetY={-6 / stageScale}
+          listening={false}
         />
       );
 
@@ -2228,7 +2408,7 @@ export const FloorplanCanvas: React.FC = () => {
       const absDy = Math.abs(dy);
       const finalDist = formatGridValue(dist, gridSize);
       
-      let endTextString = `L: ${finalDist}`;
+      let endTextString = `L: ${finalDist} µm`;
       if (absDx > 0.0001 && absDy > 0.0001) {
         const finalDx = formatGridValue(absDx, gridSize);
         const finalDy = formatGridValue(absDy, gridSize);
@@ -2236,32 +2416,54 @@ export const FloorplanCanvas: React.FC = () => {
         
         // Draw right triangle dashed lines
         ticks.push(
-          <Line key={`triangle-x-${key}`} points={[sx, sy, ex, sy]} stroke="#eab308" strokeWidth={1 / stageScale} dash={[4 / stageScale, 4 / stageScale]} opacity={0.5} />
+          <Line key={`triangle-x-${key}`} points={[sx, sy, ex, sy]} stroke="#d97706" strokeWidth={1.1 / stageScale} dash={[4 / stageScale, 4 / stageScale]} opacity={0.65} listening={false} />
         );
         ticks.push(
-          <Line key={`triangle-y-${key}`} points={[ex, sy, ex, ey]} stroke="#eab308" strokeWidth={1 / stageScale} dash={[4 / stageScale, 4 / stageScale]} opacity={0.5} />
+          <Line key={`triangle-y-${key}`} points={[ex, sy, ex, ey]} stroke="#d97706" strokeWidth={1.1 / stageScale} dash={[4 / stageScale, 4 / stageScale]} opacity={0.65} listening={false} />
         );
       }
 
+      const endFs = 11.5 / stageScale;
+      const endPadX = 6 / stageScale;
+      const endPillW = Math.max(48 / stageScale, endTextString.length * endFs * 0.62 + endPadX * 2);
+      const endPillH = 18 / stageScale;
       texts.push(
-        <Text
+        <Group
           key={`end-text-${key}`}
-          x={ex + nx * 10 / stageScale}
-          y={ey + ny * 10 / stageScale}
-          text={endTextString}
-          fill={rulerColor}
-          fontSize={12 / stageScale}
-          fontStyle="normal"
-          fontFamily={CANVAS_FONT_MONO}
+          x={ex + nx * 12 / stageScale}
+          y={ey + ny * 12 / stageScale}
           scaleY={-1}
-          offsetY={-7 / stageScale}
-        />
+          listening={false}
+        >
+          <Rect
+            x={-2 / stageScale}
+            y={-endPillH / 2}
+            width={endPillW}
+            height={endPillH}
+            cornerRadius={4 / stageScale}
+            fill="rgba(255, 251, 235, 0.94)"
+            stroke="rgba(180, 83, 9, 0.55)"
+            strokeWidth={1 / stageScale}
+          />
+          <Text
+            x={endPadX - 2 / stageScale}
+            y={-endPillH / 2}
+            height={endPillH}
+            verticalAlign="middle"
+            text={endTextString}
+            fill="#92400e"
+            fontSize={endFs}
+            fontStyle="bold"
+            fontFamily={CANVAS_FONT_MONO}
+          />
+        </Group>
       );
     }
 
     return (
       <Group
         key={key}
+        listening={Boolean(onDelete)}
         onMouseEnter={onDelete ? () => setHoveredRulerId(r.id ?? null) : undefined}
         onMouseLeave={onDelete ? () => setHoveredRulerId(null) : undefined}
         onClick={onDelete ? (e) => {
@@ -2289,24 +2491,33 @@ export const FloorplanCanvas: React.FC = () => {
             )}
           </>
         )}
-        {/* Main Line */}
-        <Line points={[sx, sy, ex, ey]} stroke={rulerColor} strokeWidth={isHovered ? 2 / stageScale : 1 / stageScale} listening={false} />
+        {/* Main Line & First-Click Anchor Marker */}
+        <Line points={[sx, sy, ex, ey]} stroke={rulerColor} strokeWidth={isHovered ? 2.4 / stageScale : 1.6 / stageScale} listening={false} />
+        <Circle
+          x={sx}
+          y={sy}
+          radius={3.2 / stageScale}
+          fill="#f59e0b"
+          stroke="#ffffff"
+          strokeWidth={1.1 / stageScale}
+          listening={false}
+        />
         {hasReferenceExtension && (
           <>
             <Line
               points={[ex, ey, referenceX, referenceY]}
               stroke={rulerColor}
-              strokeWidth={isHovered ? 2 / stageScale : 1 / stageScale}
-              opacity={0.8}
+              strokeWidth={isHovered ? 2.4 / stageScale : 1.6 / stageScale}
+              opacity={0.85}
               listening={false}
             />
             <Circle
               x={referenceX}
               y={referenceY}
-              radius={3 / stageScale}
+              radius={3.2 / stageScale}
               fill={rulerColor}
               stroke="#ffffff"
-              strokeWidth={1 / stageScale}
+              strokeWidth={1.1 / stageScale}
               listening={false}
             />
           </>
@@ -2321,8 +2532,9 @@ export const FloorplanCanvas: React.FC = () => {
             x={(sx + ex) / 2}
             y={(sy + ey) / 2}
             text="✕ click to delete"
-            fill="#fbbf24"
+            fill="#c2410c"
             fontSize={11 / stageScale}
+            fontStyle="bold"
             fontFamily={CANVAS_FONT_SANS}
             scaleY={-1}
             offsetY={-5 / stageScale}
@@ -2521,15 +2733,12 @@ export const FloorplanCanvas: React.FC = () => {
             ? { shapes, instances }
             : cellViews[subInst.cellId];
           const childHasContent = (subViewContent?.shapes?.length ?? 0) > 0 || (subViewContent?.instances?.length ?? 0) > 0;
-          return (
-            <Group
-              key={subInst.id}
-              x={subInst.x * SCALE_FACTOR}
-              y={subInst.y * SCALE_FACTOR}
-              rotation={st.rotation}
-              scaleX={st.scaleX}
-              scaleY={st.scaleY}
-            >
+          const subMosaic = isActiveMosaic(subInst.mosaic) ? subInst.mosaic : null;
+          const subRows = subMosaic ? subMosaic.rows : 1;
+          const subCols = subMosaic ? subMosaic.cols : 1;
+          const subLodPerimeterOnly = subRows * subCols > 400;
+          const renderSubTile = () => (
+            <>
               {!childHasContent && subW > 0 && subH > 0 && (
                 <Rect
                   x={subOx}
@@ -2543,6 +2752,35 @@ export const FloorplanCanvas: React.FC = () => {
                 />
               )}
               {renderCellViewContents(subInst.cellId, subW, subH, depth + 1, nextVisited)}
+            </>
+          );
+          return (
+            <Group
+              key={subInst.id}
+              x={subInst.x * SCALE_FACTOR}
+              y={subInst.y * SCALE_FACTOR}
+              rotation={st.rotation}
+              scaleX={st.scaleX}
+              scaleY={st.scaleY}
+            >
+              {subMosaic ? (() => {
+                const tiles: React.ReactNode[] = [];
+                for (let r = 0; r < subRows; r += 1) {
+                  for (let c = 0; c < subCols; c += 1) {
+                    if (subLodPerimeterOnly && r > 0 && r < subRows - 1 && c > 0 && c < subCols - 1) continue;
+                    tiles.push(
+                      <Group
+                        key={`${subInst.id}-m-${r}-${c}`}
+                        x={c * subMosaic.colPitch * SCALE_FACTOR}
+                        y={r * subMosaic.rowPitch * SCALE_FACTOR}
+                      >
+                        {renderSubTile()}
+                      </Group>,
+                    );
+                  }
+                }
+                return tiles;
+              })() : renderSubTile()}
             </Group>
           );
         })}
@@ -2621,23 +2859,42 @@ export const FloorplanCanvas: React.FC = () => {
             : undefined;
           
           if (appMode === 'measure' && snapped && editMapped) {
-            if (!isMeasuring) {
+            if (!isMeasuring || !measureStart) {
               setIsMeasuring(true);
               setMeasureStart({ x: editMapped.x, y: editMapped.y, snapEdgeAxis: editSnapAxis });
               setCurrentRuler({ startX: editMapped.x, startY: editMapped.y, endX: editMapped.x, endY: editMapped.y });
-            } else if (currentRuler) {
+            } else {
+              const end = resolveOrthogonalRulerEnd(
+                measureStart,
+                { x: editMapped.x, y: editMapped.y, snapEdgeAxis: snapped.isSnapped ? editSnapAxis : undefined },
+                orthogonalRuler,
+              );
               setIsMeasuring(false);
-              if (currentRuler.startX !== currentRuler.endX || currentRuler.startY !== currentRuler.endY) {
+              setMeasureStart(null);
+              setCurrentRuler(null);
+              if (Math.abs(measureStart.x - end.x) > 1e-12 || Math.abs(measureStart.y - end.y) > 1e-12) {
                 addRuler(
-                  currentRuler.startX,
-                  currentRuler.startY,
-                  currentRuler.endX,
-                  currentRuler.endY,
-                  currentRuler.referenceX,
-                  currentRuler.referenceY,
+                  measureStart.x,
+                  measureStart.y,
+                  end.x,
+                  end.y,
+                  end.referenceX,
+                  end.referenceY,
                 );
               }
-              setCurrentRuler(null);
+            }
+          } else if (appMode === 'place' && pendingCopyGroup && editMapped) {
+            try {
+              const constrained = constrainEditPointFromAnchor(
+                pendingCopyGroup.anchorX,
+                pendingCopyGroup.anchorY,
+                editMapped.x,
+                editMapped.y,
+              );
+              const targetPos = snapPointToGrid(constrained.x, constrained.y, activeSnapStep);
+              placeCopyGroupAt(targetPos.x, targetPos.y);
+            } catch (error) {
+              alert(error instanceof Error ? error.message : 'Unable to copy the selected objects here.');
             }
           } else if (appMode === 'place' && placementMasterId && editMapped) {
             try {
@@ -2712,6 +2969,11 @@ export const FloorplanCanvas: React.FC = () => {
             setActiveTextConfig({
               orientation: rotateOrientationByQuarterTurns(activeTextOrientation, e.evt.shiftKey ? 1 : -1) as CadenceOrientation,
             });
+            return;
+          }
+          if (appMode === 'place' && pendingCopyGroup) {
+            e.evt.preventDefault();
+            rotatePendingCopyGroup(e.evt.shiftKey ? 1 : -1);
             return;
           }
           if (appMode === 'place' && placementMasterId) {
@@ -3073,12 +3335,17 @@ export const FloorplanCanvas: React.FC = () => {
                 draggable={appMode === 'select' && !partialSelectMode && !edgeAlignmentSession}
                 dragBoundFunc={pixelArrayDragBoundFunc}
                 onClick={(event) => {
-                  if (appMode === 'stretch' || partialSelectMode) return;
+                  if (appMode !== 'select' || partialSelectMode || Boolean(edgeAlignmentSession)) return;
                   event.cancelBubble = true;
-                  if (appMode === 'select' && !edgeAlignmentSession) setPixelArraySelected(true);
+                  setPixelArraySelected(true);
                 }}
-                onDragStart={() => setPixelArraySelected(true)}
+                onDragStart={() => {
+                  pixelArrayDragAnchorRef.current = { startX: pixelArray.x, startY: pixelArray.y };
+                  setPixelArraySelected(true);
+                }}
                 onDragEnd={(event) => {
+                  pixelArrayDragAnchorRef.current = null;
+                  setDragGuide(null);
                   try {
                     updatePixelArrayPosition(
                       event.target.x() / SCALE_FACTOR,
@@ -3195,6 +3462,121 @@ export const FloorplanCanvas: React.FC = () => {
               && !inst.locked
               && !(selectedInstanceIds.length > 1 && selectedInstanceIds.includes(inst.id) && selectionHasLocked);
 
+            const mosaic = isActiveMosaic(inst.mosaic) ? inst.mosaic : null;
+            const mosaicRows = mosaic ? mosaic.rows : 1;
+            const mosaicCols = mosaic ? mosaic.cols : 1;
+            const totalMosaicTiles = mosaicRows * mosaicCols;
+            const mosaicLodPerimeterOnly = totalMosaicTiles > 400;
+            const mosaicColSpan = mosaic ? (mosaicCols - 1) * mosaic.colPitch * SCALE_FACTOR : 0;
+            const mosaicRowSpan = mosaic ? (mosaicRows - 1) * mosaic.rowPitch * SCALE_FACTOR : 0;
+            const envX = ox + Math.min(0, mosaicColSpan);
+            const envY = oy + Math.min(0, mosaicRowSpan);
+            const envW = w + Math.abs(mosaicColSpan);
+            const envH = h + Math.abs(mosaicRowSpan);
+
+            const renderTileBody = (showTileLabel: boolean) => (
+              <>
+                {childHasContent ? (
+                  <>
+                    <Rect
+                      x={ox}
+                      y={oy}
+                      width={w}
+                      height={h}
+                      fill="transparent"
+                    />
+                    {renderCellViewContents(inst.cellId, w, h)}
+                  </>
+                ) : (
+                  <>
+                    <Rect
+                      x={ox}
+                      y={oy}
+                      width={w}
+                      height={h}
+                      fill={masterCell.color}
+                      opacity={masterCell.opacity ?? 0.5}
+                    />
+                    {outlineStyle !== 'none' && (
+                      <Rect
+                        x={ox}
+                        y={oy}
+                        width={w}
+                        height={h}
+                        fillEnabled={false}
+                        stroke="#334155"
+                        strokeWidth={1 / stageScale}
+                        dash={outlineDash}
+                        listening={false}
+                      />
+                    )}
+                  </>
+                )}
+                {showTileLabel && !childHasContent && (() => {
+                  const shortSide = Math.min(w, h);
+                  const longSide = Math.max(w, h);
+                  const fontSizeWorld = Math.min(shortSide * 0.18, longSide * 0.1);
+                  const screenH = h * stageScale;
+                  const screenW = w * stageScale;
+                  if (screenH < 24 || screenW < 30) return null;
+
+                  const nameFS = fontSizeWorld;
+                  const subFS = fontSizeWorld * 0.65;
+                  const instFS = fontSizeWorld * 0.6;
+                  const totalTextH = nameFS + subFS * 1.3 + instFS * 1.3;
+                  const startY = (h - totalTextH) / 2;
+
+                  return (
+                    <Group x={ox} y={oy + h} scaleY={-1} listening={false}>
+                      {screenH > 48 && (
+                        <Text
+                          text={inst.name}
+                          x={0}
+                          y={startY}
+                          width={w}
+                          align="center"
+                          fill="rgba(10, 20, 40, 0.55)"
+                          fontSize={instFS}
+                          fontFamily={CANVAS_FONT_SANS}
+                          fontStyle="normal"
+                          ellipsis={true}
+                          wrap="none"
+                        />
+                      )}
+                      <Text
+                        text={masterCell.cellName}
+                        x={0}
+                        y={startY + (screenH > 48 ? instFS * 1.3 : 0)}
+                        width={w}
+                        align="center"
+                        fill="rgba(10, 20, 40, 0.9)"
+                        fontSize={nameFS}
+                        fontFamily={CANVAS_FONT_SANS}
+                        fontStyle="bold"
+                        ellipsis={true}
+                        wrap="none"
+                      />
+                      {screenH > 36 && (
+                        <Text
+                          text={`${formatGridValue(masterCell.width, gridSize)} × ${formatGridValue(masterCell.height, gridSize)} um`}
+                          x={0}
+                          y={startY + (screenH > 48 ? instFS * 1.3 : 0) + nameFS * 1.3}
+                          width={w}
+                          align="center"
+                          fill="rgba(10, 20, 40, 0.6)"
+                          fontSize={subFS}
+                          fontFamily={CANVAS_FONT_SANS}
+                          fontStyle="normal"
+                          ellipsis={true}
+                          wrap="none"
+                        />
+                      )}
+                    </Group>
+                  );
+                })()}
+              </>
+            );
+
             return (
               <Group
                 key={inst.id}
@@ -3210,23 +3592,19 @@ export const FloorplanCanvas: React.FC = () => {
                 onDragMove={(e) => handleDragMove(e, inst.id)}
                 onDragEnd={(e) => handleDragEnd(e, inst.id)}
                 onClick={(e) => {
-                  if (appMode === 'rect' || appMode === 'text' || appMode === 'stretch' || partialSelectMode) return;
+                  if (appMode !== 'select' || partialSelectMode || Boolean(edgeAlignmentSession)) return;
                   e.cancelBubble = true;
-                  if (appMode === 'select' && !edgeAlignmentSession) {
-                    setSelectedInstance(inst.id, e.evt.shiftKey);
-                  }
+                  setSelectedInstance(inst.id, e.evt.shiftKey);
                 }}
                 onDblClick={(e) => {
-                  if (appMode === 'stretch' || partialSelectMode) return;
+                  if (appMode !== 'select' || partialSelectMode || Boolean(edgeAlignmentSession)) return;
                   e.cancelBubble = true;
-                  if (appMode === 'select' && !edgeAlignmentSession) {
-                    descendIntoInstance(inst.id);
-                  }
+                  descendIntoInstance(inst.id);
                 }}
                 onContextMenu={(e) => {
+                  if (appMode !== 'select' || Boolean(edgeAlignmentSession)) return;
                   e.evt.preventDefault();
                   e.cancelBubble = true;
-                  if (appMode !== 'select' || edgeAlignmentSession) return;
                   setSelectedInstance(inst.id);
                   try {
                     useStore.getState().updateInstanceOrientation(
@@ -3255,51 +3633,57 @@ export const FloorplanCanvas: React.FC = () => {
                       listening={false}
                     />
                   </Group>
-                ) : childHasContent ? (
+                ) : mosaic ? (
                   <>
-                    {/* Transparent hit region so clicking/dragging works across the cell's full bounding box without drawing an artificial wrapper box */}
+                    {/* Transparent full mosaic hit region + dashed perimeter guide */}
                     <Rect
-                      x={ox}
-                      y={oy}
-                      width={w}
-                      height={h}
-                      fill="transparent"
+                      x={envX}
+                      y={envY}
+                      width={envW}
+                      height={envH}
+                      fill={mosaicLodPerimeterOnly ? masterCell.color : 'transparent'}
+                      opacity={mosaicLodPerimeterOnly ? Math.min(0.22, masterCell.opacity ?? 0.5) : 1}
                     />
-                    {/* Live recursive sub-hierarchy & drawn LPP shapes (pure Virtuoso content, no artificial boundary box) */}
-                    {renderCellViewContents(inst.cellId, w, h)}
+                    {(() => {
+                      const tileNodes: React.ReactNode[] = [];
+                      for (let r = 0; r < mosaicRows; r += 1) {
+                        for (let c = 0; c < mosaicCols; c += 1) {
+                          if (mosaicLodPerimeterOnly && r > 0 && r < mosaicRows - 1 && c > 0 && c < mosaicCols - 1) continue;
+                          tileNodes.push(
+                            <Group
+                              key={`${inst.id}-tile-${r}-${c}`}
+                              x={c * mosaic.colPitch * SCALE_FACTOR}
+                              y={r * mosaic.rowPitch * SCALE_FACTOR}
+                            >
+                              {renderTileBody(totalMosaicTiles <= 24)}
+                            </Group>,
+                          );
+                        }
+                      }
+                      return tileNodes;
+                    })()}
+                    <Rect
+                      x={envX}
+                      y={envY}
+                      width={envW}
+                      height={envH}
+                      fillEnabled={false}
+                      stroke="rgba(14, 165, 233, 0.55)"
+                      strokeWidth={1.2 / stageScale}
+                      dash={[6 / stageScale, 4 / stageScale]}
+                      listening={false}
+                    />
                   </>
                 ) : (
-                  <>
-                    <Rect
-                      x={ox}
-                      y={oy}
-                      width={w}
-                      height={h}
-                      fill={masterCell.color}
-                      opacity={masterCell.opacity ?? 0.5}
-                    />
-                    {outlineStyle !== 'none' && (
-                      <Rect
-                        x={ox}
-                        y={oy}
-                        width={w}
-                        height={h}
-                        fillEnabled={false}
-                        stroke="#334155"
-                        strokeWidth={1 / stageScale}
-                        dash={outlineDash}
-                        listening={false}
-                      />
-                    )}
-                  </>
+                  renderTileBody(true)
                 )}
                 {isSelected && !childIsEmpty && (
                   <>
                     <Rect
-                      x={ox}
-                      y={oy}
-                      width={w}
-                      height={h}
+                      x={envX}
+                      y={envY}
+                      width={envW}
+                      height={envH}
                       fillEnabled={false}
                       stroke={isPrimarySelection ? '#f59e0b' : '#38bdf8'}
                       strokeWidth={3 / stageScale}
@@ -3315,10 +3699,10 @@ export const FloorplanCanvas: React.FC = () => {
                 )}
                 {inst.locked && !childIsEmpty && (
                   <Rect
-                    x={ox}
-                    y={oy}
-                    width={w}
-                    height={h}
+                    x={envX}
+                    y={envY}
+                    width={envW}
+                    height={envH}
                     fillEnabled={false}
                     stroke="#eab308"
                     strokeWidth={2 / stageScale}
@@ -3326,72 +3710,6 @@ export const FloorplanCanvas: React.FC = () => {
                     listening={false}
                   />
                 )}
-                
-                {!childIsEmpty && !childHasContent && (() => {
-                  const shortSide = Math.min(w, h);
-                  const longSide = Math.max(w, h);
-                  const fontSizeWorld = Math.min(shortSide * 0.18, longSide * 0.1);
-                  const screenH = h * stageScale;
-                  const screenW = w * stageScale;
-                  if (screenH < 24 || screenW < 30) return null;
-
-                  const nameFS = fontSizeWorld;
-                  const subFS = fontSizeWorld * 0.65;
-                  const instFS = fontSizeWorld * 0.6;
-                  const totalTextH = nameFS + subFS * 1.3 + instFS * 1.3;
-                  const startY = (h - totalTextH) / 2;
-
-                  return (
-                    <Group x={ox} y={oy + h} scaleY={-1} listening={false}>
-                      {/* Instance name (top, smaller, secondary) */}
-                      {screenH > 48 && (
-                        <Text
-                          text={inst.name}
-                          x={0}
-                          y={startY}
-                          width={w}
-                          align="center"
-                          fill="rgba(10, 20, 40, 0.55)"
-                          fontSize={instFS}
-                          fontFamily={CANVAS_FONT_SANS}
-                          fontStyle="normal"
-                          ellipsis={true}
-                          wrap="none"
-                        />
-                      )}
-                      {/* Cell name (main label, bold) */}
-                      <Text
-                        text={masterCell.cellName}
-                        x={0}
-                        y={startY + (screenH > 48 ? instFS * 1.3 : 0)}
-                        width={w}
-                        align="center"
-                        fill="rgba(10, 20, 40, 0.9)"
-                        fontSize={nameFS}
-                        fontFamily={CANVAS_FONT_SANS}
-                        fontStyle="bold"
-                        ellipsis={true}
-                        wrap="none"
-                      />
-                      {/* Size (sub-label) */}
-                      {screenH > 36 && (
-                        <Text
-                          text={`${formatGridValue(masterCell.width, gridSize)} × ${formatGridValue(masterCell.height, gridSize)} um`}
-                          x={0}
-                          y={startY + (screenH > 48 ? instFS * 1.3 : 0) + nameFS * 1.3}
-                          width={w}
-                          align="center"
-                          fill="rgba(10, 20, 40, 0.6)"
-                          fontSize={subFS}
-                          fontFamily={CANVAS_FONT_SANS}
-                          fontStyle="normal"
-                          ellipsis={true}
-                          wrap="none"
-                        />
-                      )}
-                    </Group>
-                  );
-                })()}
               </Group>
             );
           })}
@@ -3418,24 +3736,25 @@ export const FloorplanCanvas: React.FC = () => {
                   scaleX={st.scaleX}
                   scaleY={st.scaleY}
                   draggable={canDragShape}
-                  dragBoundFunc={snapScreenDragPosForEdit}
+                  dragBoundFunc={(pos) => snapShapeDragPosForEdit(pos, shape.id)}
+                  onDragStart={() => {
+                    shapeDragAnchorRef.current = { id: shape.id, startX: shape.x, startY: shape.y };
+                  }}
                   onClick={event => {
-                    if (appMode === 'rect' || appMode === 'text' || appMode === 'stretch' || partialSelectMode) return;
+                    if (appMode !== 'select' || partialSelectMode || Boolean(edgeAlignmentSession)) return;
                     event.cancelBubble = true;
-                    if (appMode === 'select' && !edgeAlignmentSession) {
-                      setSelectedShape(shape.id);
-                    }
+                    setSelectedShape(shape.id);
                   }}
                   onDblClick={event => {
-                    if (appMode !== 'select' || partialSelectMode) return;
+                    if (appMode !== 'select' || partialSelectMode || Boolean(edgeAlignmentSession)) return;
                     event.cancelBubble = true;
                     setSelectedShape(shape.id);
                     setRightSidebarPinned(true);
                   }}
                   onContextMenu={event => {
+                    if (appMode !== 'select' || Boolean(edgeAlignmentSession) || shape.locked) return;
                     event.evt.preventDefault();
                     event.cancelBubble = true;
-                    if (appMode !== 'select' || edgeAlignmentSession || shape.locked) return;
                     setSelectedShape(shape.id);
                     try {
                       updateShape(shape.id, {
@@ -3449,6 +3768,8 @@ export const FloorplanCanvas: React.FC = () => {
                     }
                   }}
                   onDragEnd={event => {
+                    shapeDragAnchorRef.current = null;
+                    setDragGuide(null);
                     const nextX = snapToGrid(event.target.x() / SCALE_FACTOR, gridSize);
                     const nextY = snapToGrid(event.target.y() / SCALE_FACTOR, gridSize);
                     try {
@@ -3576,21 +3897,24 @@ export const FloorplanCanvas: React.FC = () => {
                   x={sx}
                   y={sy}
                   draggable={canDragShape}
-                  dragBoundFunc={snapScreenDragPosForEdit}
+                  dragBoundFunc={(pos) => snapShapeDragPosForEdit(pos, shape.id)}
+                  onDragStart={() => {
+                    shapeDragAnchorRef.current = { id: shape.id, startX: shape.x, startY: shape.y };
+                  }}
                   onClick={event => {
-                    if (appMode === 'rect' || appMode === 'text' || appMode === 'stretch' || partialSelectMode) return;
+                    if (appMode !== 'select' || partialSelectMode || Boolean(edgeAlignmentSession)) return;
                     event.cancelBubble = true;
-                    if (appMode === 'select' && !edgeAlignmentSession) {
-                      setSelectedShape(shape.id);
-                    }
+                    setSelectedShape(shape.id);
                   }}
                   onDblClick={event => {
-                    if (appMode !== 'select' || partialSelectMode) return;
+                    if (appMode !== 'select' || partialSelectMode || Boolean(edgeAlignmentSession)) return;
                     event.cancelBubble = true;
                     setSelectedShape(shape.id);
                     setRightSidebarPinned(true);
                   }}
                   onDragEnd={event => {
+                    shapeDragAnchorRef.current = null;
+                    setDragGuide(null);
                     const nextX = snapToGrid(event.target.x() / SCALE_FACTOR, gridSize);
                     const nextY = snapToGrid(event.target.y() / SCALE_FACTOR, gridSize);
                     try {
@@ -4102,6 +4426,49 @@ export const FloorplanCanvas: React.FC = () => {
             if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
               const rows = Math.max(1, Math.min(50, Math.floor(pendingInstanceArray.rows)));
               const cols = Math.max(1, Math.min(50, Math.floor(pendingInstanceArray.cols)));
+              if (pendingInstanceArray.asMosaic) {
+                const tileNodes: React.ReactNode[] = [];
+                const lodOnly = rows * cols > 400;
+                for (let r = 0; r < rows; r += 1) {
+                  for (let c = 0; c < cols; c += 1) {
+                    if (lodOnly && r > 0 && r < rows - 1 && c > 0 && c < cols - 1) continue;
+                    tileNodes.push(
+                      <Group
+                        key={`mosaic-local-${r}-${c}`}
+                        x={c * pendingInstanceArray.deltaX * SCALE_FACTOR}
+                        y={r * pendingInstanceArray.deltaY * SCALE_FACTOR}
+                      >
+                        {!ghostHasContent && (
+                          <Rect
+                            x={ghostOx}
+                            y={ghostOy}
+                            width={m.width * SCALE_FACTOR}
+                            height={m.height * SCALE_FACTOR}
+                            fill={m.color}
+                            stroke="#f8fafc"
+                            strokeWidth={2 / stageScale}
+                            dash={[5 / stageScale, 5 / stageScale]}
+                          />
+                        )}
+                        {renderCellViewContents(m.id, m.width * SCALE_FACTOR, m.height * SCALE_FACTOR)}
+                      </Group>,
+                    );
+                  }
+                }
+                return (
+                  <Group
+                    x={ghostPosition.x * SCALE_FACTOR}
+                    y={ghostPosition.y * SCALE_FACTOR}
+                    rotation={t.rotation}
+                    scaleX={t.scaleX}
+                    scaleY={t.scaleY}
+                    opacity={0.55}
+                    listening={false}
+                  >
+                    {tileNodes}
+                  </Group>
+                );
+              }
               const ghosts: Array<{ key: string; x: number; y: number }> = [];
               for (let r = 0; r < rows; r += 1) {
                 for (let c = 0; c < cols; c += 1) {
@@ -4271,6 +4638,144 @@ export const FloorplanCanvas: React.FC = () => {
               </Group>
             );
           })()}
+          {/* Live Multi-Object Interactive Copy (C) Ghost Preview */}
+          {appMode === 'place' && pendingCopyGroup && snappedMousePos && (() => {
+            const editCursorPos = isEditInPlace
+              ? snapBaseToEditPoint(snappedMousePos.x, snappedMousePos.y).edit
+              : snappedMousePos;
+            const constrained = constrainEditPointFromAnchor(
+              pendingCopyGroup.anchorX,
+              pendingCopyGroup.anchorY,
+              editCursorPos.x,
+              editCursorPos.y,
+            );
+            const targetPos = snapPointToGrid(constrained.x, constrained.y, activeSnapStep);
+            return (
+              <Group listening={false}>
+                {constrained.activeAxis !== 'free' && (
+                  <Line
+                    points={[
+                      pendingCopyGroup.anchorX * SCALE_FACTOR,
+                      pendingCopyGroup.anchorY * SCALE_FACTOR,
+                      targetPos.x * SCALE_FACTOR,
+                      targetPos.y * SCALE_FACTOR,
+                    ]}
+                    stroke="#0ea5e9"
+                    strokeWidth={1.5 / stageScale}
+                    dash={[6 / stageScale, 4 / stageScale]}
+                  />
+                )}
+                {pendingCopyGroup.instances.map((item, idx) => {
+                  const m = masterCells[item.cellId];
+                  if (!m) return null;
+                  const gx = snapToGrid(targetPos.x + item.dx, gridSize);
+                  const gy = snapToGrid(targetPos.y + item.dy, gridSize);
+                  const gt = getTransformProps(item.orientation);
+                  const gox = (m.originX ?? 0) * SCALE_FACTOR;
+                  const goy = (m.originY ?? 0) * SCALE_FACTOR;
+                  const gw = m.width * SCALE_FACTOR;
+                  const gh = m.height * SCALE_FACTOR;
+                  const hasContent = (cellViews[m.id]?.shapes?.length ?? 0) > 0 || (cellViews[m.id]?.instances?.length ?? 0) > 0;
+                  const itemMosaic = isActiveMosaic(item.mosaic) ? item.mosaic : null;
+                  const renderGhostTile = () => (
+                    <>
+                      {!hasContent && (
+                        <Rect
+                          x={gox}
+                          y={goy}
+                          width={gw}
+                          height={gh}
+                          fill={m.color}
+                          stroke="#0ea5e9"
+                          strokeWidth={1.8 / stageScale}
+                          dash={[5 / stageScale, 4 / stageScale]}
+                          opacity={0.55}
+                        />
+                      )}
+                      {renderCellViewContents(m.id, gw, gh)}
+                    </>
+                  );
+                  return (
+                    <Group
+                      key={`copy-ghost-inst-${idx}`}
+                      x={gx * SCALE_FACTOR}
+                      y={gy * SCALE_FACTOR}
+                      rotation={gt.rotation}
+                      scaleX={gt.scaleX}
+                      scaleY={gt.scaleY}
+                      opacity={0.62}
+                    >
+                      {itemMosaic ? (() => {
+                        const nodes: React.ReactNode[] = [];
+                        const lodOnly = itemMosaic.rows * itemMosaic.cols > 400;
+                        for (let r = 0; r < itemMosaic.rows; r += 1) {
+                          for (let c = 0; c < itemMosaic.cols; c += 1) {
+                            if (lodOnly && r > 0 && r < itemMosaic.rows - 1 && c > 0 && c < itemMosaic.cols - 1) continue;
+                            nodes.push(
+                              <Group
+                                key={`cgm-${idx}-${r}-${c}`}
+                                x={c * itemMosaic.colPitch * SCALE_FACTOR}
+                                y={r * itemMosaic.rowPitch * SCALE_FACTOR}
+                              >
+                                {renderGhostTile()}
+                              </Group>,
+                            );
+                          }
+                        }
+                        return nodes;
+                      })() : renderGhostTile()}
+                    </Group>
+                  );
+                })}
+                {pendingCopyGroup.shapes.map((shape, idx) => {
+                  const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                  const gx = snapToGrid(targetPos.x + shape.dx, gridSize) * SCALE_FACTOR;
+                  const gy = snapToGrid(targetPos.y + shape.dy, gridSize) * SCALE_FACTOR;
+                  if (shape.kind === 'text') {
+                    const fontPx = (shape.fontSize ?? shape.height) * SCALE_FACTOR;
+                    const gt = getTransformProps(shape.orientation ?? 'R0');
+                    return (
+                      <Group
+                        key={`copy-ghost-shape-${idx}`}
+                        x={gx}
+                        y={gy}
+                        rotation={gt.rotation}
+                        scaleX={gt.scaleX}
+                        scaleY={gt.scaleY}
+                        opacity={0.72}
+                      >
+                        <Group x={0} y={fontPx} scaleY={-1}>
+                          <Text
+                            text={shape.label ?? ''}
+                            x={0}
+                            y={0}
+                            fill={style.color}
+                            fontSize={fontPx}
+                            fontFamily={resolveTextFontFamilyCss(shape.fontFamily)}
+                            fontStyle={shape.fontStyle ?? 'normal'}
+                          />
+                        </Group>
+                      </Group>
+                    );
+                  }
+                  return (
+                    <Rect
+                      key={`copy-ghost-shape-${idx}`}
+                      x={gx}
+                      y={gy}
+                      width={shape.width * SCALE_FACTOR}
+                      height={shape.height * SCALE_FACTOR}
+                      fill={style.color}
+                      opacity={0.35}
+                      stroke="#0ea5e9"
+                      strokeWidth={1.8 / stageScale}
+                      dash={[5 / stageScale, 4 / stageScale]}
+                    />
+                  );
+                })}
+              </Group>
+            );
+          })()}
           </Group>
 
           {/* Always-upright Base-space overlays (selection pills, EIP shape tags, draft/stretch readouts, rulers, gap dims, reticle) */}
@@ -4281,7 +4786,8 @@ export const FloorplanCanvas: React.FC = () => {
             if (!masterCell || isCellEmpty(masterCell)) return null;
             const childView = cellViews[inst.cellId];
             const childHasContent = (childView?.shapes?.length ?? 0) > 0 || (childView?.instances?.length ?? 0) > 0;
-            if (!childHasContent) return null;
+            const mosaic = isActiveMosaic(inst.mosaic) ? inst.mosaic : null;
+            if (!childHasContent && !mosaic) return null;
             const groupDragOffset = multiDragDelta && inst.id !== multiDragDelta.anchorId && selectedInstanceIds.includes(inst.id)
               ? multiDragDelta
               : null;
@@ -4297,7 +4803,9 @@ export const FloorplanCanvas: React.FC = () => {
             const baseMaxX = Math.max(c1.x, c2.x);
             const baseMaxY = Math.max(c1.y, c2.y);
             const isPrimary = selectedInstanceId === inst.id;
-            const tag = `${inst.name} · ${masterCell.cellName}`;
+            const tag = mosaic
+              ? `${inst.name} · ${masterCell.cellName} [${mosaic.rows}×${mosaic.cols}]`
+              : `${inst.name} · ${masterCell.cellName}`;
             const fs = 10.5 / stageScale;
             const pillW = Math.max(46 / stageScale, (tag.length * 6.3 + 12) / stageScale);
             const pillH = 17 / stageScale;
@@ -4523,14 +5031,39 @@ export const FloorplanCanvas: React.FC = () => {
             );
           })}
 
-          {/* Rulers (rendered upright in Base View space) */}
-          {rulers.map(r => renderRuler(r, r.id, edgeAlignmentSession ? undefined : () => deleteRuler(r.id)))}
+          {/* Live Orthogonal / Axis Move Guide Line during constrained drag */}
+          {dragGuide && (
+            <Group listening={false}>
+              <Line
+                points={[
+                  dragGuide.startX * SCALE_FACTOR,
+                  dragGuide.startY * SCALE_FACTOR,
+                  dragGuide.curX * SCALE_FACTOR,
+                  dragGuide.curY * SCALE_FACTOR,
+                ]}
+                stroke="#0ea5e9"
+                strokeWidth={1.6 / stageScale}
+                dash={[6 / stageScale, 4 / stageScale]}
+              />
+              <Circle
+                x={dragGuide.startX * SCALE_FACTOR}
+                y={dragGuide.startY * SCALE_FACTOR}
+                radius={3 / stageScale}
+                fill="#ffffff"
+                stroke="#0ea5e9"
+                strokeWidth={1.4 / stageScale}
+              />
+            </Group>
+          )}
+
+          {/* Rulers (rendered upright in Base View space; click-to-delete only in Select mode so measuring never deletes an existing ruler) */}
+          {rulers.map(r => renderRuler(r, r.id, appMode === 'select' && !edgeAlignmentSession ? () => deleteRuler(r.id) : undefined))}
           {isMeasuring && currentRuler && renderRuler(currentRuler, 'temp_ruler')}
 
           {/* Gap Annotations (selection-based + auto-dim, rendered upright in Base View space) */}
           {renderGapAnnotations(
-            edgeAlignmentSession ? null : selectedInstanceId,
-            showAutoDim && !edgeAlignmentSession && !pixelArraySelected,
+            edgeAlignmentSession || appMode === 'measure' ? null : selectedInstanceId,
+            showAutoDim && appMode === 'select' && !edgeAlignmentSession && !pixelArraySelected,
           )}
 
           {/* Grid-Locked Canvas Anchor Reticle & Measure Edge Snap Indicator */}
@@ -4876,13 +5409,31 @@ export const FloorplanCanvas: React.FC = () => {
           Empty Virtuoso cellview ({topCellName}) · Press R to draw a rectangle, L to place text (text/drawing), or I to instantiate a cell
         </div>
       )}
-      {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && (
+      {appMode === 'place' && pendingCopyGroup && (() => {
+        const count = pendingCopyGroup.instances.length + pendingCopyGroup.shapes.length;
+        const effectiveMode = shiftHeld
+          ? (moveConstraint === 'free' ? 'orthogonal' : 'free')
+          : moveConstraint;
+        const modeLabel = effectiveMode === 'orthogonal'
+          ? 'Ortho'
+          : effectiveMode === 'horizontal'
+            ? 'Horiz'
+            : effectiveMode === 'vertical'
+              ? 'Vert'
+              : 'Free';
+        return (
+          <div className="coordinate-overlay manual-pad-placement-hint">
+            Copy {count} object{count === 1 ? '' : 's'} (C) · Move: {modeLabel} (F3 / hold Shift for {moveConstraint === 'free' ? 'Ortho' : 'Free'}) · R or Right-Click rotates · Click to stamp · Esc finishes
+          </div>
+        );
+      })()}
+      {appMode === 'place' && !pendingCopyGroup && placementMasterId && masterCells[placementMasterId] && (
         <div className="coordinate-overlay manual-pad-placement-hint">
           {masterCells[placementMasterId].kind === 'pad'
             ? (pendingManualPadGroup
                 ? `Manual Pad Groups · Auto-rotate by nearest edge · ${pendingManualPadGroup.count} pads at ${pendingManualPadGroup.pitch} um pitch · Click each group location · Esc finishes`
                 : `Pad Placement · ${masterCells[placementMasterId].libName}/${masterCells[placementMasterId].cellName} [${placementOrientation}] · Press R or Right-Click to rotate · Esc finishes`)
-            : `Create Instance · ${masterCells[placementMasterId].libName}/${masterCells[placementMasterId].cellName}${pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1) ? ` (${pendingInstanceArray.rows}×${pendingInstanceArray.cols})` : ''} [${placementOrientation}] · Press R or Right-Click to rotate · Esc finishes`}
+            : `Create Instance · ${masterCells[placementMasterId].libName}/${masterCells[placementMasterId].cellName}${pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1) ? ` (${pendingInstanceArray.rows}×${pendingInstanceArray.cols}${pendingInstanceArray.asMosaic ? ' mosaic' : ''})` : ''} [${placementOrientation}] · Press R or Right-Click to rotate · Esc finishes`}
         </div>
       )}
       <div className="viewport-hud" aria-label="Viewport controls">
@@ -4919,6 +5470,31 @@ export const FloorplanCanvas: React.FC = () => {
           aria-label="Zoom in"
         >
           <FiPlus />
+        </button>
+        <span className="viewport-hud__divider" aria-hidden="true" />
+        <button
+          type="button"
+          className={`viewport-hud__btn${moveConstraint !== 'free' ? ' active' : ''}`}
+          onClick={cycleMoveConstraint}
+          title={`Move Mode: ${
+            moveConstraint === 'orthogonal'
+              ? 'Orthogonal (default, H or V axis)'
+              : moveConstraint === 'horizontal'
+                ? 'Horizontal Only (X axis)'
+                : moveConstraint === 'vertical'
+                  ? 'Vertical Only (Y axis)'
+                  : 'Free (any angle)'
+          } · Click or press F3 to cycle · Hold Shift while dragging/copying to temporarily toggle ${moveConstraint === 'free' ? 'Ortho' : 'Free'}`}
+        >
+          <FiMove /> {
+            (shiftHeld ? (moveConstraint === 'free' ? 'orthogonal' : 'free') : moveConstraint) === 'orthogonal'
+              ? 'Move: Ortho'
+              : (shiftHeld ? (moveConstraint === 'free' ? 'orthogonal' : 'free') : moveConstraint) === 'horizontal'
+                ? 'Move: Horiz'
+                : (shiftHeld ? (moveConstraint === 'free' ? 'orthogonal' : 'free') : moveConstraint) === 'vertical'
+                  ? 'Move: Vert'
+                  : 'Move: Free'
+          }
         </button>
         <span className="viewport-hud__divider" aria-hidden="true" />
         <button

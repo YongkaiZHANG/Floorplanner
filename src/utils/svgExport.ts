@@ -1,5 +1,6 @@
 import type { ProjectSnapshot } from '../store/projectDocument.ts';
 import { getProjectSnapshot, useStore } from '../store/useStore.ts';
+import { getPhysicalBounds, isActiveMosaic } from './alignment.ts';
 import { SCALE_FACTOR } from './canvasConstants.ts';
 import { formatGridValue } from './grid.ts';
 import { resolveLayerStyle, resolveTextFontFamilyCss } from './layoutLayers.ts';
@@ -57,12 +58,16 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
   
   state.instances.forEach((inst) => {
     const m = state.masterCells[inst.cellId];
-    if (m) {
-      const ox = m.originX ?? 0;
-      const oy = m.originY ?? 0;
-      const radius = Math.max(Math.abs(ox), Math.abs(ox + m.width), Math.abs(oy), Math.abs(oy + m.height)) * sf;
-      updateBounds(inst.x * sf - radius, inst.y * sf - radius);
-      updateBounds(inst.x * sf + radius, inst.y * sf + radius);
+    if (m && m.width > 0 && m.height > 0) {
+      const bounds = getPhysicalBounds({
+        ...inst,
+        width: m.width,
+        height: m.height,
+        originX: m.originX,
+        originY: m.originY,
+      });
+      updateBounds(bounds.left * sf, bounds.bottom * sf);
+      updateBounds(bounds.right * sf, bounds.top * sf);
     }
   });
 
@@ -149,7 +154,11 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     const mA = state.masterCells[a.cellId];
     const mB = state.masterCells[b.cellId];
     if (!mA || !mB) return 0;
-    return (mB.width * mB.height) - (mA.width * mA.height);
+    const bA = mA.width > 0 && mA.height > 0 ? getPhysicalBounds({ ...a, width: mA.width, height: mA.height, originX: mA.originX, originY: mA.originY }) : null;
+    const bB = mB.width > 0 && mB.height > 0 ? getPhysicalBounds({ ...b, width: mB.width, height: mB.height, originX: mB.originX, originY: mB.originY }) : null;
+    const areaA = bA ? bA.width * bA.height : 0;
+    const areaB = bB ? bB.width * bB.height : 0;
+    return areaB - areaA;
   });
   
   sortedInstances.forEach((inst) => {
@@ -184,72 +193,106 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     const outlineDash = outlineStyle === 'dashed' ? ' stroke-dasharray="8,6"'
       : outlineStyle === 'dotted' ? ' stroke-dasharray="2,4"' : '';
     const fillOpacity = m.opacity ?? 0.5;
-    
-    const transform = `translate(${x} ${y}) rotate(${rot}) scale(${scaleX} ${scaleY})`;
-    svg += `  <g transform="${transform}">\n`;
-    if (!childHasContent) {
-      svg += `    <rect x="${ox}" y="${oy}" width="${w}" height="${h}" fill="${escapeXml(m.color)}" fill-opacity="${fillOpacity}" stroke="${outlineStroke}" stroke-width="1.5"${outlineDash} vector-effect="non-scaling-stroke" />\n`;
-    }
-    if (childShapes.length > 0) {
-      const shapeOffsetX = childView?.coordinateMode === 'centered' ? w / 2 : 0;
-      const shapeOffsetY = childView?.coordinateMode === 'centered' ? h / 2 : 0;
-      childShapes.forEach(shape => {
-        if (shape.kind === 'text') {
+    const mosaic = isActiveMosaic(inst.mosaic) ? inst.mosaic : null;
+    const mosaicRows = mosaic ? mosaic.rows : 1;
+    const mosaicCols = mosaic ? mosaic.cols : 1;
+    const totalTiles = mosaicRows * mosaicCols;
+    const lodPerimeterOnly = totalTiles > 400;
+
+    const renderSingleTileMarkup = (indent: string, includeCenterLabel: boolean): string => {
+      let tile = '';
+      if (!childHasContent) {
+        tile += `${indent}<rect x="${ox}" y="${oy}" width="${w}" height="${h}" fill="${escapeXml(m.color)}" fill-opacity="${fillOpacity}" stroke="${outlineStroke}" stroke-width="1.5"${outlineDash} vector-effect="non-scaling-stroke" />\n`;
+      }
+      if (childShapes.length > 0) {
+        const shapeOffsetX = childView?.coordinateMode === 'centered' ? w / 2 : 0;
+        const shapeOffsetY = childView?.coordinateMode === 'centered' ? h / 2 : 0;
+        childShapes.forEach(shape => {
+          if (shape.kind === 'text') {
+            const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+            const sx = shape.x * sf + shapeOffsetX;
+            const sy = shape.y * sf + shapeOffsetY;
+            const fontPx = (shape.fontSize ?? shape.height) * sf;
+            const textContent = (shape.label ?? '').trim();
+            if (!textContent) return;
+            const fontWeight = shape.fontStyle?.includes('bold') ? 'bold' : 'normal';
+            const fontStyleAttr = shape.fontStyle?.includes('italic') ? ' font-style="italic"' : '';
+            const fontFamily = escapeXml(resolveTextFontFamilyCss(shape.fontFamily));
+            tile += `${indent}<g transform="translate(${sx} ${sy})"><text x="0" y="${-fontPx * 0.15}" fill="${escapeXml(style.color)}" font-family="${fontFamily}" font-size="${fontPx}" font-weight="${fontWeight}"${fontStyleAttr} dominant-baseline="alphabetic" transform="scale(1, -1)">${escapeXml(textContent)}</text></g>\n`;
+            return;
+          }
           const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
           const sx = shape.x * sf + shapeOffsetX;
           const sy = shape.y * sf + shapeOffsetY;
-          const fontPx = (shape.fontSize ?? shape.height) * sf;
-          const textContent = (shape.label ?? '').trim();
-          if (!textContent) return;
-          const fontWeight = shape.fontStyle?.includes('bold') ? 'bold' : 'normal';
-          const fontStyleAttr = shape.fontStyle?.includes('italic') ? ' font-style="italic"' : '';
-          const fontFamily = escapeXml(resolveTextFontFamilyCss(shape.fontFamily));
-          svg += `    <g transform="translate(${sx} ${sy})"><text x="0" y="${-fontPx * 0.15}" fill="${escapeXml(style.color)}" font-family="${fontFamily}" font-size="${fontPx}" font-weight="${fontWeight}"${fontStyleAttr} dominant-baseline="alphabetic" transform="scale(1, -1)">${escapeXml(textContent)}</text></g>\n`;
-          return;
-        }
-        const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
-        const sx = shape.x * sf + shapeOffsetX;
-        const sy = shape.y * sf + shapeOffsetY;
-        const sw = shape.width * sf;
-        const sh = shape.height * sf;
-        const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
-        svg += `    <rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1.25"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
-        if (shape.label?.trim()) {
-          const shapeFS = Math.min(sw * 0.14, sh * 0.24, baseFS * 1.1);
-          svg += `    <text x="${sx + sw / 2}" y="${-(sy + sh / 2)}" fill="${escapeXml(style.color)}" font-family="monospace" font-size="${shapeFS}" font-weight="600" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(shape.label.trim())}</text>\n`;
-        }
-      });
-    }
-    if (childSubInstances.length > 0) {
-      const subOffsetX = childView?.coordinateMode === 'centered' ? w / 2 : 0;
-      const subOffsetY = childView?.coordinateMode === 'centered' ? h / 2 : 0;
-      childSubInstances.forEach(sub => {
-        const sm = state.masterCells[sub.cellId];
-        if (!sm) return;
-        const subView = state.cellViews?.[sub.cellId];
-        const subShapes = subView?.shapes ?? [];
-        if (subShapes.length > 0) {
-          subShapes.forEach(shape => {
-            const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
-            const sx = (sub.x + shape.x) * sf + subOffsetX;
-            const sy = (sub.y + shape.y) * sf + subOffsetY;
-            const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
-            svg += `    <rect x="${sx}" y="${sy}" width="${shape.width * sf}" height="${shape.height * sf}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
-          });
-          return;
-        }
-        const smOx = (sm.originX ?? 0) * sf;
-        const smOy = (sm.originY ?? 0) * sf;
-        svg += `    <rect x="${sub.x * sf + subOffsetX + smOx}" y="${sub.y * sf + subOffsetY + smOy}" width="${sm.width * sf}" height="${sm.height * sf}" fill="${escapeXml(sm.color)}" fill-opacity="0.35" stroke="#1e293b" stroke-width="1" vector-effect="non-scaling-stroke" />\n`;
-      });
-    }
+          const sw = shape.width * sf;
+          const sh = shape.height * sf;
+          const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
+          tile += `${indent}<rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1.25"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
+          if (shape.label?.trim() && includeCenterLabel) {
+            const shapeFS = Math.min(sw * 0.14, sh * 0.24, baseFS * 1.1);
+            tile += `${indent}<text x="${sx + sw / 2}" y="${-(sy + sh / 2)}" fill="${escapeXml(style.color)}" font-family="monospace" font-size="${shapeFS}" font-weight="600" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(shape.label.trim())}</text>\n`;
+          }
+        });
+      }
+      if (childSubInstances.length > 0) {
+        const subOffsetX = childView?.coordinateMode === 'centered' ? w / 2 : 0;
+        const subOffsetY = childView?.coordinateMode === 'centered' ? h / 2 : 0;
+        childSubInstances.forEach(sub => {
+          const sm = state.masterCells[sub.cellId];
+          if (!sm) return;
+          const subView = state.cellViews?.[sub.cellId];
+          const subShapes = subView?.shapes ?? [];
+          if (subShapes.length > 0) {
+            subShapes.forEach(shape => {
+              const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+              const sx = (sub.x + shape.x) * sf + subOffsetX;
+              const sy = (sub.y + shape.y) * sf + subOffsetY;
+              const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
+              tile += `${indent}<rect x="${sx}" y="${sy}" width="${shape.width * sf}" height="${shape.height * sf}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
+            });
+            return;
+          }
+          const smOx = (sm.originX ?? 0) * sf;
+          const smOy = (sm.originY ?? 0) * sf;
+          tile += `${indent}<rect x="${sub.x * sf + subOffsetX + smOx}" y="${sub.y * sf + subOffsetY + smOy}" width="${sm.width * sf}" height="${sm.height * sf}" fill="${escapeXml(sm.color)}" fill-opacity="0.35" stroke="#1e293b" stroke-width="1" vector-effect="non-scaling-stroke" />\n`;
+        });
+      }
+      if (!childHasContent && includeCenterLabel) {
+        const instFS = Math.min(w * 0.15, h * 0.25, baseFS * 2);
+        const labelCX = ox + w / 2;
+        const labelCY = oy + h / 2;
+        tile += `${indent}<text x="${labelCX}" y="${-labelCY - instFS * 0.6}" fill="#0f172a" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(m.cellName)}</text>\n`;
+        tile += `${indent}<text x="${labelCX}" y="${-labelCY + instFS * 0.6}" fill="#334155" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="normal" font-size="${instFS * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${m.width}x${m.height}</text>\n`;
+      }
+      return tile;
+    };
     
-    if (!childHasContent) {
-      const instFS = Math.min(w * 0.15, h * 0.25, baseFS * 2);
-      const labelCX = ox + w / 2;
-      const labelCY = oy + h / 2;
-      svg += `    <text x="${labelCX}" y="${-labelCY - instFS * 0.6}" fill="#0f172a" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="bold" font-size="${instFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(m.cellName)}</text>\n`;
-      svg += `    <text x="${labelCX}" y="${-labelCY + instFS * 0.6}" fill="#334155" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Inter, sans-serif" font-weight="normal" font-size="${instFS * 0.7}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${m.width}x${m.height}</text>\n`;
+    const transform = `translate(${x} ${y}) rotate(${rot}) scale(${scaleX} ${scaleY})`;
+    svg += `  <g transform="${transform}">\n`;
+    if (mosaic) {
+      const colSpan = (mosaicCols - 1) * mosaic.colPitch * sf;
+      const rowSpan = (mosaicRows - 1) * mosaic.rowPitch * sf;
+      const minLocalX = ox + Math.min(0, colSpan);
+      const minLocalY = oy + Math.min(0, rowSpan);
+      const totalLocalW = w + Math.abs(colSpan);
+      const totalLocalH = h + Math.abs(rowSpan);
+      if (lodPerimeterOnly) {
+        svg += `    <rect x="${minLocalX}" y="${minLocalY}" width="${totalLocalW}" height="${totalLocalH}" fill="${escapeXml(m.color)}" fill-opacity="${Math.min(0.25, fillOpacity)}" stroke="#1e293b" stroke-width="1.25" stroke-dasharray="6,4" vector-effect="non-scaling-stroke" />\n`;
+      }
+      for (let r = 0; r < mosaicRows; r += 1) {
+        for (let c = 0; c < mosaicCols; c += 1) {
+          if (lodPerimeterOnly && r > 0 && r < mosaicRows - 1 && c > 0 && c < mosaicCols - 1) continue;
+          const tx = c * mosaic.colPitch * sf;
+          const ty = r * mosaic.rowPitch * sf;
+          svg += `    <g transform="translate(${tx} ${ty})">\n`;
+          svg += renderSingleTileMarkup('      ', totalTiles <= 36);
+          svg += `    </g>\n`;
+        }
+      }
+      const badgeFS = Math.min(totalLocalW * 0.1, totalLocalH * 0.16, baseFS * 1.4);
+      svg += `    <text x="${minLocalX + totalLocalW / 2}" y="${-(minLocalY + totalLocalH / 2)}" fill="#0f172a" font-family="monospace" font-weight="700" font-size="${badgeFS}" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(m.cellName)} [${mosaicRows}×${mosaicCols}]</text>\n`;
+    } else {
+      svg += renderSingleTileMarkup('    ', true);
     }
     svg += `  </g>\n`;
   });
@@ -376,9 +419,12 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     svg += `  <rect x="${-tw / 2}" y="${curY - rowHeight}" width="${tw}" height="${rowHeight}" fill="${bgColor}" />\n`;
     
     cx = -tw / 2;
+    const cellLabel = isActiveMosaic(inst.mosaic)
+      ? `${m.cellName} [${inst.mosaic.rows}×${inst.mosaic.cols}]`
+      : m.cellName;
     const rowData = [
       inst.name,
-      m.cellName,
+      cellLabel,
       formatGridValue(inst.x, state.gridSize),
       formatGridValue(inst.y, state.gridSize),
       inst.orientation,

@@ -221,7 +221,10 @@ export const computeFloorplanMetrics = (snapshot: ProjectSnapshot): FloorplanMet
   for (const instance of snapshot.instances) {
     const master = snapshot.masterCells[instance.cellId];
     if (!master) continue;
-    const area = master.width * master.height;
+    const tileCount = instance.mosaic
+      ? Math.max(1, Math.floor(instance.mosaic.rows)) * Math.max(1, Math.floor(instance.mosaic.cols))
+      : 1;
+    const area = master.width * master.height * tileCount;
     if (master.kind === 'pad') {
       padCount += 1;
       padAreaUm2 += area;
