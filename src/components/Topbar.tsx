@@ -16,7 +16,7 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, padInset, setTopDimensions, masterCells, instances, rulers, pixelArray, pixelArraySelected, cellViews, activeCellId, rootView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, pixelArray, pixelArraySelected, cellViews, activeCellId, rootView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
@@ -56,11 +56,12 @@ export const Topbar: React.FC = () => {
     () => getProjectSnapshot({
       ...activeViewSnapshot,
       padInset,
+      libraries,
       cellViews,
       activeCellId,
       rootView,
     }),
-    [activeViewSnapshot, padInset, cellViews, activeCellId, rootView],
+    [activeViewSnapshot, padInset, libraries, cellViews, activeCellId, rootView],
   );
   const projectSignature = useMemo(() => JSON.stringify(canonicalSnapshot), [canonicalSnapshot]);
   const metrics = useMemo(() => computeFloorplanMetrics(activeViewSnapshot), [activeViewSnapshot]);

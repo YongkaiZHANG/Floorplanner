@@ -121,3 +121,17 @@ test('hierarchical cellViews survive serialization and reject missing masters or
   };
   assert.throws(() => parseProjectDocument(JSON.stringify(cyclic)), /Circular hierarchy/);
 });
+
+test('explicit Virtuoso libraries list survives serialization and rejects invalid entries', () => {
+  const withLibs = { ...structuredClone(project), libraries: ['analog_lib', 'empty_lib', 'lib'] };
+  assert.deepEqual(parseProjectDocument(serializeProjectDocument(withLibs)), withLibs);
+
+  assert.throws(
+    () => parseProjectDocument(JSON.stringify({ ...project, libraries: ['ok', ''] })),
+    /non-empty string/,
+  );
+  assert.throws(
+    () => parseProjectDocument(JSON.stringify({ ...project, libraries: 'not-an-array' })),
+    /must be an array/,
+  );
+});

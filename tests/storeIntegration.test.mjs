@@ -239,6 +239,70 @@ test('Virtuoso multi-view editing supports descend, instantiate, cycle rejection
   assert.equal(useStore.getState().cellViews[ana.id].instances.length, 1);
 });
 
+test('Virtuoso library lifecycle, open-after-create view tabs, custom names, and mosaic arrays', () => {
+  useStore.getState().loadProject({ ...emptyProject, topWidth: 200, topHeight: 200, gridSize: 1 });
+
+  // Create empty library & verify persistence + undo
+  useStore.getState().createLibrary('analog_lib');
+  assert.ok(useStore.getState().libraries.includes('analog_lib'));
+  assert.ok(getProjectSnapshot(useStore.getState()).libraries?.includes('analog_lib'));
+  assert.throws(() => useStore.getState().createLibrary('analog_lib'), /already exists/);
+
+  // Create cell view with openAfterCreate = true (Virtuoso File -> New -> Cell View)
+  useStore.getState().addMasterCell('analog_lib', 'AMP', 40, 30, '#3b82f6', 0.5, 'solid', true);
+  const amp = Object.values(useStore.getState().masterCells).find(c => c.cellName === 'AMP');
+  assert.equal(useStore.getState().activeCellId, amp.id);
+  assert.deepEqual(useStore.getState().openViewIds, [null, amp.id]);
+
+  // Cannot delete non-empty library
+  assert.throws(() => useStore.getState().deleteLibrary('analog_lib'), /still contains cells/);
+
+  // Rename library atomically updates masters and active view
+  useStore.getState().renameLibrary('analog_lib', 'ana_v2');
+  assert.equal(useStore.getState().topLibName, 'ana_v2');
+  assert.equal(useStore.getState().masterCells[amp.id].libName, 'ana_v2');
+
+  // Close AMP tab returns to Top Cell
+  useStore.getState().closeCellViewTab(amp.id);
+  assert.equal(useStore.getState().activeCellId, null);
+  assert.deepEqual(useStore.getState().openViewIds, [null]);
+
+  // Create & delete an empty library
+  useStore.getState().createLibrary('scratch_lib');
+  assert.ok(useStore.getState().libraries.includes('scratch_lib'));
+  useStore.getState().deleteLibrary('scratch_lib');
+  assert.equal(useStore.getState().libraries.includes('scratch_lib'), false);
+
+  // Virtuoso Create Instance: custom name auto-increment + orientation pre-rotate + 2x3 mosaic
+  useStore.getState().setPlacement(amp.id, 'R0');
+  useStore.getState().setPlacementOrientation('R90');
+  assert.equal(useStore.getState().placementOrientation, 'R90');
+
+  useStore.getState().placeInstance(amp.id, -80, -80, 'R0', 'U_AMP');
+  useStore.getState().placeInstance(amp.id, -80, -40, 'R0', 'U_AMP');
+  assert.deepEqual(
+    useStore.getState().instances.map(i => i.name),
+    ['U_AMP', 'U_AMP_1'],
+  );
+
+  const beforeMosaic = useStore.getState().history.past.length;
+  useStore.getState().placeInstanceMosaic(amp.id, -20, -20, 'R0', {
+    namePrefix: 'M_AMP',
+    rows: 2,
+    cols: 2,
+    deltaX: 50,
+    deltaY: 40,
+  });
+  assert.equal(useStore.getState().instances.length, 6);
+  assert.equal(useStore.getState().history.past.length, beforeMosaic + 1);
+  assert.deepEqual(
+    useStore.getState().instances.slice(2).map(i => i.name),
+    ['M_AMP_0_0', 'M_AMP_0_1', 'M_AMP_1_0', 'M_AMP_1_1'],
+  );
+  useStore.getState().undo();
+  assert.equal(useStore.getState().instances.length, 2);
+});
+
 test('edge alignment moves only the source and is one undoable store action', () => {
   useStore.getState().loadProject(emptyProject);
   useStore.getState().addMasterCell('testLib', 'edgeBlock', 10, 5, '#ffffff');

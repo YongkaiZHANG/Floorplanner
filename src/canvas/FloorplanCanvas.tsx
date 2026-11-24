@@ -16,7 +16,7 @@ import { panViewportByArrow } from '../utils/viewport';
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { FiArrowUp, FiChevronRight, FiGrid, FiLayers, FiMaximize2, FiMinus, FiPlus } from 'react-icons/fi';
+import { FiArrowUp, FiChevronRight, FiGrid, FiLayers, FiMaximize2, FiMinus, FiPlus, FiX } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
@@ -77,8 +77,11 @@ export const FloorplanCanvas: React.FC = () => {
     instances,
     cellViews,
     activeCellId,
+    openViewIds,
     viewBreadcrumb,
     rootView,
+    openCellView,
+    closeCellViewTab,
     descendIntoInstance,
     ascendToParent,
     navigateBreadcrumb,
@@ -94,7 +97,10 @@ export const FloorplanCanvas: React.FC = () => {
     clearRulers,
     placementMasterId,
     placementOrientation,
+    pendingInstanceArray,
+    setPlacementOrientation,
     placeInstance,
+    placeInstanceMosaic,
     pendingManualPadGroup,
     placeManualPadGroup,
     setRightSidebarPinned,
@@ -223,10 +229,16 @@ export const FloorplanCanvas: React.FC = () => {
           state.selectAllInstances();
           return;
         }
+        if (key === 'b' && state.activeCellId) {
+          e.preventDefault();
+          state.ascendToParent();
+          return;
+        }
       }
       
       switch (key) {
         case 'e':
+        case 'x':
           e.preventDefault();
           if (state.selectedInstanceId) {
             state.descendIntoInstance(state.selectedInstanceId);
@@ -307,6 +319,12 @@ export const FloorplanCanvas: React.FC = () => {
           break;
         case 'r':
           e.preventDefault();
+          if (state.appMode === 'place' && state.placementMasterId) {
+            state.setPlacementOrientation(
+              rotateOrientationByQuarterTurns(state.placementOrientation, e.shiftKey ? -1 : 1),
+            );
+            break;
+          }
           if (state.selectedInstanceId) {
             const instance = state.instances.find(item => item.id === state.selectedInstanceId);
             if (instance) {
@@ -1582,8 +1600,13 @@ export const FloorplanCanvas: React.FC = () => {
             }
           } else if (appMode === 'place' && placementMasterId && snapped) {
             try {
-              if (pendingManualPadGroup) placeManualPadGroup(snapped.umX, snapped.umY);
-              else placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation);
+              if (pendingManualPadGroup) {
+                placeManualPadGroup(snapped.umX, snapped.umY);
+              } else if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
+                placeInstanceMosaic(placementMasterId, snapped.umX, snapped.umY, placementOrientation, pendingInstanceArray);
+              } else {
+                placeInstance(placementMasterId, snapped.umX, snapped.umY, placementOrientation, pendingInstanceArray?.namePrefix);
+              }
             } catch (error) {
               alert(error instanceof Error ? error.message : 'Unable to place the selected cell.');
             }
@@ -1595,6 +1618,12 @@ export const FloorplanCanvas: React.FC = () => {
               return;
             }
             if (!e.evt.shiftKey) setSelectedInstance(null);
+          }
+        }}
+        onContextMenu={(e) => {
+          if (appMode === 'place' && placementMasterId) {
+            e.evt.preventDefault();
+            setPlacementOrientation(rotateOrientationByQuarterTurns(placementOrientation, e.evt.shiftKey ? 1 : -1));
           }
         }}
         ref={stageRef}
@@ -2296,6 +2325,55 @@ export const FloorplanCanvas: React.FC = () => {
               }
             }
             const t = getTransformProps(previewOrientation);
+            if (pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1)) {
+              const rows = Math.max(1, Math.min(50, Math.floor(pendingInstanceArray.rows)));
+              const cols = Math.max(1, Math.min(50, Math.floor(pendingInstanceArray.cols)));
+              const ghosts: Array<{ key: string; x: number; y: number }> = [];
+              for (let r = 0; r < rows; r += 1) {
+                for (let c = 0; c < cols; c += 1) {
+                  try {
+                    const p = clampInstancePosition(
+                      ghostPosition.x + c * pendingInstanceArray.deltaX,
+                      ghostPosition.y + r * pendingInstanceArray.deltaY,
+                      previewOrientation,
+                      m.width,
+                      m.height,
+                      topWidth,
+                      topHeight,
+                      gridSize,
+                    );
+                    ghosts.push({ key: `mosaic-${r}-${c}`, x: p.x, y: p.y });
+                  } catch {
+                    // skip out-of-bounds ghost cell
+                  }
+                }
+              }
+              return (
+                <>
+                  {ghosts.map(pos => (
+                    <Group
+                      key={pos.key}
+                      x={pos.x * SCALE_FACTOR}
+                      y={pos.y * SCALE_FACTOR}
+                      rotation={t.rotation}
+                      scaleX={t.scaleX}
+                      scaleY={t.scaleY}
+                      opacity={0.48}
+                      listening={false}
+                    >
+                      <Rect
+                        width={m.width * SCALE_FACTOR}
+                        height={m.height * SCALE_FACTOR}
+                        fill={m.color}
+                        stroke="#f8fafc"
+                        strokeWidth={2 / stageScale}
+                        dash={[5 / stageScale, 5 / stageScale]}
+                      />
+                    </Group>
+                  ))}
+                </>
+              );
+            }
             return (
               <Group
                 x={ghostPosition.x * SCALE_FACTOR}
@@ -2365,53 +2443,97 @@ export const FloorplanCanvas: React.FC = () => {
           })()}
         </Layer>
       </Stage>
-      {(activeCellId !== null || Object.keys(cellViews).length > 0) && (
-        <nav className="hierarchy-bar" aria-label="Cell view hierarchy">
-          <FiLayers className="hierarchy-bar__icon" />
-          <button
-            type="button"
-            className={`hierarchy-bar__crumb${activeCellId === null ? ' active' : ''}`}
-            onClick={() => navigateBreadcrumb(-1)}
-            title="Switch to Top Cell view"
-          >
-            <span className="hierarchy-bar__lib">{rootView?.topLibName ?? topLibName}</span>
-            <span className="hierarchy-bar__sep">/</span>
-            <span>{rootView?.topCellName ?? topCellName}</span>
-          </button>
-          {viewBreadcrumb.map((cellId, idx) => {
-            const crumbMaster = masterCells[cellId];
-            if (!crumbMaster) return null;
-            const isCurrent = idx === viewBreadcrumb.length - 1;
-            return (
-              <React.Fragment key={`${cellId}-${idx}`}>
-                <FiChevronRight className="hierarchy-bar__chevron" />
-                <button
-                  type="button"
-                  className={`hierarchy-bar__crumb${isCurrent ? ' active' : ''}`}
-                  onClick={() => navigateBreadcrumb(idx)}
-                  title={`Open ${crumbMaster.libName}/${crumbMaster.cellName}`}
-                >
-                  <span className="hierarchy-bar__lib">{crumbMaster.libName}</span>
-                  <span className="hierarchy-bar__sep">/</span>
-                  <span>{crumbMaster.cellName}</span>
-                </button>
-              </React.Fragment>
-            );
-          })}
-          {activeCellId !== null && (
-            <>
-              <span className="hierarchy-bar__divider" aria-hidden="true" />
+      {(openViewIds.length > 1 || activeCellId !== null || Object.keys(cellViews).length > 0) && (
+        <div className="virtuoso-window-bar">
+          {openViewIds.length > 1 && (
+            <div className="view-tabs" role="tablist" aria-label="Open cell view tabs">
+              {openViewIds.map(tabId => {
+                const isRootTab = tabId === null;
+                const tabMaster = tabId ? masterCells[tabId] : null;
+                if (!isRootTab && !tabMaster) return null;
+                const isActive = activeCellId === tabId;
+                const tabLib = isRootTab ? (rootView?.topLibName ?? topLibName) : tabMaster!.libName;
+                const tabCell = isRootTab ? (rootView?.topCellName ?? topCellName) : tabMaster!.cellName;
+                return (
+                  <div key={tabId ?? '__root__'} className={`view-tab${isActive ? ' active' : ''}`}>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      className="view-tab__btn"
+                      onClick={() => openCellView(tabId)}
+                      title={`Switch to ${tabLib}/${tabCell}/layout`}
+                    >
+                      <span className="view-tab__lib">{tabLib}</span>
+                      <span className="view-tab__sep">/</span>
+                      <span>{tabCell}</span>
+                      {isRootTab && <span className="view-tab__badge">TOP</span>}
+                    </button>
+                    {openViewIds.length > 1 && (
+                      <button
+                        type="button"
+                        className="view-tab__close"
+                        onClick={() => closeCellViewTab(tabId)}
+                        title={`Close ${tabCell} tab`}
+                        aria-label={`Close ${tabCell} tab`}
+                      >
+                        <FiX />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {(activeCellId !== null || Object.keys(cellViews).length > 0) && (
+            <nav className="hierarchy-bar" aria-label="Cell view hierarchy">
+              <FiLayers className="hierarchy-bar__icon" />
               <button
                 type="button"
-                className="hierarchy-bar__up"
-                onClick={ascendToParent}
-                title="Return to parent cell view (Shift+B)"
+                className={`hierarchy-bar__crumb${activeCellId === null ? ' active' : ''}`}
+                onClick={() => navigateBreadcrumb(-1)}
+                title="Switch to Top Cell view"
               >
-                <FiArrowUp /> Return
+                <span className="hierarchy-bar__lib">{rootView?.topLibName ?? topLibName}</span>
+                <span className="hierarchy-bar__sep">/</span>
+                <span>{rootView?.topCellName ?? topCellName}</span>
               </button>
-            </>
+              {viewBreadcrumb.map((cellId, idx) => {
+                const crumbMaster = masterCells[cellId];
+                if (!crumbMaster) return null;
+                const isCurrent = idx === viewBreadcrumb.length - 1;
+                return (
+                  <React.Fragment key={`${cellId}-${idx}`}>
+                    <FiChevronRight className="hierarchy-bar__chevron" />
+                    <button
+                      type="button"
+                      className={`hierarchy-bar__crumb${isCurrent ? ' active' : ''}`}
+                      onClick={() => navigateBreadcrumb(idx)}
+                      title={`Open ${crumbMaster.libName}/${crumbMaster.cellName}`}
+                    >
+                      <span className="hierarchy-bar__lib">{crumbMaster.libName}</span>
+                      <span className="hierarchy-bar__sep">/</span>
+                      <span>{crumbMaster.cellName}</span>
+                    </button>
+                  </React.Fragment>
+                );
+              })}
+              {activeCellId !== null && (
+                <>
+                  <span className="hierarchy-bar__divider" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="hierarchy-bar__up"
+                    onClick={ascendToParent}
+                    title="Return to parent cell view (Ctrl+B / Shift+B)"
+                  >
+                    <FiArrowUp /> Return
+                  </button>
+                </>
+              )}
+            </nav>
           )}
-        </nav>
+        </div>
       )}
       {appMode === 'measure' && (
         <div className="coordinate-overlay measure-mode-hint">
@@ -2420,14 +2542,16 @@ export const FloorplanCanvas: React.FC = () => {
       )}
       {appMode === 'pixel-array' && pendingPixelArraySize && (
         <div className="coordinate-overlay pixel-array-placement-hint">
-          Pixel Array {formatGridValue(pendingPixelArraySize.width, gridSize)} × {formatGridValue(pendingPixelArraySize.height, gridSize)} um · Click inside the top cell to place · Esc cancels
+          Pixel Array {formatGridValue(pendingPixelArraySize.width, gridSize)} × {formatGridValue(pendingPixelArraySize.height, gridSize)} um · Click inside {topCellName} to place · Esc cancels
         </div>
       )}
-      {appMode === 'place' && placementMasterId && masterCells[placementMasterId]?.kind === 'pad' && (
+      {appMode === 'place' && placementMasterId && masterCells[placementMasterId] && (
         <div className="coordinate-overlay manual-pad-placement-hint">
-          {pendingManualPadGroup
-            ? `Manual Pad Groups · Auto-rotate by nearest edge · ${pendingManualPadGroup.count} pads at ${pendingManualPadGroup.pitch} um pitch · Click each group location · Esc finishes`
-            : `Pad Placement · Orientation ${placementOrientation} · Snaps to nearest edge · Click to place · Esc finishes`}
+          {masterCells[placementMasterId].kind === 'pad'
+            ? (pendingManualPadGroup
+                ? `Manual Pad Groups · Auto-rotate by nearest edge · ${pendingManualPadGroup.count} pads at ${pendingManualPadGroup.pitch} um pitch · Click each group location · Esc finishes`
+                : `Pad Placement · ${masterCells[placementMasterId].libName}/${masterCells[placementMasterId].cellName} [${placementOrientation}] · Press R or Right-Click to rotate · Esc finishes`)
+            : `Create Instance · ${masterCells[placementMasterId].libName}/${masterCells[placementMasterId].cellName}${pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1) ? ` (${pendingInstanceArray.rows}×${pendingInstanceArray.cols})` : ''} [${placementOrientation}] · Press R or Right-Click to rotate · Esc finishes`}
         </div>
       )}
       <div className="viewport-hud" aria-label="Viewport controls">

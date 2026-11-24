@@ -90,6 +90,7 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     rulers: state.rulers,
     pixelArray: state.pixelArray ?? null,
     ...(state.padInset !== undefined && state.padInset > 0 ? { padInset: state.padInset } : {}),
+    ...(state.libraries && state.libraries.length > 0 ? { libraries: state.libraries } : {}),
     ...(state.cellViews && Object.keys(state.cellViews).length > 0 ? { cellViews: state.cellViews } : {}),
   };
 

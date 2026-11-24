@@ -17,6 +17,8 @@ export type ProjectSnapshot = {
   pixelArray?: PixelArray | null;
   /** Optional seal-ring / edge margin (um) from the top-cell outer boundary to edge pads. */
   padInset?: number;
+  /** Optional explicit Virtuoso library list (preserves empty user-created libraries). */
+  libraries?: string[];
   /** Optional internal layout views for hierarchical master cells. */
   cellViews?: Record<string, CellViewContent>;
 };
@@ -134,6 +136,22 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     padInset = assertPadInset(value.padInset, value.topWidth, value.topHeight);
   }
 
+  let libraries: string[] | undefined;
+  if (value.libraries !== undefined) {
+    if (!Array.isArray(value.libraries)) throw new Error('Libraries must be an array.');
+    const seenLibs = new Set<string>();
+    const parsedLibs: string[] = [];
+    for (const rawLib of value.libraries) {
+      if (!nonEmptyString(rawLib)) throw new Error('Every library name must be a non-empty string.');
+      const trimmed = rawLib.trim();
+      if (!seenLibs.has(trimmed)) {
+        seenLibs.add(trimmed);
+        parsedLibs.push(trimmed);
+      }
+    }
+    if (parsedLibs.length > 0) libraries = parsedLibs;
+  }
+
   let cellViews: Record<string, CellViewContent> | undefined;
   if (value.cellViews !== undefined) {
     if (!isRecord(value.cellViews)) throw new Error('Cell views must be an object.');
@@ -176,6 +194,7 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     rulers,
     ...(value.pixelArray === undefined ? {} : { pixelArray }),
     ...(padInset === undefined ? {} : { padInset }),
+    ...(libraries === undefined ? {} : { libraries }),
     ...(cellViews === undefined ? {} : { cellViews }),
   };
 };
