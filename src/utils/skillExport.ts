@@ -1,18 +1,46 @@
-import type { Cell, Instance, PixelArray } from '../store/useStore';
+import type { Cell, Instance, PixelArray } from '../store/useStore.ts';
 import { getPhysicalBounds } from './alignment.ts';
 import { formatGridValue, isOnGrid } from './grid.ts';
+import {
+  composeCadenceTransform,
+  getHierarchyUsageCounts,
+  getOrientationMatrix,
+  getTopologicalCellOrder,
+} from './hierarchy.ts';
+import type { CellViewContent } from './hierarchy.ts';
+
+export type SkillHierarchyMode = 'zero-origin-direct' | 'wrapped' | 'local-origin';
 
 export type SkillExportOptions = {
   /** Skip overwriting master layout views that already exist in the library. */
   preserveExistingMasters?: boolean;
-  /** Wrap each IP placement in an origin-anchored `<Top>_<Cell>_PLACED` cell (default true). */
+  /** Legacy flag: wrap each IP placement in an origin-anchored `<Top>_<Cell>_PLACED` cell. */
   useIpWrappers?: boolean;
+  /**
+   * Hierarchy generation mode:
+   * - `'zero-origin-direct'`: Single-instance IPs and sub-modules own their exact chip coordinates
+   *   directly in their own `lib/cell/layout` and are instantiated at `0:0 "R0"` in their parent/top cell.
+   *   Reused multi-instance cells keep local `0:0..W:H` coordinates and are placed at their exact transforms.
+   * - `'wrapped'`: Origin-anchored `<Top>_<Cell>_PLACED` wrapper cells around local-origin masters.
+   * - `'local-origin'`: Local `0:0..W:H` masters placed directly at `(x:y, orient)` with no wrappers.
+   */
+  hierarchyMode?: SkillHierarchyMode;
+  /** Optional internal layout views for hierarchical master cells (Virtuoso multi-view). */
+  cellViews?: Record<string, CellViewContent>;
 };
 
 const VALID_ORIENTATIONS = new Set(['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90']);
 
 /** Emit stable decimal coordinates without changing geometry that is visible on the canvas. */
-const cleanNumber = (value: number): number => parseFloat(value.toFixed(12));
+const cleanNumber = (value: number): number => {
+  const rounded = parseFloat(value.toFixed(12));
+  return Object.is(rounded, -0) ? 0 : rounded;
+};
+
+/** Format a coordinate canonically on-grid when possible, otherwise cleanly rounded. */
+const formatCoord = (value: number, gridSize: number): string => (
+  isOnGrid(value, gridSize) ? formatGridValue(value, gridSize) : String(cleanNumber(value))
+);
 
 /** Quote arbitrary user text as a Cadence SKILL string literal. */
 const skillString = (value: string): string => `"${value
@@ -54,14 +82,22 @@ type ExportHierarchy = {
 };
 
 const buildExportHierarchy = (
+  topLibName: string,
   topCellName: string,
   masterCells: Record<string, Cell>,
   instances: Instance[],
   pixelArray?: PixelArray | null,
   useIpWrappers = true,
 ): ExportHierarchy => {
-  const usedCellNames = new Set([topCellName, ...Object.values(masterCells).map(cell => cell.cellName)]);
-  const usedTopInstanceNames = new Set(instances.filter(instance => masterCells[instance.cellId]?.kind !== 'pad').map(instance => instance.name));
+  const usedCellNames = new Set([
+    topCellName,
+    ...Object.values(masterCells)
+      .filter(cell => cell.libName === topLibName)
+      .map(cell => cell.cellName),
+  ]);
+  const usedTopInstanceNames = new Set(
+    instances.filter(instance => masterCells[instance.cellId]?.kind !== 'pad').map(instance => instance.name),
+  );
   const ipWrapperNames = new Map<string, string>();
 
   if (useIpWrappers) {
@@ -85,6 +121,57 @@ const buildExportHierarchy = (
   return { ipWrapperNames, padBankCellName, padBankInstanceName, pixelArrayCellName, pixelArrayInstanceName };
 };
 
+const validateInstancesList = (
+  instances: readonly Instance[],
+  masterCells: Record<string, Cell>,
+  gridSize: number,
+  scopeLabel: string,
+) => {
+  const instanceNames = new Set<string>();
+  instances.forEach(instance => {
+    if (!masterCells[instance.cellId]) {
+      throw new Error(`Instance ${instance.name} in ${scopeLabel} references a missing master cell.`);
+    }
+    if (!instance.name.trim()) throw new Error(`Every instance in ${scopeLabel} requires a name.`);
+    if (instanceNames.has(instance.name)) {
+      throw new Error(`Duplicate instance name: ${instance.name} in ${scopeLabel}.`);
+    }
+    instanceNames.add(instance.name);
+    if (!Number.isFinite(instance.x) || !Number.isFinite(instance.y)) {
+      throw new Error(`Instance ${instance.name} has invalid coordinates.`);
+    }
+    if (!isOnGrid(instance.x, gridSize) || !isOnGrid(instance.y, gridSize)) {
+      throw new Error(`Instance ${instance.name} is off the ${formatGridValue(gridSize, gridSize)} um placement grid.`);
+    }
+    if (!VALID_ORIENTATIONS.has(instance.orientation)) {
+      throw new Error(`Instance ${instance.name} has invalid orientation ${instance.orientation}.`);
+    }
+  });
+};
+
+const validatePixelArrayForContainer = (
+  pixelArray: PixelArray,
+  containerWidth: number,
+  containerHeight: number,
+  gridSize: number,
+) => {
+  if (!Number.isFinite(pixelArray.x) || !Number.isFinite(pixelArray.y) ||
+      !Number.isFinite(pixelArray.width) || !Number.isFinite(pixelArray.height) ||
+      pixelArray.width <= 0 || pixelArray.height <= 0 ||
+      pixelArray.width >= containerWidth || pixelArray.height >= containerHeight) {
+    throw new Error('Pixel array has invalid dimensions or coordinates.');
+  }
+  for (const coordinate of [pixelArray.x, pixelArray.y, pixelArray.width, pixelArray.height]) {
+    if (!isOnGrid(coordinate, gridSize)) {
+      throw new Error(`Pixel array geometry is off the ${formatGridValue(gridSize, gridSize)} um placement grid.`);
+    }
+  }
+  if (pixelArray.x < -containerWidth / 2 - 1e-9 || pixelArray.x + pixelArray.width > containerWidth / 2 + 1e-9 ||
+      pixelArray.y < -containerHeight / 2 - 1e-9 || pixelArray.y + pixelArray.height > containerHeight / 2 + 1e-9) {
+    throw new Error('Pixel array must fit completely inside its parent cell.');
+  }
+};
+
 const validateFloorplan = (
   topLibName: string,
   topCellName: string,
@@ -94,6 +181,7 @@ const validateFloorplan = (
   instances: Instance[],
   gridSize: number,
   pixelArray?: PixelArray | null,
+  cellViews: Record<string, CellViewContent> = {},
 ) => {
   if (!topLibName.trim() || !topCellName.trim()) throw new Error('Top library and cell names are required.');
   if (!Number.isFinite(gridSize) || gridSize <= 0) throw new Error('Grid size must be greater than zero.');
@@ -107,10 +195,6 @@ const validateFloorplan = (
     if (!Number.isFinite(cell.width) || !Number.isFinite(cell.height) || cell.width <= 0 || cell.height <= 0) {
       throw new Error(`Master ${cell.cellName} has invalid dimensions.`);
     }
-    if (cell.libName !== topLibName) {
-      throw new Error(`Master ${cell.cellName} must use the Top Cell library ${topLibName}.`);
-    }
-
     const qualifiedName = `${cell.libName}\u0000${cell.cellName}`;
     if (masterNames.has(qualifiedName)) throw new Error(`Duplicate master cell: ${cell.libName}/${cell.cellName}.`);
     masterNames.add(qualifiedName);
@@ -119,55 +203,111 @@ const validateFloorplan = (
     }
   });
 
-  const instanceNames = new Set<string>();
-  instances.forEach(instance => {
-    if (!masterCells[instance.cellId]) throw new Error(`Instance ${instance.name} references a missing master cell.`);
-    if (!instance.name.trim()) throw new Error('Every instance requires a name.');
-    if (instanceNames.has(instance.name)) throw new Error(`Duplicate instance name: ${instance.name}.`);
-    instanceNames.add(instance.name);
-    if (!Number.isFinite(instance.x) || !Number.isFinite(instance.y)) throw new Error(`Instance ${instance.name} has invalid coordinates.`);
-    if (!isOnGrid(instance.x, gridSize) || !isOnGrid(instance.y, gridSize)) {
-      throw new Error(`Instance ${instance.name} is off the ${formatGridValue(gridSize, gridSize)} um placement grid.`);
-    }
-    if (!VALID_ORIENTATIONS.has(instance.orientation)) throw new Error(`Instance ${instance.name} has invalid orientation ${instance.orientation}.`);
-  });
+  validateInstancesList(instances, masterCells, gridSize, topCellName);
 
   if (pixelArray) {
-    if (!Number.isFinite(pixelArray.x) || !Number.isFinite(pixelArray.y) ||
-        !Number.isFinite(pixelArray.width) || !Number.isFinite(pixelArray.height) ||
-        pixelArray.width <= 0 || pixelArray.height <= 0 ||
-        pixelArray.width >= topWidth || pixelArray.height >= topHeight) {
-      throw new Error('Pixel array has invalid dimensions or coordinates.');
-    }
-    for (const coordinate of [pixelArray.x, pixelArray.y, pixelArray.width, pixelArray.height]) {
-      if (!isOnGrid(coordinate, gridSize)) {
-        throw new Error(`Pixel array geometry is off the ${formatGridValue(gridSize, gridSize)} um placement grid.`);
-      }
-    }
-    if (pixelArray.x < -topWidth / 2 - 1e-9 || pixelArray.x + pixelArray.width > topWidth / 2 + 1e-9 ||
-        pixelArray.y < -topHeight / 2 - 1e-9 || pixelArray.y + pixelArray.height > topHeight / 2 + 1e-9) {
-      throw new Error('Pixel array must fit completely inside the top cell.');
+    validatePixelArrayForContainer(pixelArray, topWidth, topHeight, gridSize);
+  }
+
+  for (const [cellId, view] of Object.entries(cellViews)) {
+    const master = masterCells[cellId];
+    if (!master) throw new Error(`Cell view ${cellId} references a missing master cell.`);
+    validateInstancesList(view.instances, masterCells, gridSize, `${master.libName}/${master.cellName}`);
+    if (view.pixelArray) {
+      validatePixelArrayForContainer(view.pixelArray, master.width, master.height, gridSize);
     }
   }
+
+  // Ensure the hierarchy DAG has no cycles.
+  getTopologicalCellOrder(Object.keys(masterCells), cellViews);
+};
+
+const transformLocalRect = (
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+  transform: { x: number; y: number; orientation: string },
+) => {
+  const m = getOrientationMatrix(transform.orientation);
+  const corners = [
+    [minX, minY],
+    [minX, maxY],
+    [maxX, maxY],
+    [maxX, minY],
+  ].map(([u, v]) => ({
+    x: transform.x + m[0] * u + m[1] * v,
+    y: transform.y + m[2] * u + m[3] * v,
+  }));
+  return {
+    left: Math.min(...corners.map(c => c.x)),
+    right: Math.max(...corners.map(c => c.x)),
+    bottom: Math.min(...corners.map(c => c.y)),
+    top: Math.max(...corners.map(c => c.y)),
+  };
 };
 
 export const generateSkillCode = (
   topLibName: string,
   topCellName: string,
-  topWidth: number, 
-  topHeight: number, 
-  masterCells: Record<string, Cell>, 
+  topWidth: number,
+  topHeight: number,
+  masterCells: Record<string, Cell>,
   instances: Instance[],
   gridSize: number,
   pixelArray?: PixelArray | null,
   options: SkillExportOptions = {},
 ): string => {
   const preserveExistingMasters = options.preserveExistingMasters ?? false;
-  const useIpWrappers = options.useIpWrappers ?? true;
-  validateFloorplan(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray);
-  const hierarchy = buildExportHierarchy(topCellName, masterCells, instances, pixelArray, useIpWrappers);
+  const hierarchyMode: SkillHierarchyMode = options.hierarchyMode
+    ?? (options.useIpWrappers === false ? 'local-origin' : 'wrapped');
+  const useIpWrappers = hierarchyMode === 'wrapped';
+  const cellViews = options.cellViews ?? {};
+
+  validateFloorplan(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray, cellViews);
+  const hierarchy = buildExportHierarchy(topLibName, topCellName, masterCells, instances, pixelArray, useIpWrappers);
   const ipInstances = instances.filter(instance => masterCells[instance.cellId]?.kind !== 'pad');
   const padInstances = instances.filter(instance => masterCells[instance.cellId]?.kind === 'pad');
+
+  // Determine which single-instance IP/sub-cells are origin-anchored directly at chip coordinates.
+  const originAnchored = new Set<string>();
+  const globalPlacements = new Map<string, { x: number; y: number; orientation: string }>();
+
+  if (hierarchyMode === 'zero-origin-direct') {
+    const usageCounts = getHierarchyUsageCounts(instances, cellViews);
+    for (const [cellId, count] of usageCounts.entries()) {
+      const master = masterCells[cellId];
+      if (count === 1 && master && master.kind !== 'pad') {
+        originAnchored.add(cellId);
+      }
+    }
+
+    const collectGlobalPlacements = (
+      parentInstances: readonly Instance[],
+      parentTransform: { x: number; y: number; orientation: string } | null,
+      parentWidth: number,
+      parentHeight: number,
+    ) => {
+      for (const inst of parentInstances) {
+        const master = masterCells[inst.cellId];
+        if (!master) continue;
+        const resolved = parentTransform
+          ? composeCadenceTransform(parentTransform, inst, parentWidth, parentHeight)
+          : { x: inst.x, y: inst.y, orientation: inst.orientation };
+        if (originAnchored.has(inst.cellId)) {
+          globalPlacements.set(inst.cellId, resolved);
+          const childView = cellViews[inst.cellId];
+          if (childView && childView.instances.length > 0) {
+            collectGlobalPlacements(childView.instances, resolved, master.width, master.height);
+          }
+        }
+      }
+    };
+    collectGlobalPlacements(instances, null, topWidth, topHeight);
+  }
+
+  // Strict bottom-up topological order so every child cellview exists before its parent opens it.
+  const orderedCellIds = getTopologicalCellOrder(Object.keys(masterCells), cellViews);
 
   // Dimensions are emitted exactly as drawn. Only placement coordinates are grid-snapped.
   const exactTopW = cleanNumber(topWidth);
@@ -179,12 +319,19 @@ export const generateSkillCode = (
   const topCell = skillString(topCellName);
   const safeTopName = skillComment(topCellName);
 
+  const modeDescription = hierarchyMode === 'zero-origin-direct'
+    ? 'Zero-origin direct hierarchy (unique IP cells positioned in-lib and instantiated at 0:0)'
+    : hierarchyMode === 'wrapped'
+      ? 'Origin-anchored wrapper hierarchy (<Top>_<Cell>_PLACED wrappers at 0:0)'
+      : 'Local-origin direct hierarchy (0:0..W:H masters instantiated at x:y)';
+
   let code = `; =============================================================\n`;
   code += `; SKILL Layout Floorplan\n`;
   code += `; Generated by IC Floorplanner\n`;
   code += preserveExistingMasters
     ? `; Existing master layout views are preserved; generated top/wrapper views are refreshed.\n`
     : `; Loading this file creates/overwrites the generated layout views.\n`;
+  code += `; Hierarchy: ${modeDescription}\n`;
   code += `; Top Cell : ${skillComment(topLibName)}/${safeTopName}\n`;
   code += `; Size     : ${exactTopW} x ${exactTopH} um\n`;
   code += `; Grid     : ${formatGridValue(gridSize, gridSize)} um\n`;
@@ -199,12 +346,17 @@ export const generateSkillCode = (
     code += `    unless(ddGetObj(${lib}) error("Floorplanner: library %s does not exist.\\n" ${lib}))\n`;
   });
 
-  // Step 1: Generate Master Cells
+  // Step 1: Generate Master Cells in strict bottom-up topological order.
   code += `\n    ; ==========================================\n`;
-  code += `    ; STEP 1: Create Master Cell Views\n`;
+  code += `    ; STEP 1: Create Master Cell Views (Bottom-Up)\n`;
   code += `    ; ==========================================\n`;
-  
-  Object.values(masterCells).forEach(cell => {
+
+  orderedCellIds.forEach(cellId => {
+    const cell = masterCells[cellId];
+    if (!cell) return;
+    const view = cellViews[cellId];
+    const subInstances = view?.instances ?? [];
+    const anchoredTransform = globalPlacements.get(cellId);
     const exactW = cleanNumber(cell.width);
     const exactH = cleanNumber(cell.height);
     const exactCX = cleanNumber(cell.width / 2);
@@ -215,7 +367,13 @@ export const generateSkillCode = (
     const lib = skillString(cell.libName);
     const cellName = skillString(cell.cellName);
     const indent = preserveExistingMasters ? '      ' : '    ';
-    code += `\n    ; --- ${skillComment(cell.libName)}/${skillComment(cell.cellName)} (${exactW} x ${exactH} um) ---\n`;
+
+    code += `\n    ; --- ${skillComment(cell.libName)}/${skillComment(cell.cellName)} (${exactW} x ${exactH} um)`;
+    if (anchoredTransform) {
+      code += ` [origin-anchored at ${formatCoord(anchoredTransform.x, gridSize)}:${formatCoord(anchoredTransform.y, gridSize)} ${anchoredTransform.orientation}]`;
+    }
+    code += ` ---\n`;
+
     if (preserveExistingMasters) {
       code += `    if(ddGetObj(${lib} ${cellName} "layout") then\n`;
       code += `      printf("Preserving existing master: %s/%s/layout\\n" ${lib} ${cellName})\n`;
@@ -224,12 +382,119 @@ export const generateSkillCode = (
     code += `${indent}printf("Creating master: %s/%s\\n" ${lib} ${cellName})\n`;
     code += `${indent}cv = dbOpenCellViewByType(${lib} ${cellName} "layout" "maskLayout" "w")\n`;
     code += `${indent}unless(cv error("Floorplanner: cannot create master %s/%s/layout.\\n" ${lib} ${cellName}))\n`;
-    code += `${indent}; Native OA prBoundary object on ("prBoundary" "drawing").\n`;
-    code += `${indent}boundary = dbCreatePRBoundary(cv list(0:0 0:${exactH} ${exactW}:${exactH} ${exactW}:0))\n`;
-    code += `${indent}unless(boundary error("Floorplanner: cannot create prBoundary for %s/%s.\\n" ${lib} ${cellName}))\n`;
+
+    if (anchoredTransform) {
+      const bounds = getPhysicalBounds({
+        id: cell.id,
+        x: anchoredTransform.x,
+        y: anchoredTransform.y,
+        orientation: anchoredTransform.orientation,
+        width: cell.width,
+        height: cell.height,
+      });
+      const left = formatCoord(bounds.left, gridSize);
+      const right = formatCoord(bounds.right, gridSize);
+      const bottom = formatCoord(bounds.bottom, gridSize);
+      const top = formatCoord(bounds.top, gridSize);
+      code += `${indent}; Native OA prBoundary placed directly at chip-level coordinates (parent instantiates at 0:0).\n`;
+      code += `${indent}boundary = dbCreatePRBoundary(cv list(${left}:${bottom} ${left}:${top} ${right}:${top} ${right}:${bottom}))\n`;
+      code += `${indent}unless(boundary error("Floorplanner: cannot create prBoundary for %s/%s.\\n" ${lib} ${cellName}))\n`;
+    } else {
+      code += `${indent}; Native OA prBoundary object on ("prBoundary" "drawing").\n`;
+      code += `${indent}boundary = dbCreatePRBoundary(cv list(0:0 0:${exactH} ${exactW}:${exactH} ${exactW}:0))\n`;
+      code += `${indent}unless(boundary error("Floorplanner: cannot create prBoundary for %s/%s.\\n" ${lib} ${cellName}))\n`;
+    }
+
+    // Instantiate any hierarchical sub-cells inside this cell view.
+    if (subInstances.length > 0) {
+      code += `${indent}; Hierarchical sub-instances inside ${skillComment(cell.cellName)}\n`;
+      subInstances.forEach(childInst => {
+        const childMaster = masterCells[childInst.cellId];
+        if (!childMaster) return;
+        const childLib = skillString(childMaster.libName);
+        const childCell = skillString(childMaster.cellName);
+        const childInstName = skillString(childInst.name);
+
+        let placeX: string;
+        let placeY: string;
+        let placeOrient: string;
+        if (anchoredTransform && originAnchored.has(childInst.cellId)) {
+          placeX = '0';
+          placeY = '0';
+          placeOrient = skillString('R0');
+        } else if (anchoredTransform) {
+          const composed = composeCadenceTransform(anchoredTransform, childInst, cell.width, cell.height);
+          placeX = formatCoord(composed.x, gridSize);
+          placeY = formatCoord(composed.y, gridSize);
+          placeOrient = skillString(composed.orientation);
+        } else {
+          placeX = formatCoord(childInst.x + cell.width / 2, gridSize);
+          placeY = formatCoord(childInst.y + cell.height / 2, gridSize);
+          placeOrient = skillString(childInst.orientation);
+        }
+
+        code += `${indent}master = dbOpenCellViewByType(${childLib} ${childCell} "layout" "maskLayout" "r")\n`;
+        code += `${indent}unless(master error("Floorplanner: cannot open sub-cell %s/%s/layout.\\n" ${childLib} ${childCell}))\n`;
+        code += `${indent}inst = dbCreateInst(cv master ${childInstName} ${placeX}:${placeY} ${placeOrient} 1)\n`;
+        code += `${indent}unless(inst error("Floorplanner: cannot place sub-instance %s inside %s.\\n" ${childInstName} ${cellName}))\n`;
+        code += `${indent}dbClose(master)\n`;
+      });
+    }
+
+    // Optional pixel array region defined inside a sub-cell view.
+    if (view?.pixelArray?.visible) {
+      const pa = view.pixelArray;
+      const localMinX = pa.x + cell.width / 2;
+      const localMinY = pa.y + cell.height / 2;
+      const localMaxX = localMinX + pa.width;
+      const localMaxY = localMinY + pa.height;
+      const rect = anchoredTransform
+        ? transformLocalRect(localMinX, localMinY, localMaxX, localMaxY, anchoredTransform)
+        : { left: localMinX, bottom: localMinY, right: localMaxX, top: localMaxY };
+      const paX1 = formatCoord(rect.left, gridSize);
+      const paY1 = formatCoord(rect.bottom, gridSize);
+      const paX2 = formatCoord(rect.right, gridSize);
+      const paY2 = formatCoord(rect.top, gridSize);
+      const paCX = formatCoord((rect.left + rect.right) / 2, gridSize);
+      const paCY = formatCoord((rect.bottom + rect.top) / 2, gridSize);
+      const paLabel = skillString(`PIXEL ARRAY ${formatGridValue(pa.width, gridSize)}x${formatGridValue(pa.height, gridSize)}um`);
+      code += `${indent}unless(errset(dbCreateRect(cv list("prBoundary" "drawing") list(${paX1}:${paY1} ${paX2}:${paY2})) t)\n`;
+      code += `${indent}  error("Floorplanner: cannot create the pixel-array region in %s.\\n" ${cellName})\n`;
+      code += `${indent})\n`;
+      code += `${indent}unless(errset(dbCreateLabel(cv list("text" "drawing") ${paCX}:${paCY} ${paLabel} "centerCenter" "R0" "roman" ${cleanNumber(Math.min(pa.width, pa.height) * 0.04)}) t)\n`;
+      code += `${indent}  printf("WARNING: cannot create the pixel-array label in %s.\\n" ${cellName})\n`;
+      code += `${indent})\n`;
+    }
+
+    // Labels
     if (isPad) {
       code += `${indent}; Compact pad label on the requested ("text" "drawing") LPP.\n`;
       code += `${indent}unless(errset(dbCreateLabel(cv list("text" "drawing") ${exactCX}:${exactCY} ${cellName} "centerCenter" "R0" "roman" ${nameLabelHeight}) t)\n`;
+      code += `${indent}  printf("WARNING: label layer text/drawing is unavailable for %s/%s.\\n" ${lib} ${cellName})\n`;
+      code += `${indent})\n`;
+    } else if (anchoredTransform) {
+      const bounds = getPhysicalBounds({
+        id: cell.id,
+        x: anchoredTransform.x,
+        y: anchoredTransform.y,
+        orientation: anchoredTransform.orientation,
+        width: cell.width,
+        height: cell.height,
+      });
+      const physicalWidth = bounds.right - bounds.left;
+      const physicalHeight = bounds.top - bounds.bottom;
+      const sizeTextValue = `${exactW} x ${exactH} um`;
+      const sizeText = skillString(sizeTextValue);
+      const labelX = cleanNumber(bounds.centerX);
+      const nameLabelY = cleanNumber(bounds.centerY + physicalHeight * 0.09);
+      const sizeLabelY = cleanNumber(bounds.centerY - physicalHeight * 0.09);
+      const anchoredNameHeight = fitLabelHeight(cell.cellName, physicalWidth, physicalHeight, 0.16);
+      const anchoredSizeHeight = fitLabelHeight(sizeTextValue, physicalWidth, physicalHeight, 0.1);
+      code += `${indent}; Labels at transformed chip-level center on ("text" "drawing").\n`;
+      code += `${indent}unless(errset(dbCreateLabel(cv list("text" "drawing") ${labelX}:${nameLabelY} ${cellName} "centerCenter" "R0" "roman" ${anchoredNameHeight}) t)\n`;
+      code += `${indent}  printf("WARNING: label layer text/drawing is unavailable for %s/%s.\\n" ${lib} ${cellName})\n`;
+      code += `${indent})\n`;
+      code += `${indent}unless(errset(dbCreateLabel(cv list("text" "drawing") ${labelX}:${sizeLabelY} ${sizeText} "centerCenter" "R0" "roman" ${anchoredSizeHeight}) t)\n`;
       code += `${indent}  printf("WARNING: label layer text/drawing is unavailable for %s/%s.\\n" ${lib} ${cellName})\n`;
       code += `${indent})\n`;
     } else if (useIpWrappers) {
@@ -246,7 +511,7 @@ export const generateSkillCode = (
     }
   });
 
-  // Step 2: Create origin-anchored placed cells.
+  // Step 2: Create origin-anchored wrappers (wrapped mode) and aggregate auxiliary cells.
   code += `\n    ; ==========================================\n`;
   code += useIpWrappers
     ? `    ; STEP 2: Create Placed Wrapper Cells\n    ; Each wrapper owns its canvas coordinates; the Top Cell places it at 0:0.\n`
@@ -342,7 +607,7 @@ export const generateSkillCode = (
     code += `    dbClose(cv)\n`;
   }
 
-  // Step 3: Assemble Top Cell using only origin placements.
+  // Step 3: Assemble Top Cell.
   code += `\n    ; ==========================================\n`;
   code += `    ; STEP 3: Assemble ${safeTopName} at Origin\n`;
   code += `    ; ==========================================\n`;
@@ -370,13 +635,16 @@ export const generateSkillCode = (
       if (!masterCell) return;
       const masterLib = skillString(masterCell.libName);
       const masterName = skillString(masterCell.cellName);
-      const snapX = formatGridValue(inst.x, gridSize);
-      const snapY = formatGridValue(inst.y, gridSize);
-      const orientation = skillString(inst.orientation);
-      code += `    ; DIRECT IP ${skillComment(inst.name)} -> ${skillComment(masterCell.cellName)}\n`;
+      const isAnchored = originAnchored.has(inst.cellId);
+      const placeX = isAnchored ? '0' : formatGridValue(inst.x, gridSize);
+      const placeY = isAnchored ? '0' : formatGridValue(inst.y, gridSize);
+      const placeOrient = isAnchored ? skillString('R0') : skillString(inst.orientation);
+      code += isAnchored
+        ? `    ; TOP-ORIGIN DIRECT IP ${skillComment(inst.name)} -> ${skillComment(masterCell.libName)}/${skillComment(masterCell.cellName)} (positioned in-lib)\n`
+        : `    ; DIRECT IP ${skillComment(inst.name)} -> ${skillComment(masterCell.libName)}/${skillComment(masterCell.cellName)}\n`;
       code += `    master = dbOpenCellViewByType(${masterLib} ${masterName} "layout" "maskLayout" "r")\n`;
       code += `    unless(master error("Floorplanner: cannot open IP master %s/%s/layout.\\n" ${masterLib} ${masterName}))\n`;
-      code += `    inst = dbCreateInst(cv master ${instanceName} ${snapX}:${snapY} ${orientation} 1)\n`;
+      code += `    inst = dbCreateInst(cv master ${instanceName} ${placeX}:${placeY} ${placeOrient} 1)\n`;
       code += `    unless(inst error("Floorplanner: cannot place direct IP instance %s.\\n" ${instanceName}))\n`;
       code += `    dbClose(master)\n\n`;
     }

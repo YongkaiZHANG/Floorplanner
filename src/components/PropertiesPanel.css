@@ -192,6 +192,20 @@
   margin-bottom: 8px;
 }
 
+.descend-cell-btn {
+  width: 100%;
+  margin-top: 12px;
+  justify-content: center;
+  border-color: rgba(41, 151, 255, 0.38);
+  background: rgba(41, 151, 255, 0.12);
+  color: #64d2ff;
+}
+
+.descend-cell-btn:hover {
+  background: rgba(41, 151, 255, 0.22);
+  color: #ffffff;
+}
+
 .lock-toggle-btn.is-locked {
   background: rgba(255, 214, 10, 0.14);
   border-color: rgba(255, 214, 10, 0.42);

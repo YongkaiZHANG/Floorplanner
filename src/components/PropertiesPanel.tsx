@@ -1,6 +1,6 @@
 import React from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
-import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock } from 'react-icons/fi';
+import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight } from 'react-icons/fi';
 import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
 
@@ -10,6 +10,8 @@ export const PropertiesPanel: React.FC = () => {
   const {
     masterCells,
     instances,
+    cellViews,
+    descendIntoInstance,
     gridSize,
     selectedInstanceId,
     selectedInstanceIds,
@@ -329,6 +331,20 @@ export const PropertiesPanel: React.FC = () => {
                   <span className="prop-value pad-badge">Edge-bound pad</span>
                 </div>
               )}
+              <button
+                type="button"
+                className="btn descend-cell-btn"
+                onClick={() => descendIntoInstance(selectedInstance.id)}
+                title={`Descend into ${masterCell.libName}/${masterCell.cellName} layout view (E)`}
+              >
+                <FiCornerDownRight />
+                <span>
+                  Descend into {masterCell.cellName}
+                  {(cellViews[masterCell.id]?.instances.length ?? 0) > 0
+                    ? ` (${cellViews[masterCell.id].instances.length})`
+                    : ''}
+                </span>
+              </button>
             </div>
 
             <div className="prop-section">

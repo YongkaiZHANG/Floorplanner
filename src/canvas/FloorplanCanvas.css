@@ -163,6 +163,114 @@
   box-shadow: 0 0 0 3px rgba(191, 90, 242, 0.2);
 }
 
+.hierarchy-bar {
+  position: absolute;
+  top: 16px;
+  left: 28px;
+  z-index: 6;
+  max-width: calc(100% - 56px);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 980px;
+  background: rgba(22, 22, 24, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: saturate(180%) blur(22px);
+  -webkit-backdrop-filter: saturate(180%) blur(22px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 24px rgba(0, 0, 0, 0.26);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.hierarchy-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.hierarchy-bar__icon {
+  color: #5ac8fa;
+  font-size: 13px;
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
+.hierarchy-bar__crumb {
+  border: 0;
+  background: transparent;
+  color: #aeaeb2;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 980px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.16s var(--ease-apple), color 0.16s var(--ease-apple);
+}
+
+.hierarchy-bar__crumb:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.hierarchy-bar__crumb.active {
+  background: rgba(41, 151, 255, 0.22);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.hierarchy-bar__lib {
+  color: #8e8e93;
+  font-weight: 400;
+}
+
+.hierarchy-bar__crumb.active .hierarchy-bar__lib {
+  color: #8cd0ff;
+}
+
+.hierarchy-bar__sep {
+  opacity: 0.45;
+}
+
+.hierarchy-bar__chevron {
+  color: #636366;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.hierarchy-bar__divider {
+  width: 1px;
+  height: 15px;
+  margin: 0 3px;
+  background: rgba(255, 255, 255, 0.16);
+  flex-shrink: 0;
+}
+
+.hierarchy-bar__up {
+  border: 0;
+  background: rgba(41, 151, 255, 0.18);
+  color: #64d2ff;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 980px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.16s var(--ease-apple), color 0.16s var(--ease-apple);
+}
+
+.hierarchy-bar__up:hover {
+  background: rgba(41, 151, 255, 0.32);
+  color: #ffffff;
+}
+
 @media (max-width: 960px) {
   .autodim-legend {
     bottom: 62px;

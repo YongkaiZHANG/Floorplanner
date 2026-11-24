@@ -171,13 +171,93 @@ test('top cell places every generated child at 0:0 while wrappers retain canvas 
   assert.ok(topPlacements.every(line => / 0:0 "R0" 1\)$/.test(line)), topPlacements.join('\n'));
 });
 
-test('rejects a master outside the Top Cell library', () => {
+test('supports multi-library masters and checks every referenced library', () => {
   const cells = {
-    ip: { id: 'ip', libName: 'otherLib', cellName: 'IP', width: 10, height: 10, color: '#fff' },
+    ip: { id: 'ip', libName: 'analogLib', cellName: 'ADC', width: 20, height: 10, color: '#fff' },
+  };
+  const instances = [
+    { id: 'ip0', cellId: 'ip', name: 'I_ADC', x: 10, y: -5, orientation: 'R0' },
+  ];
+  const code = generateSkillCode('demoLib', 'top', 100, 100, cells, instances, 0.005, null, {
+    hierarchyMode: 'zero-origin-direct',
+  });
+  assert.match(code, /unless\(ddGetObj\("demoLib"\)/);
+  assert.match(code, /unless\(ddGetObj\("analogLib"\)/);
+  assert.match(code, /dbOpenCellViewByType\("analogLib" "ADC" "layout" "maskLayout" "w"\)/);
+  assert.match(code, /dbCreatePRBoundary\(cv list\(10:-5 10:5 30:5 30:-5\)\)/);
+  assert.doesNotMatch(code, /top_ADC_PLACED/);
+  const topAssembly = code.slice(code.indexOf('STEP 3: Assemble'));
+  assert.match(topAssembly, /dbOpenCellViewByType\("analogLib" "ADC" "layout" "maskLayout" "r"\)/);
+  assert.match(topAssembly, /dbCreateInst\(cv master "I_ADC" 0:0 "R0" 1\)/);
+});
+
+test('zero-origin-direct mode emits multi-level multi-library hierarchy bottom-up with exact global positions', () => {
+  const cells = {
+    ana: { id: 'ana', libName: 'analog_lib', cellName: 'ANALOG_TOP', width: 400, height: 300, color: '#3b82f6' },
+    sar: { id: 'sar', libName: 'adc_lib', cellName: 'SAR_ADC', width: 100, height: 80, color: '#22c55e' },
+    bias: { id: 'bias', libName: 'std_lib', cellName: 'BIAS_UNIT', width: 40, height: 40, color: '#f59e0b' },
+  };
+  const topInstances = [
+    { id: 'i_ana', cellId: 'ana', name: 'I_ANA', x: 50, y: -100, orientation: 'R0' },
+  ];
+  const cellViews = {
+    ana: {
+      instances: [
+        // Inside ANALOG_TOP (400x300, centered [-200..200] x [-150..150]):
+        // local SAR = (-120 + 200, -60 + 150) = (80, 90) -> chip = (50 + 80, -100 + 90) = (130, -10)
+        { id: 'i_sar', cellId: 'sar', name: 'I_SAR', x: -120, y: -60, orientation: 'R0' },
+        // BIAS_UNIT is reused twice -> stays local 0..40, placed at chip (350, -50) R0 and (350, 70) MY
+        { id: 'i_b0', cellId: 'bias', name: 'I_BIAS0', x: 100, y: -100, orientation: 'R0' },
+        { id: 'i_b1', cellId: 'bias', name: 'I_BIAS1', x: 100, y: 20, orientation: 'MY' },
+      ],
+      rulers: [],
+    },
+  };
+
+  const code = generateSkillCode('chip_lib', 'top_asic', 1000, 800, cells, topInstances, 0.005, null, {
+    hierarchyMode: 'zero-origin-direct',
+    cellViews,
+  });
+
+  // Strict bottom-up topological order: leaves before ANALOG_TOP before top_asic
+  const idxBias = code.indexOf('Creating master: %s/%s\\n" "std_lib" "BIAS_UNIT"');
+  const idxSar = code.indexOf('Creating master: %s/%s\\n" "adc_lib" "SAR_ADC"');
+  const idxAna = code.indexOf('Creating master: %s/%s\\n" "analog_lib" "ANALOG_TOP"');
+  const idxTop = code.indexOf('Assembling top cell: %s/%s\\n" "chip_lib" "top_asic"');
+  assert.ok(idxBias > 0 && idxSar > 0 && idxAna > 0 && idxTop > 0);
+  assert.ok(idxBias < idxAna && idxSar < idxAna && idxAna < idxTop);
+
+  // BIAS_UNIT (reused 2x) keeps local 0:0..40:40 prBoundary
+  assert.match(code, /dbCreatePRBoundary\(cv list\(0:0 0:40 40:40 40:0\)\)/);
+  // SAR_ADC (unique 1x) gets its exact chip-level prBoundary [130..230] x [-10..70]
+  assert.match(code, /dbCreatePRBoundary\(cv list\(130:-10 130:70 230:70 230:-10\)\)/);
+  // ANALOG_TOP (unique 1x) gets [50..450] x [-100..200], places SAR_ADC at 0:0 R0, and BIAS at global coords
+  assert.match(code, /dbCreatePRBoundary\(cv list\(50:-100 50:200 450:200 450:-100\)\)/);
+  const anaSection = code.slice(idxAna, idxTop);
+  assert.match(anaSection, /dbCreateInst\(cv master "I_SAR" 0:0 "R0" 1\)/);
+  assert.match(anaSection, /dbCreateInst\(cv master "I_BIAS0" 350:-50 "R0" 1\)/);
+  assert.match(anaSection, /dbCreateInst\(cv master "I_BIAS1" 350:70 "MY" 1\)/);
+  // top_asic places ANALOG_TOP directly at 0:0 R0 with zero wrappers
+  const topSection = code.slice(idxTop);
+  assert.match(topSection, /dbCreateInst\(cv master "I_ANA" 0:0 "R0" 1\)/);
+  assert.doesNotMatch(code, /_PLACED/);
+});
+
+test('zero-origin-direct mode rejects cyclic cellViews', () => {
+  const cells = {
+    a: { id: 'a', libName: 'libA', cellName: 'A', width: 20, height: 20, color: '#fff' },
+    b: { id: 'b', libName: 'libB', cellName: 'B', width: 10, height: 10, color: '#fff' },
+  };
+  const cellViews = {
+    a: { instances: [{ id: '1', cellId: 'b', name: 'I0', x: 0, y: 0, orientation: 'R0' }], rulers: [] },
+    b: { instances: [{ id: '2', cellId: 'a', name: 'I0', x: 0, y: 0, orientation: 'R0' }], rulers: [] },
   };
   assert.throws(
-    () => generateSkillCode('demoLib', 'top', 100, 100, cells, [], 0.005),
-    /must use the Top Cell library demoLib/,
+    () => generateSkillCode('chip', 'top', 100, 100, cells, [], 0.005, null, {
+      hierarchyMode: 'zero-origin-direct',
+      cellViews,
+    }),
+    /Circular hierarchy/,
   );
 });
 

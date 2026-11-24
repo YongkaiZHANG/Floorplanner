@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getProjectSnapshot, PIXEL_ARRAY_ALIGNMENT_ID, useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
-import type { SkillExportOptions } from '../utils/skillExport';
+import type { SkillExportOptions, SkillHierarchyMode } from '../utils/skillExport';
 import { exportSVG, extractProjectFromSvg } from '../utils/svgExport';
 import { computeFloorplanMetrics, downloadCsvFile, generateFloorplanCsv } from '../utils/floorplanMetrics';
 import { createCisDemoProject } from '../utils/demoProjects';
@@ -16,7 +16,7 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, padInset, setTopDimensions, masterCells, instances, rulers, pixelArray, pixelArraySelected, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, topWidth, topHeight, topLibName, topCellName, padInset, setTopDimensions, masterCells, instances, rulers, pixelArray, pixelArraySelected, cellViews, activeCellId, rootView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
@@ -36,11 +36,11 @@ export const Topbar: React.FC = () => {
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [generatedCode, setGeneratedCode] = useState('');
   const [preserveExistingMasters, setPreserveExistingMasters] = useState(false);
-  const [useIpWrappers, setUseIpWrappers] = useState(true);
+  const [hierarchyMode, setHierarchyMode] = useState<SkillHierarchyMode>('zero-origin-direct');
   const [savedSignature, setSavedSignature] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const recoveryLoaded = useRef(false);
-  const currentSnapshot = useMemo(() => ({
+  const activeViewSnapshot = useMemo(() => ({
     gridSize,
     topWidth,
     topHeight,
@@ -52,8 +52,18 @@ export const Topbar: React.FC = () => {
     pixelArray,
     ...(padInset > 0 ? { padInset } : {}),
   }), [gridSize, topWidth, topHeight, topLibName, topCellName, padInset, masterCells, instances, rulers, pixelArray]);
-  const projectSignature = useMemo(() => JSON.stringify(currentSnapshot), [currentSnapshot]);
-  const metrics = useMemo(() => computeFloorplanMetrics(currentSnapshot), [currentSnapshot]);
+  const canonicalSnapshot = useMemo(
+    () => getProjectSnapshot({
+      ...activeViewSnapshot,
+      padInset,
+      cellViews,
+      activeCellId,
+      rootView,
+    }),
+    [activeViewSnapshot, padInset, cellViews, activeCellId, rootView],
+  );
+  const projectSignature = useMemo(() => JSON.stringify(canonicalSnapshot), [canonicalSnapshot]);
+  const metrics = useMemo(() => computeFloorplanMetrics(activeViewSnapshot), [activeViewSnapshot]);
   const isDirty = savedSignature === null ? history.past.length > 0 : projectSignature !== savedSignature;
   const saveStatus = isDirty ? 'Unsaved' : savedSignature === null ? 'Not saved' : 'Saved';
   const alignmentSource = edgeAlignmentSession
@@ -104,13 +114,25 @@ export const Topbar: React.FC = () => {
   };
 
   const createSkillCode = (optionsOverride?: SkillExportOptions) => {
+    const snapshot = getProjectSnapshot(useStore.getState());
     const options: SkillExportOptions = {
       preserveExistingMasters,
-      useIpWrappers,
+      hierarchyMode,
+      cellViews: snapshot.cellViews,
       ...optionsOverride,
     };
     try {
-      return generateSkillCode(topLibName, topCellName, topWidth, topHeight, masterCells, instances, gridSize, pixelArray, options);
+      return generateSkillCode(
+        snapshot.topLibName,
+        snapshot.topCellName,
+        snapshot.topWidth,
+        snapshot.topHeight,
+        snapshot.masterCells,
+        snapshot.instances,
+        snapshot.gridSize,
+        snapshot.pixelArray,
+        options,
+      );
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to generate Cadence SKILL code.');
       return null;
@@ -120,12 +142,13 @@ export const Topbar: React.FC = () => {
   const handleExport = () => {
     const skillCode = createSkillCode();
     if (!skillCode) return;
-    downloadSkillFile(`${topCellName}.il`, skillCode);
+    const snapshot = getProjectSnapshot(useStore.getState());
+    downloadSkillFile(`${snapshot.topCellName}.il`, skillCode);
   };
 
   const handleExportCsv = () => {
     try {
-      const csv = generateFloorplanCsv(currentSnapshot);
+      const csv = generateFloorplanCsv(activeViewSnapshot);
       const filename = `${topCellName}_floorplan.csv`;
       downloadCsvFile(filename, csv);
       showToast(`${filename} exported`);
@@ -526,7 +549,7 @@ export const Topbar: React.FC = () => {
         <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowConfig(false); }}>
           <div className="modal-content glass-panel config-modal">
             <div className="modal-header">
-              <h2 className="modal-title">Configure Top ASIC</h2>
+              <h2 className="modal-title">{activeCellId ? `Configure ${topCellName}` : 'Configure Top ASIC'}</h2>
               <button className="modal-close-btn" onClick={() => setShowConfig(false)}>
                 <FiX />
               </button>
@@ -652,6 +675,43 @@ export const Topbar: React.FC = () => {
               </button>
             </div>
             <div className="skill-options-bar">
+              <div className="skill-mode-group" role="group" aria-label="SKILL hierarchy placement mode">
+                <span className="skill-mode-label">Hierarchy:</span>
+                <div className="skill-mode-segmented">
+                  {([
+                    {
+                      value: 'zero-origin-direct' as SkillHierarchyMode,
+                      label: '0:0 Direct IP',
+                      title: 'Single-instance IP/sub-cells own their exact chip coordinates in their own library and are placed at 0:0 in parent/top cells (no wrappers).',
+                    },
+                    {
+                      value: 'local-origin' as SkillHierarchyMode,
+                      label: 'Local Origin',
+                      title: 'Every master cell stays at 0:0..W:H and parent cells place instances directly at (x:y, orient).',
+                    },
+                    {
+                      value: 'wrapped' as SkillHierarchyMode,
+                      label: '0:0 Wrappers',
+                      title: 'Wrap each top-level IP inside a <Top>_<Cell>_PLACED cell placed at 0:0.',
+                    },
+                  ]).map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`skill-mode-btn${hierarchyMode === option.value ? ' active' : ''}`}
+                      title={option.title}
+                      aria-pressed={hierarchyMode === option.value}
+                      onClick={() => {
+                        setHierarchyMode(option.value);
+                        const updated = createSkillCode({ hierarchyMode: option.value });
+                        if (updated) setGeneratedCode(updated);
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <label className="skill-option-toggle">
                 <input
                   type="checkbox"
@@ -663,20 +723,7 @@ export const Topbar: React.FC = () => {
                     if (updated) setGeneratedCode(updated);
                   }}
                 />
-                <span>Preserve existing masters (skip overwrite if cellview exists)</span>
-              </label>
-              <label className="skill-option-toggle">
-                <input
-                  type="checkbox"
-                  checked={useIpWrappers}
-                  onChange={event => {
-                    const next = event.target.checked;
-                    setUseIpWrappers(next);
-                    const updated = createSkillCode({ useIpWrappers: next });
-                    if (updated) setGeneratedCode(updated);
-                  }}
-                />
-                <span>Use origin-anchored IP wrappers</span>
+                <span>Preserve existing masters</span>
               </label>
             </div>
             <div className="code-container">

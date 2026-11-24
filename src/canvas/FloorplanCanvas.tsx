@@ -16,7 +16,7 @@ import { panViewportByArrow } from '../utils/viewport';
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { FiGrid, FiMaximize2, FiMinus, FiPlus } from 'react-icons/fi';
+import { FiArrowUp, FiChevronRight, FiGrid, FiLayers, FiMaximize2, FiMinus, FiPlus } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
@@ -70,10 +70,18 @@ export const FloorplanCanvas: React.FC = () => {
     setAppMode,
     topWidth,
     topHeight,
+    topLibName,
     topCellName,
     padInset,
     masterCells, 
     instances,
+    cellViews,
+    activeCellId,
+    viewBreadcrumb,
+    rootView,
+    descendIntoInstance,
+    ascendToParent,
+    navigateBreadcrumb,
     rulers,
     gridSize, 
     updateInstancePosition,
@@ -132,6 +140,9 @@ export const FloorplanCanvas: React.FC = () => {
 
   useEffect(() => {
     fitView();
+  }, [activeCellId, fitView]);
+
+  useEffect(() => {
     const updateSize = () => {
       if (containerRef.current) {
         setDimensions({
@@ -151,7 +162,7 @@ export const FloorplanCanvas: React.FC = () => {
       window.removeEventListener('resize', updateSize);
       observer?.disconnect();
     };
-  }, [fitView]);
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -215,6 +226,18 @@ export const FloorplanCanvas: React.FC = () => {
       }
       
       switch (key) {
+        case 'e':
+          e.preventDefault();
+          if (state.selectedInstanceId) {
+            state.descendIntoInstance(state.selectedInstanceId);
+          }
+          break;
+        case 'b':
+          if (e.shiftKey && state.activeCellId) {
+            e.preventDefault();
+            state.ascendToParent();
+          }
+          break;
         case 'f':
           e.preventDefault();
           fitView();
@@ -1815,6 +1838,12 @@ export const FloorplanCanvas: React.FC = () => {
                     setSelectedInstance(inst.id, e.evt.shiftKey);
                   }
                 }}
+                onDblClick={(e) => {
+                  e.cancelBubble = true;
+                  if (appMode === 'select' && !edgeAlignmentSession) {
+                    descendIntoInstance(inst.id);
+                  }
+                }}
                 onContextMenu={(e) => {
                   e.evt.preventDefault();
                   e.cancelBubble = true;
@@ -1836,6 +1865,39 @@ export const FloorplanCanvas: React.FC = () => {
                   fill={masterCell.color}
                   opacity={masterCell.opacity ?? 0.5}
                 />
+                {/* Live sub-hierarchy preview for hierarchical cells */}
+                {(() => {
+                  const subView = cellViews[inst.cellId];
+                  if (!subView || subView.instances.length === 0) return null;
+                  return (
+                    <Group x={w / 2} y={h / 2} listening={false}>
+                      {subView.instances.map(subInst => {
+                        const subMaster = masterCells[subInst.cellId];
+                        if (!subMaster) return null;
+                        const st = getTransformProps(subInst.orientation);
+                        return (
+                          <Group
+                            key={subInst.id}
+                            x={subInst.x * SCALE_FACTOR}
+                            y={subInst.y * SCALE_FACTOR}
+                            rotation={st.rotation}
+                            scaleX={st.scaleX}
+                            scaleY={st.scaleY}
+                          >
+                            <Rect
+                              width={subMaster.width * SCALE_FACTOR}
+                              height={subMaster.height * SCALE_FACTOR}
+                              fill={subMaster.color}
+                              opacity={Math.min(0.65, (subMaster.opacity ?? 0.5) * 0.8)}
+                              stroke="rgba(15, 23, 42, 0.55)"
+                              strokeWidth={0.8 / stageScale}
+                            />
+                          </Group>
+                        );
+                      })}
+                    </Group>
+                  );
+                })()}
                 {outlineStyle !== 'none' && (
                   <Rect
                     width={w}
@@ -2303,6 +2365,54 @@ export const FloorplanCanvas: React.FC = () => {
           })()}
         </Layer>
       </Stage>
+      {(activeCellId !== null || Object.keys(cellViews).length > 0) && (
+        <nav className="hierarchy-bar" aria-label="Cell view hierarchy">
+          <FiLayers className="hierarchy-bar__icon" />
+          <button
+            type="button"
+            className={`hierarchy-bar__crumb${activeCellId === null ? ' active' : ''}`}
+            onClick={() => navigateBreadcrumb(-1)}
+            title="Switch to Top Cell view"
+          >
+            <span className="hierarchy-bar__lib">{rootView?.topLibName ?? topLibName}</span>
+            <span className="hierarchy-bar__sep">/</span>
+            <span>{rootView?.topCellName ?? topCellName}</span>
+          </button>
+          {viewBreadcrumb.map((cellId, idx) => {
+            const crumbMaster = masterCells[cellId];
+            if (!crumbMaster) return null;
+            const isCurrent = idx === viewBreadcrumb.length - 1;
+            return (
+              <React.Fragment key={`${cellId}-${idx}`}>
+                <FiChevronRight className="hierarchy-bar__chevron" />
+                <button
+                  type="button"
+                  className={`hierarchy-bar__crumb${isCurrent ? ' active' : ''}`}
+                  onClick={() => navigateBreadcrumb(idx)}
+                  title={`Open ${crumbMaster.libName}/${crumbMaster.cellName}`}
+                >
+                  <span className="hierarchy-bar__lib">{crumbMaster.libName}</span>
+                  <span className="hierarchy-bar__sep">/</span>
+                  <span>{crumbMaster.cellName}</span>
+                </button>
+              </React.Fragment>
+            );
+          })}
+          {activeCellId !== null && (
+            <>
+              <span className="hierarchy-bar__divider" aria-hidden="true" />
+              <button
+                type="button"
+                className="hierarchy-bar__up"
+                onClick={ascendToParent}
+                title="Return to parent cell view (Shift+B)"
+              >
+                <FiArrowUp /> Return
+              </button>
+            </>
+          )}
+        </nav>
+      )}
       {appMode === 'measure' && (
         <div className="coordinate-overlay measure-mode-hint">
           Measure Mode · Click two snapped points · Press O for Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc cancels

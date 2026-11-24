@@ -1,9 +1,10 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useStore } from '../store/useStore';
 import type { Cell, PadSide } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiEdit3, FiArrowUpLeft } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
+import { wouldCreateHierarchyCycle } from '../utils/hierarchy';
 
 const PRESET_COLORS = [
   '#2563eb', '#3b82f6', '#60a5fa', '#0ea5e9', '#06b6d4', '#14b8a6',
@@ -23,7 +24,9 @@ export const Sidebar: React.FC = () => {
   const { 
     topWidth, topHeight, topLibName, topCellName, padInset,
     setTopConfig, setPadInset,
-    masterCells, instances, selectedInstanceIds, setSelectedInstance,
+    masterCells, instances, cellViews, activeCellId, rootView,
+    openCellView,
+    selectedInstanceIds, setSelectedInstance,
     addMasterCell, updateMasterCell, deleteMasterCell, createPadRow, prepareManualPadPlacement,
     pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
     showCreateModal, setShowCreateModal, 
@@ -36,6 +39,7 @@ export const Sidebar: React.FC = () => {
   const [instantiateSelection, setInstantiateSelection] = useState('');
   const [editingCellId, setEditingCellId] = useState<string | null>(null);
   
+  const [newLibName, setNewLibName] = useState(topLibName);
   const [newCellName, setNewCellName] = useState('');
   const [newWidth, setNewWidth] = useState('10');
   const [newHeight, setNewHeight] = useState('10');
@@ -51,6 +55,7 @@ export const Sidebar: React.FC = () => {
   const [editPadInset, setEditPadInset] = useState(padInset.toString());
 
   const [showPadModal, setShowPadModal] = useState(false);
+  const [padLibName, setPadLibName] = useState(topLibName);
   const [padCellName, setPadCellName] = useState('PAD');
   const [padWidth, setPadWidth] = useState('10');
   const [padHeight, setPadHeight] = useState('10');
@@ -69,20 +74,43 @@ export const Sidebar: React.FC = () => {
   const [instanceQuery, setInstanceQuery] = useState('');
   const [instanceFilter, setInstanceFilter] = useState<'all' | 'ip' | 'pad'>('all');
 
+  const availableLibraries = useMemo(() => {
+    const libs = new Set<string>([topLibName]);
+    if (rootView?.topLibName) libs.add(rootView.topLibName);
+    for (const cell of Object.values(masterCells)) {
+      if (cell.libName.trim()) libs.add(cell.libName.trim());
+    }
+    return [...libs].sort((a, b) => a.localeCompare(b));
+  }, [topLibName, rootView, masterCells]);
+
+  const effectiveCellViews = useMemo(() => {
+    if (!activeCellId) return cellViews;
+    return {
+      ...cellViews,
+      [activeCellId]: {
+        instances,
+        rulers: [],
+        ...(pixelArray ? { pixelArray } : {}),
+        ...(padInset > 0 ? { padInset } : {}),
+      },
+    };
+  }, [activeCellId, cellViews, instances, pixelArray, padInset]);
+
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const width = Number.parseFloat(newWidth);
     const height = Number.parseFloat(newHeight);
-    if (!newCellName.trim() || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-      alert('Enter a valid cell name and positive width and height.');
+    const resolvedLib = newLibName.trim() || topLibName;
+    if (!resolvedLib || !newCellName.trim() || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      alert('Enter a valid library name, cell name, and positive width and height.');
       return;
     }
     try {
       if (editingCellId) {
-        updateMasterCell(editingCellId, topLibName, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle);
+        updateMasterCell(editingCellId, resolvedLib, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle);
         setEditingCellId(null);
       } else {
-        addMasterCell(topLibName, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle);
+        addMasterCell(resolvedLib, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle);
       }
       setShowCreateModal(false);
       setNewCellName('');
@@ -101,9 +129,10 @@ export const Sidebar: React.FC = () => {
       if (Math.abs(requestedInset - padInset) > 1e-9) {
         setPadInset(requestedInset);
       }
+      const resolvedPadLib = padLibName.trim() || topLibName;
       if (padPlacementMode === 'manual') {
         prepareManualPadPlacement({
-          libName: topLibName,
+          libName: resolvedPadLib,
           cellName: padCellName,
           width: Number(padWidth),
           height: Number(padHeight),
@@ -115,7 +144,7 @@ export const Sidebar: React.FC = () => {
         return;
       }
       createPadRow({
-        libName: topLibName,
+        libName: resolvedPadLib,
         cellName: padCellName,
         width: Number(padWidth),
         height: Number(padHeight),
@@ -151,6 +180,7 @@ export const Sidebar: React.FC = () => {
 
   const openCreateModal = () => {
     setEditingCellId(null);
+    setNewLibName(topLibName);
     setNewCellName('');
     setNewOpacity('50');
     setNewOutlineStyle('solid');
@@ -159,6 +189,7 @@ export const Sidebar: React.FC = () => {
 
   const openEditModal = (cell: Cell) => {
     setEditingCellId(cell.id);
+    setNewLibName(cell.libName);
     setNewCellName(cell.cellName);
     setNewWidth(cell.width.toString());
     setNewHeight(cell.height.toString());
@@ -166,6 +197,14 @@ export const Sidebar: React.FC = () => {
     setNewOpacity(String(Math.round((cell.opacity ?? 0.5) * 100)));
     setNewOutlineStyle(cell.outlineStyle ?? 'solid');
     setShowCreateModal(true);
+  };
+
+  const handleStartPlacement = (cellId: string) => {
+    try {
+      setPlacement(cellId, 'R0');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to instantiate this cell in the active view.');
+    }
   };
 
   const parsedPadInset = Number.isFinite(Number(padInsetDraft)) && Number(padInsetDraft) >= 0 ? Number(padInsetDraft) : 0;
@@ -195,6 +234,12 @@ export const Sidebar: React.FC = () => {
   const padAvailable = Math.max(0, (padSide === 'top' || padSide === 'bottom' ? topWidth : topHeight) - parsedPadInset * 2);
   const padStartCoordinate = -padAvailable / 2 + Number(padOffset);
   const padEndCoordinate = padStartCoordinate + padSpan;
+
+  useEffect(() => {
+    if (showCreateModal && !editingCellId) {
+      setNewLibName(topLibName);
+    }
+  }, [showCreateModal, editingCellId, topLibName]);
 
   useEffect(() => () => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
@@ -242,7 +287,7 @@ export const Sidebar: React.FC = () => {
       <div className="sidebar glass-panel">
         <div className="sidebar-section">
           <div className="section-header">
-            <h3 className="section-title"><FiLayers /> Top Cell</h3>
+            <h3 className="section-title"><FiLayers /> {activeCellId ? 'Active Cell View' : 'Top Cell'}</h3>
             <div className="section-actions">
               <button className="icon-btn" onClick={() => {
                 setEditTopLibName(topLibName);
@@ -251,12 +296,12 @@ export const Sidebar: React.FC = () => {
                 setEditTopHeight(topHeight.toString());
                 setEditPadInset(padInset.toString());
                 setShowEditTopModal(true);
-              }} title="Edit Top Cell">
+              }} title={activeCellId ? 'Edit Active Cell View' : 'Edit Top Cell'}>
                 <FiSettings />
               </button>
             </div>
           </div>
-          <div className="top-cell-card">
+          <div className={`top-cell-card${activeCellId ? ' top-cell-card--subcell' : ''}`}>
             <div className="top-cell-card__row">
               <span className="cell-name">{topCellName}</span>
               <span className="lib-badge">{topLibName}</span>
@@ -271,8 +316,19 @@ export const Sidebar: React.FC = () => {
                 </div>
               )}
             </div>
+            {activeCellId && (
+              <button
+                type="button"
+                className="return-top-btn"
+                onClick={() => openCellView(null)}
+                title={`Return to Top Cell (${rootView?.topLibName ?? topLibName}/${rootView?.topCellName ?? 'top'})`}
+              >
+                <FiArrowUpLeft /> Back to {rootView?.topCellName ?? 'Top Cell'}
+              </button>
+            )}
           </div>
           <button className="edge-pad-action" type="button" onClick={() => {
+            setPadLibName(topLibName);
             setPadInsetDraft(padInset.toString());
             setShowPadModal(true);
           }}>
@@ -310,32 +366,57 @@ export const Sidebar: React.FC = () => {
             </button>
           </div>
           <ul className="cell-list">
-            {Object.values(masterCells).map(cell => (
-              <li key={cell.id} className="cell-item static">
-                <div className="cell-item__info">
-                  <div
-                    className={`cell-swatch cell-swatch--${cell.outlineStyle ?? 'solid'}`}
-                  >
-                    <i style={{ backgroundColor: cell.color, opacity: cell.opacity ?? 0.5 }} />
-                  </div>
-                  <div className="cell-item__text">
-                    <span className="cell-name" title={cell.cellName}>{cell.cellName}</span>
-                    <div className="cell-item__meta">
-                      <span className="size-badge">{cell.width.toFixed(1)}×{cell.height.toFixed(1)}</span>
-                      <span className="lib-badge" title={cell.libName}>{cell.libName}</span>
+            {Object.values(masterCells).map(cell => {
+              const isOpenView = activeCellId === cell.id;
+              const subCount = isOpenView
+                ? instances.length
+                : (cellViews[cell.id]?.instances.length ?? 0);
+              const blocksCycle = wouldCreateHierarchyCycle(activeCellId, cell.id, effectiveCellViews);
+              return (
+                <li key={cell.id} className={`cell-item static${isOpenView ? ' cell-item--open' : ''}`}>
+                  <div className="cell-item__info">
+                    <div
+                      className={`cell-swatch cell-swatch--${cell.outlineStyle ?? 'solid'}`}
+                    >
+                      <i style={{ backgroundColor: cell.color, opacity: cell.opacity ?? 0.5 }} />
+                    </div>
+                    <div className="cell-item__text">
+                      <span className="cell-name" title={`${cell.libName}/${cell.cellName}`}>{cell.cellName}</span>
+                      <div className="cell-item__meta">
+                        <span className="size-badge">{cell.width.toFixed(1)}×{cell.height.toFixed(1)}</span>
+                        <span className="lib-badge" title={cell.libName}>{cell.libName}</span>
+                        {subCount > 0 && (
+                          <span className="subcount-badge" title={`${subCount} sub-instance${subCount === 1 ? '' : 's'} inside this cell`}>
+                            {subCount} sub
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="cell-item__actions">
-                  <button className="icon-btn" onClick={() => openEditModal(cell)} title="Edit IP Definition">
-                    <FiSettings />
-                  </button>
-                  <button className="icon-btn" style={{color: '#2997ff'}} onClick={() => setPlacement(cell.id, 'R0')} title="Attach to Cursor">
-                    <FiCrosshair />
-                  </button>
-                </div>
-              </li>
-            ))}
+                  <div className="cell-item__actions">
+                    <button
+                      className={`icon-btn${isOpenView ? ' icon-btn--active' : ''}`}
+                      onClick={() => openCellView(isOpenView ? null : cell.id)}
+                      title={isOpenView ? 'Close cell view (return to Top Cell)' : 'Open Layout View (edit internal floorplan)'}
+                    >
+                      <FiEdit3 />
+                    </button>
+                    <button className="icon-btn" onClick={() => openEditModal(cell)} title="Edit Cell Definition">
+                      <FiSettings />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      style={{ color: blocksCycle ? 'var(--text-tertiary)' : '#2997ff', opacity: blocksCycle ? 0.35 : 1 }}
+                      disabled={blocksCycle}
+                      onClick={() => handleStartPlacement(cell.id)}
+                      title={blocksCycle ? 'Cannot instantiate inside itself (would create a hierarchy cycle)' : `Instantiate in ${topCellName}`}
+                    >
+                      <FiCrosshair />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
             {Object.keys(masterCells).length === 0 && (
               <p className="empty-text">No Master Cells defined. Click + to create one.</p>
             )}
@@ -457,9 +538,16 @@ export const Sidebar: React.FC = () => {
               </div>
               <form onSubmit={handleCreateSubmit}>
                 <div className="form-group">
-                  <label className="label">Library (follows Top Cell)</label>
-                  <input className="input-field locked-library" value={topLibName} readOnly aria-label="IP library inherited from top cell" />
-                  <small className="field-help">All hierarchy cells are kept in the Top Cell library.</small>
+                  <label className="label">Library Name</label>
+                  <input
+                    className="input-field"
+                    list="project-libraries"
+                    value={newLibName}
+                    onChange={e => setNewLibName(e.target.value)}
+                    placeholder="e.g. analog_lib"
+                    required
+                  />
+                  <small className="field-help">Pick an existing library or type a new Cadence Virtuoso library name.</small>
                 </div>
                 <div className="form-group">
                   <label className="label">Cell Name</label>
@@ -563,10 +651,10 @@ export const Sidebar: React.FC = () => {
               </div>
               <form onSubmit={(e) => {
                 e.preventDefault();
-                const keys = Object.keys(masterCells);
-                const targetId = instantiateSelection || (keys.length > 0 ? keys[0] : null);
+                const eligible = Object.values(masterCells).filter(cell => !wouldCreateHierarchyCycle(activeCellId, cell.id, effectiveCellViews));
+                const targetId = instantiateSelection || (eligible.length > 0 ? eligible[0].id : null);
                 if (targetId) {
-                  setPlacement(targetId, 'R0');
+                  handleStartPlacement(targetId);
                   setShowInstantiateModal(false);
                 }
               }}>
@@ -578,11 +666,13 @@ export const Sidebar: React.FC = () => {
                     onChange={e => setInstantiateSelection(e.target.value)}
                   >
                     {!instantiateSelection && <option value="" disabled>Select a cell...</option>}
-                    {Object.values(masterCells).map(cell => (
-                      <option key={cell.id} value={cell.id}>
-                        {cell.libName} / {cell.cellName}
-                      </option>
-                    ))}
+                    {Object.values(masterCells)
+                      .filter(cell => !wouldCreateHierarchyCycle(activeCellId, cell.id, effectiveCellViews))
+                      .map(cell => (
+                        <option key={cell.id} value={cell.id}>
+                          {cell.libName} / {cell.cellName}
+                        </option>
+                      ))}
                   </select>
                 </div>
                 <div className="modal-actions">
@@ -598,7 +688,7 @@ export const Sidebar: React.FC = () => {
       <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowEditTopModal(false); }}>
         <div className="modal-content glass-panel">
           <div className="modal-header">
-            <h2 className="modal-title">Edit Top Cell</h2>
+            <h2 className="modal-title">{activeCellId ? 'Edit Active Cell View' : 'Edit Top Cell'}</h2>
             <button type="button" className="modal-close-btn" onClick={() => setShowEditTopModal(false)}>
               <FiX />
             </button>
@@ -678,8 +768,15 @@ export const Sidebar: React.FC = () => {
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label className="label">Library (follows Top Cell)</label>
-                <input className="input-field locked-library" value={topLibName} readOnly aria-label="Pad library inherited from top cell" />
+                <label className="label">Library Name</label>
+                <input
+                  className="input-field"
+                  list="project-libraries"
+                  value={padLibName}
+                  onChange={event => setPadLibName(event.target.value)}
+                  required
+                  aria-label="Pad master library name"
+                />
               </div>
               <div className="form-group">
                 <label className="label">Pad Cell</label>
@@ -856,6 +953,11 @@ export const Sidebar: React.FC = () => {
         </div>
       </div>
     )}
+      <datalist id="project-libraries">
+        {availableLibraries.map(lib => (
+          <option key={lib} value={lib} />
+        ))}
+      </datalist>
     </>
   );
 };

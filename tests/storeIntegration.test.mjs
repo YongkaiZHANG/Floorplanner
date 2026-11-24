@@ -166,25 +166,77 @@ test('manual separated pads reuse one master and accept arbitrary perimeter posi
   assert.equal(Object.keys(useStore.getState().masterCells).length, 1);
 });
 
-test('Top Cell library is inherited by every IP and pad and updates atomically', () => {
+test('multi-library masters preserve their user-defined libraries independently of Top Cell', () => {
   useStore.getState().loadProject({
     ...emptyProject,
     topLibName: 'topLib',
     masterCells: {
-      imported: { id: 'imported', libName: 'legacyLib', cellName: 'IMPORTED', width: 10, height: 10, color: '#fff' },
+      imported: { id: 'imported', libName: 'analogLib', cellName: 'IMPORTED', width: 10, height: 10, color: '#fff' },
     },
   });
-  assert.equal(useStore.getState().masterCells.imported.libName, 'topLib');
+  assert.equal(useStore.getState().masterCells.imported.libName, 'analogLib');
 
-  useStore.getState().addMasterCell('ignoredLib', 'NEW_IP', 10, 10, '#fff');
-  useStore.getState().prepareManualPadPlacement({ libName: 'ignoredPadLib', cellName: 'PAD', width: 5, height: 5, color: '#fff' });
-  assert.ok(Object.values(useStore.getState().masterCells).every(master => master.libName === 'topLib'));
+  useStore.getState().addMasterCell('adcLib', 'NEW_IP', 10, 10, '#fff');
+  useStore.getState().prepareManualPadPlacement({ libName: 'ioLib', cellName: 'PAD', width: 5, height: 5, color: '#fff' });
+  const libs = Object.values(useStore.getState().masterCells).map(master => master.libName).sort();
+  assert.deepEqual(libs, ['adcLib', 'analogLib', 'ioLib']);
+
+  // Same cellName is allowed in two different libraries
+  useStore.getState().addMasterCell('digLib', 'NEW_IP', 8, 8, '#fff');
+  assert.equal(Object.values(useStore.getState().masterCells).filter(m => m.cellName === 'NEW_IP').length, 2);
 
   const beforeHistory = useStore.getState().history.past.length;
-  useStore.getState().setTopNames('renamedLib', 'top');
-  assert.equal(useStore.getState().topLibName, 'renamedLib');
-  assert.ok(Object.values(useStore.getState().masterCells).every(master => master.libName === 'renamedLib'));
+  useStore.getState().setTopNames('renamedTopLib', 'top');
+  assert.equal(useStore.getState().topLibName, 'renamedTopLib');
+  assert.equal(useStore.getState().masterCells.imported.libName, 'analogLib');
   assert.equal(useStore.getState().history.past.length, beforeHistory + 1);
+});
+
+test('Virtuoso multi-view editing supports descend, instantiate, cycle rejection, canonical snapshot, and undo', () => {
+  useStore.getState().loadProject({ ...emptyProject, topWidth: 200, topHeight: 200, gridSize: 1 });
+  useStore.getState().addMasterCell('analogLib', 'ANALOG_TOP', 80, 60, '#2563eb');
+  useStore.getState().addMasterCell('adcLib', 'SAR_ADC', 20, 15, '#22c55e');
+
+  const masters = Object.values(useStore.getState().masterCells);
+  const ana = masters.find(m => m.cellName === 'ANALOG_TOP');
+  const sar = masters.find(m => m.cellName === 'SAR_ADC');
+
+  useStore.getState().placeInstance(ana.id, -40, -30, 'R0');
+  const anaInst = useStore.getState().instances[0];
+
+  // Descend into ANALOG_TOP
+  useStore.getState().descendIntoInstance(anaInst.id);
+  assert.equal(useStore.getState().activeCellId, ana.id);
+  assert.equal(useStore.getState().topLibName, 'analogLib');
+  assert.equal(useStore.getState().topCellName, 'ANALOG_TOP');
+  assert.equal(useStore.getState().topWidth, 80);
+  assert.equal(useStore.getState().topHeight, 60);
+
+  // Self-instantiation cycle is rejected
+  assert.throws(() => useStore.getState().placeInstance(ana.id, 0, 0, 'R0'), /hierarchy cycle/);
+
+  // Instantiate SAR_ADC inside ANALOG_TOP
+  useStore.getState().placeInstance(sar.id, -10, -5, 'R0');
+  assert.equal(useStore.getState().instances.length, 1);
+
+  // Canonical snapshot always stays rooted at Top Cell with cellViews populated
+  const snapWhileDescended = getProjectSnapshot(useStore.getState());
+  assert.equal(snapWhileDescended.topCellName, 'top');
+  assert.equal(snapWhileDescended.instances.length, 1);
+  assert.equal(snapWhileDescended.cellViews?.[ana.id]?.instances.length, 1);
+
+  // Undo works while descended inside sub-cell
+  useStore.getState().undo();
+  assert.equal(useStore.getState().activeCellId, ana.id);
+  assert.equal(useStore.getState().instances.length, 0);
+  useStore.getState().redo();
+  assert.equal(useStore.getState().instances.length, 1);
+
+  // Ascend back to Top Cell
+  useStore.getState().ascendToParent();
+  assert.equal(useStore.getState().activeCellId, null);
+  assert.equal(useStore.getState().topCellName, 'top');
+  assert.equal(useStore.getState().cellViews[ana.id].instances.length, 1);
 });
 
 test('edge alignment moves only the source and is one undoable store action', () => {

@@ -6,6 +6,8 @@ import type { ProjectSnapshot } from './projectDocument.ts';
 import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
 import type { ProjectHistory } from './projectHistory.ts';
 import { snapToGrid } from '../utils/grid.ts';
+import { wouldCreateHierarchyCycle } from '../utils/hierarchy.ts';
+import type { CellViewContent } from '../utils/hierarchy.ts';
 
 export type Instance = {
   id: string;
@@ -98,6 +100,17 @@ export type EdgeAlignmentSession = {
   offset: string;
 };
 
+export type RootViewSnapshot = {
+  topWidth: number;
+  topHeight: number;
+  topLibName: string;
+  topCellName: string;
+  padInset: number;
+  instances: Instance[];
+  rulers: Ruler[];
+  pixelArray: PixelArray | null;
+};
+
 export type ProjectState = {
   gridSize: number;
   appMode: AppMode;
@@ -114,6 +127,14 @@ export type ProjectState = {
   rulers: Ruler[];
   pixelArray: PixelArray | null;
   pendingPixelArraySize: PixelArraySize | null;
+  /** Internal layouts for hierarchical master cells (keyed by master cell ID). */
+  cellViews: Record<string, CellViewContent>;
+  /** Currently open master cell ID on canvas, or null when editing the Top Cell. */
+  activeCellId: string | null;
+  /** Hierarchy navigation stack of master cell IDs from top child to activeCellId. */
+  viewBreadcrumb: string[];
+  /** Saved Top Cell state while descended into a master cell layout view. */
+  rootView: RootViewSnapshot | null;
   
   selectedInstanceId: string | null;
   selectedInstanceIds: string[];
@@ -146,6 +167,10 @@ export type ProjectState = {
   setLeftSidebarPinned: (pinned: boolean) => void;
   setRightSidebarPinned: (pinned: boolean) => void;
   setPlacement: (masterId: string | null, orientation?: string) => void;
+  openCellView: (cellId: string | null) => void;
+  descendIntoInstance: (instanceId: string) => void;
+  ascendToParent: () => void;
+  navigateBreadcrumb: (index: number) => void;
   
   addMasterCell: (libName: string, cellName: string, w: number, h: number, color: string, opacity?: number, outlineStyle?: Cell['outlineStyle']) => void;
   updateMasterCell: (id: string, libName: string, cellName: string, w: number, h: number, color: string, opacity?: number, outlineStyle?: Cell['outlineStyle']) => void;
@@ -483,30 +508,304 @@ export const rotateOrientationByQuarterTurns = (orientation: string, quarterTurn
   return cycle[nextIndex];
 };
 
-export const getProjectSnapshot = (state: ProjectState): ProjectSnapshot => ({
-  gridSize: state.gridSize,
-  topWidth: state.topWidth,
-  topHeight: state.topHeight,
-  topLibName: state.topLibName,
-  topCellName: state.topCellName,
-  masterCells: state.masterCells,
-  instances: state.instances,
-  rulers: state.rulers,
-  pixelArray: state.pixelArray,
-  ...(state.padInset > 0 ? { padInset: state.padInset } : {}),
+const getRootIdentity = (state: Pick<ProjectState, 'topLibName' | 'topCellName' | 'activeCellId' | 'rootView'>) => (
+  state.activeCellId !== null && state.rootView
+    ? { topLibName: state.rootView.topLibName, topCellName: state.rootView.topCellName }
+    : { topLibName: state.topLibName, topCellName: state.topCellName }
+);
+
+const buildCellViewContent = (
+  instances: Instance[],
+  rulers: Ruler[],
+  pixelArray: PixelArray | null,
+  padInset: number,
+): CellViewContent => ({
+  instances,
+  rulers,
+  ...(pixelArray ? { pixelArray } : {}),
+  ...(padInset > 0 ? { padInset } : {}),
 });
+
+const isEmptyCellView = (view: CellViewContent): boolean => (
+  view.instances.length === 0
+  && view.rulers.length === 0
+  && !view.pixelArray
+  && !(view.padInset && view.padInset > 0)
+);
+
+const normalizeCellViews = (
+  views: Record<string, CellViewContent>,
+  masterCells: Record<string, Cell>,
+): Record<string, CellViewContent> => {
+  const result: Record<string, CellViewContent> = {};
+  for (const [cellId, view] of Object.entries(views)) {
+    if (!masterCells[cellId]) continue;
+    const normalized = buildCellViewContent(
+      view.instances,
+      view.rulers,
+      view.pixelArray ?? null,
+      view.padInset ?? 0,
+    );
+    if (!isEmptyCellView(normalized)) {
+      result[cellId] = normalized;
+    }
+  }
+  return result;
+};
+
+const mergeActiveViewIntoCellViews = (
+  state: Pick<ProjectState, 'activeCellId' | 'masterCells' | 'cellViews' | 'instances' | 'rulers' | 'pixelArray' | 'padInset'>,
+): Record<string, CellViewContent> => {
+  const merged: Record<string, CellViewContent> = { ...state.cellViews };
+  if (state.activeCellId && state.masterCells[state.activeCellId]) {
+    const activeView = buildCellViewContent(state.instances, state.rulers, state.pixelArray, state.padInset);
+    if (isEmptyCellView(activeView)) {
+      delete merged[state.activeCellId];
+    } else {
+      merged[state.activeCellId] = activeView;
+    }
+  }
+  return normalizeCellViews(merged, state.masterCells);
+};
+
+const clampInstancesToContainer = (
+  instances: Instance[],
+  masterCells: Record<string, Cell>,
+  containerW: number,
+  containerH: number,
+  gridSize: number,
+  padInset: number,
+  onlyCellId?: string,
+): Instance[] => instances.map(instance => {
+  if (onlyCellId && instance.cellId !== onlyCellId) return instance;
+  const master = masterCells[instance.cellId];
+  if (!master) return instance;
+  const position = master.kind === 'pad'
+    ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, containerW, containerH, gridSize, instance.orientation, padInset)
+    : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, containerW, containerH, gridSize);
+  return { ...instance, x: position.x, y: position.y };
+});
+
+export const getProjectSnapshot = (
+  state: Pick<
+    ProjectState,
+    | 'gridSize'
+    | 'topWidth'
+    | 'topHeight'
+    | 'topLibName'
+    | 'topCellName'
+    | 'padInset'
+    | 'masterCells'
+    | 'instances'
+    | 'rulers'
+    | 'pixelArray'
+    | 'cellViews'
+    | 'activeCellId'
+    | 'rootView'
+  >,
+): ProjectSnapshot => {
+  const mergedCellViews = mergeActiveViewIntoCellViews(state);
+  const root = state.activeCellId !== null && state.rootView
+    ? state.rootView
+    : {
+        topWidth: state.topWidth,
+        topHeight: state.topHeight,
+        topLibName: state.topLibName,
+        topCellName: state.topCellName,
+        padInset: state.padInset,
+        instances: state.instances,
+        rulers: state.rulers,
+        pixelArray: state.pixelArray,
+      };
+  return {
+    gridSize: state.gridSize,
+    topWidth: root.topWidth,
+    topHeight: root.topHeight,
+    topLibName: root.topLibName,
+    topCellName: root.topCellName,
+    masterCells: state.masterCells,
+    instances: root.instances,
+    rulers: root.rulers,
+    pixelArray: root.pixelArray,
+    ...(root.padInset > 0 ? { padInset: root.padInset } : {}),
+    ...(Object.keys(mergedCellViews).length > 0 ? { cellViews: mergedCellViews } : {}),
+  };
+};
+
+type CommitPatch = Partial<ProjectSnapshot> & {
+  rootView?: RootViewSnapshot | null;
+  activeCellId?: string | null;
+  viewBreadcrumb?: string[];
+};
 
 const commitProjectPatch = (
   state: ProjectState,
   label: string,
-  patch: Partial<ProjectSnapshot>,
+  patch: CommitPatch,
 ) => {
   const before = getProjectSnapshot(state);
-  const after: ProjectSnapshot = { ...before, ...patch };
-  if (after.padInset === 0) delete after.padInset;
+  const nextStateLike: ProjectState = {
+    ...state,
+    ...patch,
+    padInset: patch.padInset !== undefined ? patch.padInset : state.padInset,
+    pixelArray: patch.pixelArray !== undefined ? patch.pixelArray : state.pixelArray,
+    cellViews: patch.cellViews !== undefined ? patch.cellViews : state.cellViews,
+    rootView: patch.rootView !== undefined ? patch.rootView : state.rootView,
+    activeCellId: patch.activeCellId !== undefined ? patch.activeCellId : state.activeCellId,
+    viewBreadcrumb: patch.viewBreadcrumb !== undefined ? patch.viewBreadcrumb : state.viewBreadcrumb,
+  };
+  const syncedCellViews = mergeActiveViewIntoCellViews(nextStateLike);
+  const after = getProjectSnapshot({ ...nextStateLike, cellViews: syncedCellViews });
   return {
     ...patch,
+    cellViews: syncedCellViews,
     history: recordHistory(state.history, label, before, after),
+  };
+};
+
+const applyCanonicalSnapshot = (
+  state: ProjectState,
+  snapshot: ProjectSnapshot,
+  history: ProjectHistory,
+) => {
+  const cellViews = normalizeCellViews(snapshot.cellViews ?? {}, snapshot.masterCells);
+  if (state.activeCellId && snapshot.masterCells[state.activeCellId]) {
+    const activeMaster = snapshot.masterCells[state.activeCellId];
+    const activeView = cellViews[state.activeCellId];
+    const instances = activeView?.instances ?? [];
+    const filteredBreadcrumb = state.viewBreadcrumb.filter(id => Boolean(snapshot.masterCells[id]));
+    const viewBreadcrumb = filteredBreadcrumb.at(-1) === state.activeCellId
+      ? filteredBreadcrumb
+      : [...filteredBreadcrumb, state.activeCellId];
+    return {
+      gridSize: snapshot.gridSize,
+      masterCells: snapshot.masterCells,
+      cellViews,
+      rootView: {
+        topWidth: snapshot.topWidth,
+        topHeight: snapshot.topHeight,
+        topLibName: snapshot.topLibName,
+        topCellName: snapshot.topCellName,
+        padInset: snapshot.padInset ?? 0,
+        instances: snapshot.instances,
+        rulers: snapshot.rulers,
+        pixelArray: snapshot.pixelArray ?? null,
+      },
+      topWidth: activeMaster.width,
+      topHeight: activeMaster.height,
+      topLibName: activeMaster.libName,
+      topCellName: activeMaster.cellName,
+      padInset: activeView?.padInset ?? 0,
+      instances,
+      rulers: activeView?.rulers ?? [],
+      pixelArray: activeView?.pixelArray ?? null,
+      activeCellId: state.activeCellId,
+      viewBreadcrumb,
+      history,
+      ...selectionAfterInstancesChange(state, instances),
+      edgeAlignmentSession: null,
+      pendingPixelArraySize: null,
+      placementMasterId: null,
+      pendingManualPadGroup: null,
+      appMode: 'select' as AppMode,
+      pixelArraySelected: false,
+    };
+  }
+  return {
+    gridSize: snapshot.gridSize,
+    topWidth: snapshot.topWidth,
+    topHeight: snapshot.topHeight,
+    topLibName: snapshot.topLibName,
+    topCellName: snapshot.topCellName,
+    padInset: snapshot.padInset ?? 0,
+    masterCells: snapshot.masterCells,
+    instances: snapshot.instances,
+    rulers: snapshot.rulers,
+    pixelArray: snapshot.pixelArray ?? null,
+    cellViews,
+    activeCellId: null,
+    viewBreadcrumb: [],
+    rootView: null,
+    history,
+    ...selectionAfterInstancesChange(state, snapshot.instances),
+    edgeAlignmentSession: null,
+    pendingPixelArraySize: null,
+    placementMasterId: null,
+    pendingManualPadGroup: null,
+    appMode: 'select' as AppMode,
+    pixelArraySelected: false,
+  };
+};
+
+const switchToCellView = (
+  state: ProjectState,
+  targetCellId: string | null,
+  nextBreadcrumb: string[],
+) => {
+  if (targetCellId === state.activeCellId) return state;
+  if (targetCellId !== null && !state.masterCells[targetCellId]) return state;
+
+  const flushedCellViews = mergeActiveViewIntoCellViews(state);
+  const savedRoot: RootViewSnapshot = state.activeCellId === null
+    ? {
+        topWidth: state.topWidth,
+        topHeight: state.topHeight,
+        topLibName: state.topLibName,
+        topCellName: state.topCellName,
+        padInset: state.padInset,
+        instances: state.instances,
+        rulers: state.rulers,
+        pixelArray: state.pixelArray,
+      }
+    : (state.rootView ?? {
+        topWidth: state.topWidth,
+        topHeight: state.topHeight,
+        topLibName: state.topLibName,
+        topCellName: state.topCellName,
+        padInset: state.padInset,
+        instances: state.instances,
+        rulers: state.rulers,
+        pixelArray: state.pixelArray,
+      });
+
+  const resetInteraction = {
+    selectedInstanceId: null,
+    selectedInstanceIds: [],
+    pixelArraySelected: false,
+    edgeAlignmentSession: null,
+    placementMasterId: null,
+    pendingManualPadGroup: null,
+    pendingPixelArraySize: null,
+    appMode: 'select' as AppMode,
+  };
+
+  if (targetCellId === null) {
+    return {
+      ...savedRoot,
+      cellViews: flushedCellViews,
+      activeCellId: null,
+      viewBreadcrumb: [],
+      rootView: null,
+      ...resetInteraction,
+    };
+  }
+
+  const targetMaster = state.masterCells[targetCellId];
+  const targetView = flushedCellViews[targetCellId];
+  return {
+    topWidth: targetMaster.width,
+    topHeight: targetMaster.height,
+    topLibName: targetMaster.libName,
+    topCellName: targetMaster.cellName,
+    padInset: targetView?.padInset ?? 0,
+    instances: targetView?.instances ?? [],
+    rulers: targetView?.rulers ?? [],
+    pixelArray: targetView?.pixelArray ?? null,
+    cellViews: flushedCellViews,
+    activeCellId: targetCellId,
+    viewBreadcrumb: nextBreadcrumb,
+    rootView: savedRoot,
+    ...resetInteraction,
   };
 };
 
@@ -758,6 +1057,10 @@ export const useStore = create<ProjectState>((set) => ({
   rulers: [],
   pixelArray: null,
   pendingPixelArraySize: null,
+  cellViews: {},
+  activeCellId: null,
+  viewBreadcrumb: [],
+  rootView: null,
   selectedInstanceId: null,
   selectedInstanceIds: [],
   pixelArraySelected: false,
@@ -781,27 +1084,44 @@ export const useStore = create<ProjectState>((set) => ({
   setGridSize: (size) => set((state) => {
     if (!Number.isFinite(size) || size <= 0) return state;
     const padInset = normalizePadInset(state.padInset, state.topWidth, state.topHeight, size);
-    const instances = state.instances.map(instance => {
-      const master = state.masterCells[instance.cellId];
-      if (!master) return instance;
-      const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, state.topWidth, state.topHeight, size, instance.orientation, padInset)
-        : clampInstancePosition(
-            instance.x,
-            instance.y,
-            instance.orientation,
-            master.width,
-            master.height,
-            state.topWidth,
-            state.topHeight,
-            size,
-          );
-      return { ...instance, x: position.x, y: position.y };
-    });
+    const instances = clampInstancesToContainer(state.instances, state.masterCells, state.topWidth, state.topHeight, size, padInset);
     const pixelArray = state.pixelArray
       ? normalizePixelArray(state.pixelArray, state.topWidth, state.topHeight, size)
       : null;
-    return commitProjectPatch(state, 'Change grid', { gridSize: size, padInset, instances, pixelArray });
+
+    const nextRootView = state.rootView ? (() => {
+      const rootInset = normalizePadInset(state.rootView.padInset, state.rootView.topWidth, state.rootView.topHeight, size);
+      return {
+        ...state.rootView,
+        padInset: rootInset,
+        instances: clampInstancesToContainer(state.rootView.instances, state.masterCells, state.rootView.topWidth, state.rootView.topHeight, size, rootInset),
+        pixelArray: state.rootView.pixelArray
+          ? normalizePixelArray(state.rootView.pixelArray, state.rootView.topWidth, state.rootView.topHeight, size)
+          : null,
+      };
+    })() : state.rootView;
+
+    const nextCellViews: Record<string, CellViewContent> = {};
+    for (const [cellId, view] of Object.entries(state.cellViews)) {
+      if (cellId === state.activeCellId) continue;
+      const container = state.masterCells[cellId];
+      if (!container) continue;
+      const viewInset = normalizePadInset(view.padInset ?? 0, container.width, container.height, size);
+      const viewInstances = clampInstancesToContainer(view.instances, state.masterCells, container.width, container.height, size, viewInset);
+      const viewPixelArray = view.pixelArray
+        ? normalizePixelArray(view.pixelArray, container.width, container.height, size)
+        : null;
+      nextCellViews[cellId] = buildCellViewContent(viewInstances, view.rulers, viewPixelArray, viewInset);
+    }
+
+    return commitProjectPatch(state, 'Change grid', {
+      gridSize: size,
+      padInset,
+      instances,
+      pixelArray,
+      ...(nextRootView !== state.rootView ? { rootView: nextRootView } : {}),
+      cellViews: nextCellViews,
+    });
   }),
   setAppMode: (mode) => set({
     appMode: mode,
@@ -811,62 +1131,145 @@ export const useStore = create<ProjectState>((set) => ({
   }),
   setTopDimensions: (w, h) => set((state) => {
     if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
-      throw new RangeError('Top-cell width and height must be positive finite numbers');
+      throw new RangeError('Cell width and height must be positive finite numbers');
     }
     const padInset = normalizePadInset(state.padInset, w, h, state.gridSize);
-    const instances = state.instances.map(instance => {
-      const master = state.masterCells[instance.cellId];
-      if (!master) return instance;
-      const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, w, h, state.gridSize, instance.orientation, padInset)
-        : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, w, h, state.gridSize);
-      return { ...instance, x: position.x, y: position.y };
-    });
+    const instances = clampInstancesToContainer(state.instances, state.masterCells, w, h, state.gridSize, padInset);
     const pixelArray = state.pixelArray
       ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
       : null;
+
+    if (state.activeCellId && state.masterCells[state.activeCellId]) {
+      const activeId = state.activeCellId;
+      const masterCells = {
+        ...state.masterCells,
+        [activeId]: { ...state.masterCells[activeId], width: w, height: h },
+      };
+      const rootView = state.rootView
+        ? {
+            ...state.rootView,
+            instances: clampInstancesToContainer(state.rootView.instances, masterCells, state.rootView.topWidth, state.rootView.topHeight, state.gridSize, state.rootView.padInset, activeId),
+          }
+        : state.rootView;
+      const nextCellViews: Record<string, CellViewContent> = {};
+      for (const [cellId, view] of Object.entries(state.cellViews)) {
+        if (cellId === activeId) continue;
+        const container = masterCells[cellId];
+        if (!container) continue;
+        nextCellViews[cellId] = {
+          ...view,
+          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId),
+        };
+      }
+      return commitProjectPatch(state, `Resize ${masterCells[activeId].cellName}`, {
+        topWidth: w,
+        topHeight: h,
+        padInset,
+        masterCells,
+        instances,
+        pixelArray,
+        rootView,
+        cellViews: nextCellViews,
+      });
+    }
+
     return commitProjectPatch(state, 'Resize top cell', { topWidth: w, topHeight: h, padInset, instances, pixelArray });
   }),
   setTopNames: (lib, cell) => set((state) => {
-    const topLibName = lib.trim();
-    const topCellName = cell.trim();
-    if (!topLibName || !topCellName) throw new Error('Top library and cell names are required');
-    const masterCells = Object.fromEntries(Object.entries(state.masterCells).map(([id, master]) => [
-      id,
-      { ...master, libName: topLibName },
-    ]));
-    return commitProjectPatch(state, 'Rename top cell library and hierarchy', { topLibName, topCellName, masterCells });
+    const nextLibName = lib.trim();
+    const nextCellName = cell.trim();
+    if (!nextLibName || !nextCellName) throw new Error('Library and cell names are required');
+
+    if (state.activeCellId && state.masterCells[state.activeCellId]) {
+      const activeId = state.activeCellId;
+      const rootId = getRootIdentity(state);
+      if (nextLibName === rootId.topLibName && nextCellName === rootId.topCellName) {
+        throw new Error('The top cell cannot also be used as a master cell');
+      }
+      if (Object.values(state.masterCells).some(m => m.id !== activeId && m.libName === nextLibName && m.cellName === nextCellName)) {
+        throw new Error(`Cell ${nextLibName}/${nextCellName} already exists`);
+      }
+      const masterCells = {
+        ...state.masterCells,
+        [activeId]: { ...state.masterCells[activeId], libName: nextLibName, cellName: nextCellName },
+      };
+      return commitProjectPatch(state, `Rename ${nextCellName}`, { topLibName: nextLibName, topCellName: nextCellName, masterCells });
+    }
+
+    if (Object.values(state.masterCells).some(m => m.libName === nextLibName && m.cellName === nextCellName)) {
+      throw new Error(`Cell ${nextLibName}/${nextCellName} already exists as a master cell`);
+    }
+    return commitProjectPatch(state, 'Rename top cell', { topLibName: nextLibName, topCellName: nextCellName });
   }),
   setTopConfig: (lib, cell, w, h, rawPadInset) => set((state) => {
-    const topLibName = lib.trim();
-    const topCellName = cell.trim();
-    if (!topLibName || !topCellName) throw new Error('Top library and cell names are required');
+    const nextLibName = lib.trim();
+    const nextCellName = cell.trim();
+    if (!nextLibName || !nextCellName) throw new Error('Library and cell names are required');
     if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
-      throw new RangeError('Top-cell width and height must be positive finite numbers');
+      throw new RangeError('Cell width and height must be positive finite numbers');
     }
     const padInset = normalizePadInset(rawPadInset ?? state.padInset, w, h, state.gridSize);
-    const masterCells = Object.fromEntries(Object.entries(state.masterCells).map(([id, master]) => [
-      id,
-      { ...master, libName: topLibName },
-    ]));
-    const instances = state.instances.map(instance => {
-      const master = masterCells[instance.cellId];
-      if (!master) return instance;
-      const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, w, h, state.gridSize, instance.orientation, padInset)
-        : clampInstancePosition(instance.x, instance.y, instance.orientation, master.width, master.height, w, h, state.gridSize);
-      return { ...instance, x: position.x, y: position.y };
-    });
+
+    if (state.activeCellId && state.masterCells[state.activeCellId]) {
+      const activeId = state.activeCellId;
+      const rootId = getRootIdentity(state);
+      if (nextLibName === rootId.topLibName && nextCellName === rootId.topCellName) {
+        throw new Error('The top cell cannot also be used as a master cell');
+      }
+      if (Object.values(state.masterCells).some(m => m.id !== activeId && m.libName === nextLibName && m.cellName === nextCellName)) {
+        throw new Error(`Cell ${nextLibName}/${nextCellName} already exists`);
+      }
+      const masterCells = {
+        ...state.masterCells,
+        [activeId]: { ...state.masterCells[activeId], libName: nextLibName, cellName: nextCellName, width: w, height: h },
+      };
+      const instances = clampInstancesToContainer(state.instances, masterCells, w, h, state.gridSize, padInset);
+      const pixelArray = state.pixelArray
+        ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
+        : null;
+      const rootView = state.rootView
+        ? {
+            ...state.rootView,
+            instances: clampInstancesToContainer(state.rootView.instances, masterCells, state.rootView.topWidth, state.rootView.topHeight, state.gridSize, state.rootView.padInset, activeId),
+          }
+        : state.rootView;
+      const nextCellViews: Record<string, CellViewContent> = {};
+      for (const [cellId, view] of Object.entries(state.cellViews)) {
+        if (cellId === activeId) continue;
+        const container = masterCells[cellId];
+        if (!container) continue;
+        nextCellViews[cellId] = {
+          ...view,
+          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, activeId),
+        };
+      }
+      return commitProjectPatch(state, `Update ${nextCellName}`, {
+        topLibName: nextLibName,
+        topCellName: nextCellName,
+        topWidth: w,
+        topHeight: h,
+        padInset,
+        masterCells,
+        instances,
+        pixelArray,
+        rootView,
+        cellViews: nextCellViews,
+      });
+    }
+
+    if (Object.values(state.masterCells).some(m => m.libName === nextLibName && m.cellName === nextCellName)) {
+      throw new Error(`Cell ${nextLibName}/${nextCellName} already exists as a master cell`);
+    }
+    const instances = clampInstancesToContainer(state.instances, state.masterCells, w, h, state.gridSize, padInset);
     const pixelArray = state.pixelArray
       ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
       : null;
     return commitProjectPatch(state, 'Update top cell', {
-      topLibName,
-      topCellName,
+      topLibName: nextLibName,
+      topCellName: nextCellName,
       topWidth: w,
       topHeight: h,
       padInset,
-      masterCells,
       instances,
       pixelArray,
     });
@@ -895,77 +1298,200 @@ export const useStore = create<ProjectState>((set) => ({
   setShowInstantiateModal: (show) => set({ showInstantiateModal: show }),
   setLeftSidebarPinned: (pinned) => set({ leftSidebarPinned: pinned }),
   setRightSidebarPinned: (pinned) => set({ rightSidebarPinned: pinned }),
-  setPlacement: (masterId, orientation = 'R0') => set({
-    placementMasterId: masterId,
-    placementOrientation: orientation,
-    appMode: masterId ? 'place' : 'select',
-    pendingPixelArraySize: null,
-    pendingManualPadGroup: null,
-    edgeAlignmentSession: null,
+  setPlacement: (masterId, orientation = 'R0') => set((state) => {
+    if (masterId && state.activeCellId) {
+      const mergedViews = mergeActiveViewIntoCellViews(state);
+      if (wouldCreateHierarchyCycle(state.activeCellId, masterId, mergedViews)) {
+        throw new Error('Cannot instantiate this cell here because it would create a recursive hierarchy cycle.');
+      }
+    }
+    return {
+      placementMasterId: masterId,
+      placementOrientation: orientation,
+      appMode: masterId ? 'place' : 'select',
+      pendingPixelArraySize: null,
+      pendingManualPadGroup: null,
+      edgeAlignmentSession: null,
+    };
+  }),
+  openCellView: (cellId) => set((state) => (
+    switchToCellView(state, cellId, cellId ? [cellId] : [])
+  )),
+  descendIntoInstance: (instanceId) => set((state) => {
+    const inst = state.instances.find(item => item.id === instanceId);
+    if (!inst || !state.masterCells[inst.cellId]) return state;
+    return switchToCellView(state, inst.cellId, [...state.viewBreadcrumb, inst.cellId]);
+  }),
+  ascendToParent: () => set((state) => {
+    if (state.activeCellId === null) return state;
+    if (state.viewBreadcrumb.length <= 1) {
+      return switchToCellView(state, null, []);
+    }
+    const nextBreadcrumb = state.viewBreadcrumb.slice(0, -1);
+    const parentId = nextBreadcrumb[nextBreadcrumb.length - 1] ?? null;
+    return switchToCellView(state, parentId, nextBreadcrumb);
+  }),
+  navigateBreadcrumb: (index) => set((state) => {
+    if (index < 0) return switchToCellView(state, null, []);
+    const nextBreadcrumb = state.viewBreadcrumb.slice(0, index + 1);
+    const targetId = nextBreadcrumb[nextBreadcrumb.length - 1] ?? null;
+    return switchToCellView(state, targetId, nextBreadcrumb);
   }),
   
-  addMasterCell: (_libName, rawCellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
+  addMasterCell: (rawLibName, rawCellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
+    const rootId = getRootIdentity(state);
+    const libName = rawLibName.trim() || rootId.topLibName;
     const cellName = rawCellName.trim();
-    if (!cellName) throw new Error('Master cell name is required');
-    if (cellName === state.topCellName) {
+    if (!libName || !cellName) throw new Error('Master library and cell name are required');
+    if (libName === rootId.topLibName && cellName === rootId.topCellName) {
       throw new Error('The top cell cannot also be used as a master cell');
     }
     if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
       throw new RangeError('Master width and height must be positive finite numbers');
     }
-    const existing = Object.values(state.masterCells).find(c => c.cellName === cellName);
+    const existing = Object.values(state.masterCells).find(c => c.libName === libName && c.cellName === cellName);
     if (existing) {
-      throw new Error(`Cell name ${cellName} is already used in ${state.topLibName}`);
+      throw new Error(`Cell name ${cellName} is already used in ${libName}`);
     }
     const appearance = normalizeCellAppearance(opacity, outlineStyle);
     const id = uuidv4();
-    return commitProjectPatch(state, `Create ${cellName}`, {
+    return commitProjectPatch(state, `Create ${libName}/${cellName}`, {
       masterCells: {
         ...state.masterCells,
-        [id]: { id, libName: state.topLibName, cellName, width: w, height: h, color, ...appearance }
+        [id]: { id, libName, cellName, width: w, height: h, color, ...appearance }
       },
     });
   }),
 
-  updateMasterCell: (id, _libName, rawCellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
-    if (!state.masterCells[id]) return state;
+  updateMasterCell: (id, rawLibName, rawCellName, w, h, color, opacity = 0.5, outlineStyle = 'solid') => set((state) => {
+    const existing = state.masterCells[id];
+    if (!existing) return state;
+    const rootId = getRootIdentity(state);
+    const libName = rawLibName.trim() || existing.libName;
     const cellName = rawCellName.trim();
-    if (!cellName) throw new Error('Master cell name is required');
-    if (cellName === state.topCellName) {
+    if (!libName || !cellName) throw new Error('Master library and cell name are required');
+    if (libName === rootId.topLibName && cellName === rootId.topCellName) {
       throw new Error('The top cell cannot also be used as a master cell');
     }
     if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
       throw new RangeError('Master width and height must be positive finite numbers');
     }
-    if (Object.values(state.masterCells).some(master => master.id !== id && master.cellName === cellName)) {
-      throw new Error(`Cell name ${cellName} is already used in ${state.topLibName}`);
+    if (Object.values(state.masterCells).some(master => master.id !== id && master.libName === libName && master.cellName === cellName)) {
+      throw new Error(`Cell name ${cellName} is already used in ${libName}`);
     }
     const appearance = normalizeCellAppearance(opacity, outlineStyle);
     const masterCells = {
       ...state.masterCells,
-      [id]: { ...state.masterCells[id], libName: state.topLibName, cellName, width: w, height: h, color, ...appearance },
+      [id]: { ...existing, libName, cellName, width: w, height: h, color, ...appearance },
     };
-    const instances = state.instances.map(instance => {
-      if (instance.cellId !== id) return instance;
-      const position = masterCells[id].kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, w, h, state.topWidth, state.topHeight, state.gridSize, instance.orientation, state.padInset)
-        : clampInstancePosition(instance.x, instance.y, instance.orientation, w, h, state.topWidth, state.topHeight, state.gridSize);
-      return { ...instance, x: position.x, y: position.y };
+
+    const editingActiveView = state.activeCellId === id;
+    const activePadInset = editingActiveView
+      ? normalizePadInset(state.padInset, w, h, state.gridSize)
+      : state.padInset;
+    const instances = editingActiveView
+      ? clampInstancesToContainer(state.instances, masterCells, w, h, state.gridSize, activePadInset)
+      : clampInstancesToContainer(state.instances, masterCells, state.topWidth, state.topHeight, state.gridSize, state.padInset, id);
+    const pixelArray = editingActiveView && state.pixelArray
+      ? normalizePixelArray(state.pixelArray, w, h, state.gridSize)
+      : state.pixelArray;
+    const rootView = state.rootView
+      ? {
+          ...state.rootView,
+          instances: clampInstancesToContainer(state.rootView.instances, masterCells, state.rootView.topWidth, state.rootView.topHeight, state.gridSize, state.rootView.padInset, id),
+        }
+      : state.rootView;
+    const nextCellViews: Record<string, CellViewContent> = {};
+    for (const [viewCellId, view] of Object.entries(state.cellViews)) {
+      if (viewCellId === state.activeCellId) continue;
+      const container = masterCells[viewCellId];
+      if (!container) continue;
+      if (viewCellId === id) {
+        const viewInset = normalizePadInset(view.padInset ?? 0, w, h, state.gridSize);
+        nextCellViews[viewCellId] = buildCellViewContent(
+          clampInstancesToContainer(view.instances, masterCells, w, h, state.gridSize, viewInset),
+          view.rulers,
+          view.pixelArray ? normalizePixelArray(view.pixelArray, w, h, state.gridSize) : null,
+          viewInset,
+        );
+      } else {
+        nextCellViews[viewCellId] = {
+          ...view,
+          instances: clampInstancesToContainer(view.instances, masterCells, container.width, container.height, state.gridSize, view.padInset ?? 0, id),
+        };
+      }
+    }
+
+    return commitProjectPatch(state, `Edit ${libName}/${cellName}`, {
+      masterCells,
+      instances,
+      pixelArray,
+      padInset: activePadInset,
+      ...(editingActiveView ? { topLibName: libName, topCellName: cellName, topWidth: w, topHeight: h } : {}),
+      ...(rootView !== state.rootView ? { rootView } : {}),
+      cellViews: nextCellViews,
     });
-    return commitProjectPatch(state, `Edit ${cellName}`, { masterCells, instances });
   }),
 
   deleteMasterCell: (id) => set((state) => {
-    if (!state.masterCells[id]) return state;
+    const deleted = state.masterCells[id];
+    if (!deleted) return state;
     const newMasterCells = { ...state.masterCells };
     delete newMasterCells[id];
-    // Also remove instances of this cell
-    const newInstances = state.instances.filter(inst => inst.cellId !== id);
+
+    const flushedViews = mergeActiveViewIntoCellViews(state);
+    const cleanedCellViews: Record<string, CellViewContent> = {};
+    for (const [viewCellId, view] of Object.entries(flushedViews)) {
+      if (viewCellId === id || !newMasterCells[viewCellId]) continue;
+      const filteredInstances = view.instances.filter(inst => inst.cellId !== id);
+      const nextView = buildCellViewContent(filteredInstances, view.rulers, view.pixelArray ?? null, view.padInset ?? 0);
+      if (!isEmptyCellView(nextView)) {
+        cleanedCellViews[viewCellId] = nextView;
+      }
+    }
+
     const clearingPlacement = state.placementMasterId === id || state.pendingManualPadGroup?.masterId === id;
+    const deletingOpenPath = state.activeCellId === id || state.viewBreadcrumb.includes(id);
+
+    if (deletingOpenPath && state.rootView) {
+      const rootInstances = state.rootView.instances.filter(inst => inst.cellId !== id);
+      return {
+        ...commitProjectPatch(state, `Delete ${deleted.cellName}`, {
+          topWidth: state.rootView.topWidth,
+          topHeight: state.rootView.topHeight,
+          topLibName: state.rootView.topLibName,
+          topCellName: state.rootView.topCellName,
+          padInset: state.rootView.padInset,
+          instances: rootInstances,
+          rulers: state.rootView.rulers,
+          pixelArray: state.rootView.pixelArray,
+          masterCells: newMasterCells,
+          cellViews: cleanedCellViews,
+          activeCellId: null,
+          viewBreadcrumb: [],
+          rootView: null,
+        }),
+        selectedInstanceId: null,
+        selectedInstanceIds: [],
+        pixelArraySelected: false,
+        edgeAlignmentSession: null,
+        placementMasterId: null,
+        pendingManualPadGroup: null,
+        pendingPixelArraySize: null,
+        appMode: 'select',
+      };
+    }
+
+    const newInstances = state.instances.filter(inst => inst.cellId !== id);
+    const nextRootView = state.rootView
+      ? { ...state.rootView, instances: state.rootView.instances.filter(inst => inst.cellId !== id) }
+      : state.rootView;
     return {
-      ...commitProjectPatch(state, `Delete ${state.masterCells[id].cellName}`, {
+      ...commitProjectPatch(state, `Delete ${deleted.cellName}`, {
         masterCells: newMasterCells,
         instances: newInstances,
+        cellViews: cleanedCellViews,
+        ...(nextRootView !== state.rootView ? { rootView: nextRootView } : {}),
       }),
       ...selectionAfterInstancesChange(state, newInstances),
       edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, newInstances),
@@ -980,6 +1506,12 @@ export const useStore = create<ProjectState>((set) => ({
   placeInstance: (cellId, targetX = 0, targetY = 0, orientation = 'R0') => set((state) => {
     const master = state.masterCells[cellId];
     if (!master) return state;
+    if (state.activeCellId) {
+      const mergedViews = mergeActiveViewIntoCellViews(state);
+      if (wouldCreateHierarchyCycle(state.activeCellId, cellId, mergedViews)) {
+        throw new Error(`Cannot instantiate ${master.cellName} inside ${state.topCellName} because it creates a hierarchy cycle.`);
+      }
+    }
 
     const effectiveOrientation = orientation;
     const clamped = master.kind === 'pad'
@@ -1006,7 +1538,8 @@ export const useStore = create<ProjectState>((set) => ({
 
   createPadRow: (config) => set((state) => {
     const orientation = config.orientation ?? 'R0';
-    const libName = state.topLibName;
+    const rootId = getRootIdentity(state);
+    const libName = config.libName.trim() || rootId.topLibName;
     const cellName = config.cellName.trim();
     if (!libName || !cellName) throw new Error('Pad library and cell names are required');
     if (!Number.isFinite(config.width) || config.width <= 0 || !Number.isFinite(config.height) || config.height <= 0) {
@@ -1022,7 +1555,7 @@ export const useStore = create<ProjectState>((set) => ({
     if (!(['top', 'bottom', 'left', 'right'] as const).includes(config.side)) {
       throw new Error('Pad side must be top, bottom, left, or right');
     }
-    if (libName === state.topLibName && cellName === state.topCellName) {
+    if (libName === rootId.topLibName && cellName === rootId.topCellName) {
       throw new Error('The top cell cannot also be used as the pad master');
     }
     snapPadToNearestEdge(
@@ -1060,6 +1593,9 @@ export const useStore = create<ProjectState>((set) => ({
     const existingMaster = Object.values(state.masterCells).find(cell => (
       cell.libName === libName && cell.cellName === cellName
     ));
+    if (existingMaster && state.activeCellId && wouldCreateHierarchyCycle(state.activeCellId, existingMaster.id, mergeActiveViewIntoCellViews(state))) {
+      throw new Error(`Cannot instantiate ${cellName} inside ${state.topCellName} because it creates a hierarchy cycle.`);
+    }
     if (existingMaster && (
       Math.abs(existingMaster.width - config.width) > 1e-9
       || Math.abs(existingMaster.height - config.height) > 1e-9
@@ -1111,7 +1647,8 @@ export const useStore = create<ProjectState>((set) => ({
   prepareManualPadPlacement: (config) => set((state) => {
     const count = config.count ?? 1;
     const pitch = config.pitch ?? Math.max(config.width, config.height);
-    const libName = state.topLibName;
+    const rootId = getRootIdentity(state);
+    const libName = config.libName.trim() || rootId.topLibName;
     const cellName = config.cellName.trim();
     if (!libName || !cellName) throw new Error('Pad library and cell names are required');
     if (!Number.isFinite(config.width) || !Number.isFinite(config.height) || config.width <= 0 || config.height <= 0) {
@@ -1124,7 +1661,7 @@ export const useStore = create<ProjectState>((set) => ({
     if (pitch + 1e-9 < config.width) {
       throw new RangeError(`Manual pad pitch must be at least the pad width (${config.width} um) for automatic edge rotation`);
     }
-    if (libName === state.topLibName && cellName === state.topCellName) {
+    if (libName === rootId.topLibName && cellName === rootId.topCellName) {
       throw new Error('The top cell cannot also be used as the pad master');
     }
     snapPadToAutoOrientedEdge(
@@ -1140,6 +1677,9 @@ export const useStore = create<ProjectState>((set) => ({
     const existingMaster = Object.values(state.masterCells).find(cell => (
       cell.libName === libName && cell.cellName === cellName
     ));
+    if (existingMaster && state.activeCellId && wouldCreateHierarchyCycle(state.activeCellId, existingMaster.id, mergeActiveViewIntoCellViews(state))) {
+      throw new Error(`Cannot instantiate ${cellName} inside ${state.topCellName} because it creates a hierarchy cycle.`);
+    }
     if (existingMaster && (
       Math.abs(existingMaster.width - config.width) > 1e-9
       || Math.abs(existingMaster.height - config.height) > 1e-9
@@ -1556,12 +2096,16 @@ export const useStore = create<ProjectState>((set) => ({
     if (!state.clipboard || state.clipboard.length === 0) return state;
     
     const offset = 20 * state.gridSize;
+    const mergedViews = state.activeCellId ? mergeActiveViewIntoCellViews(state) : state.cellViews;
     let instances = [...state.instances];
     const newSelectedIds: string[] = [];
     
     for (const item of state.clipboard) {
       const master = state.masterCells[item.cellId];
       if (!master) continue; // master deleted
+      if (state.activeCellId && wouldCreateHierarchyCycle(state.activeCellId, item.cellId, mergedViews)) {
+        continue; // prevent pasting a recursive hierarchy cycle
+      }
       
       const newInst = {
         ...item,
@@ -1619,35 +2163,13 @@ export const useStore = create<ProjectState>((set) => ({
   undo: () => set((state) => {
     const result = undoHistory(state.history, getProjectSnapshot(state));
     if (!result) return state;
-    return {
-      ...result.snapshot,
-      padInset: result.snapshot.padInset ?? 0,
-      history: result.history,
-      ...selectionAfterInstancesChange(state, result.snapshot.instances),
-      edgeAlignmentSession: null,
-      pendingPixelArraySize: null,
-      placementMasterId: null,
-      pendingManualPadGroup: null,
-      appMode: 'select',
-      pixelArraySelected: false,
-    };
+    return applyCanonicalSnapshot(state, result.snapshot, result.history);
   }),
 
   redo: () => set((state) => {
     const result = redoHistory(state.history, getProjectSnapshot(state));
     if (!result) return state;
-    return {
-      ...result.snapshot,
-      padInset: result.snapshot.padInset ?? 0,
-      history: result.history,
-      ...selectionAfterInstancesChange(state, result.snapshot.instances),
-      edgeAlignmentSession: null,
-      pendingPixelArraySize: null,
-      placementMasterId: null,
-      pendingManualPadGroup: null,
-      appMode: 'select',
-      pixelArraySelected: false,
-    };
+    return applyCanonicalSnapshot(state, result.snapshot, result.history);
   }),
 
   alignSelectedInstances: (operation) => set((state) => {
@@ -1891,43 +2413,47 @@ export const useStore = create<ProjectState>((set) => ({
     const gridSize = data.gridSize ?? state.gridSize;
     const topWidth = data.topWidth ?? state.topWidth;
     const topHeight = data.topHeight ?? state.topHeight;
+    const topLibName = data.topLibName ?? state.topLibName;
+    const topCellName = data.topCellName ?? state.topCellName;
     const padInset = normalizePadInset(data.padInset ?? 0, topWidth, topHeight, gridSize);
     const masterCells = Object.fromEntries(Object.entries(data.masterCells ?? {}).map(([id, master]) => [
       id,
-      { ...master, libName: data.topLibName ?? state.topLibName },
+      { ...master, libName: master.libName?.trim() || topLibName },
     ]));
-    const instances = (data.instances ?? []).map(instance => {
-      const master = masterCells[instance.cellId];
-      if (!master) return instance;
-      const position = master.kind === 'pad'
-        ? snapPadToNearestEdge(instance.x, instance.y, master.width, master.height, topWidth, topHeight, gridSize, instance.orientation, padInset)
-        : clampInstancePosition(
-            instance.x,
-            instance.y,
-            instance.orientation,
-            master.width,
-            master.height,
-            topWidth,
-            topHeight,
-            gridSize,
-          );
-      return { ...instance, x: position.x, y: position.y };
-    });
+    const instances = clampInstancesToContainer(data.instances ?? [], masterCells, topWidth, topHeight, gridSize, padInset);
     const pixelArray = data.pixelArray
       ? normalizePixelArray(data.pixelArray, topWidth, topHeight, gridSize)
       : null;
+    const loadedCellViews: Record<string, CellViewContent> = {};
+    for (const [cellId, rawView] of Object.entries(data.cellViews ?? {})) {
+      const container = masterCells[cellId];
+      if (!container) continue;
+      const viewInset = normalizePadInset(rawView.padInset ?? 0, container.width, container.height, gridSize);
+      const viewInstances = clampInstancesToContainer(rawView.instances ?? [], masterCells, container.width, container.height, gridSize, viewInset);
+      const viewPixelArray = rawView.pixelArray
+        ? normalizePixelArray(rawView.pixelArray, container.width, container.height, gridSize)
+        : null;
+      const normalized = buildCellViewContent(viewInstances, rawView.rulers ?? [], viewPixelArray, viewInset);
+      if (!isEmptyCellView(normalized)) {
+        loadedCellViews[cellId] = normalized;
+      }
+    }
     return {
       ...state,
       gridSize,
       topWidth,
       topHeight,
       padInset,
-      topLibName: data.topLibName ?? state.topLibName,
-      topCellName: data.topCellName ?? state.topCellName,
+      topLibName,
+      topCellName,
       masterCells,
       instances,
       rulers: data.rulers ?? [],
       pixelArray,
+      cellViews: loadedCellViews,
+      activeCellId: null,
+      viewBreadcrumb: [],
+      rootView: null,
       pendingPixelArraySize: null,
       placementMasterId: null,
       pendingManualPadGroup: null,

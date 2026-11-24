@@ -96,3 +96,28 @@ test('instance lock flag survives serialization and rejects non-boolean values',
   lockedProject.instances[0].locked = 'yes';
   assert.throws(() => parseProjectDocument(JSON.stringify(lockedProject)), /Invalid instance/);
 });
+
+test('hierarchical cellViews survive serialization and reject missing masters or cycles', () => {
+  const hierProject = {
+    ...structuredClone(project),
+    masterCells: {
+      parent: { id: 'parent', libName: 'analog_lib', cellName: 'ANALOG', width: 40, height: 30, color: '#2563eb' },
+      child: { id: 'child', libName: 'adc_lib', cellName: 'ADC', width: 10, height: 10, color: '#22c55e' },
+    },
+    instances: [{ id: 'i0', cellId: 'parent', name: 'I0', x: -20, y: -15, orientation: 'R0' }],
+    cellViews: {
+      parent: {
+        instances: [{ id: 'sub0', cellId: 'child', name: 'I_ADC', x: -5, y: -5, orientation: 'R0' }],
+        rulers: [],
+      },
+    },
+  };
+  assert.deepEqual(parseProjectDocument(serializeProjectDocument(hierProject)), hierProject);
+
+  const cyclic = structuredClone(hierProject);
+  cyclic.cellViews.child = {
+    instances: [{ id: 'sub1', cellId: 'parent', name: 'I_LOOP', x: 0, y: 0, orientation: 'R0' }],
+    rulers: [],
+  };
+  assert.throws(() => parseProjectDocument(JSON.stringify(cyclic)), /Circular hierarchy/);
+});

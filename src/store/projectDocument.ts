@@ -1,4 +1,6 @@
-import type { Cell, Instance, PixelArray, Ruler } from './useStore';
+import type { Cell, Instance, PixelArray, Ruler } from './useStore.ts';
+import { getTopologicalCellOrder } from '../utils/hierarchy.ts';
+import type { CellViewContent } from '../utils/hierarchy.ts';
 
 export const PROJECT_FILE_VERSION = 1 as const;
 export const PROJECT_RECOVERY_KEY = 'ic-floorplanner:recovery:v1';
@@ -15,6 +17,8 @@ export type ProjectSnapshot = {
   pixelArray?: PixelArray | null;
   /** Optional seal-ring / edge margin (um) from the top-cell outer boundary to edge pads. */
   padInset?: number;
+  /** Optional internal layout views for hierarchical master cells. */
+  cellViews?: Record<string, CellViewContent>;
 };
 
 export type ProjectDocument = {
@@ -36,6 +40,62 @@ const finite = (value: unknown): value is number =>
 
 const nonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0;
+
+const assertInstances = (
+  rawInstances: unknown[],
+  masterCells: Record<string, Cell>,
+): Instance[] => {
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  return rawInstances.map((raw, index) => {
+    if (!isRecord(raw) || !nonEmptyString(raw.id) || !nonEmptyString(raw.cellId) ||
+        !nonEmptyString(raw.name) || !finite(raw.x) || !finite(raw.y) ||
+        !nonEmptyString(raw.orientation) || !orientations.has(raw.orientation) ||
+        (raw.locked !== undefined && typeof raw.locked !== 'boolean')) {
+      throw new Error(`Invalid instance at index ${index}.`);
+    }
+    if (!masterCells[raw.cellId]) throw new Error(`Instance ${raw.name} references a missing master.`);
+    if (ids.has(raw.id)) throw new Error(`Duplicate instance id: ${raw.id}.`);
+    if (names.has(raw.name)) throw new Error(`Duplicate instance name: ${raw.name}.`);
+    ids.add(raw.id);
+    names.add(raw.name);
+    return raw as Instance;
+  });
+};
+
+const assertRulers = (rawRulers: unknown[]): Ruler[] => {
+  const rulerIds = new Set<string>();
+  return rawRulers.map((raw, index) => {
+    if (!isRecord(raw) || !nonEmptyString(raw.id) || !finite(raw.startX) ||
+        !finite(raw.startY) || !finite(raw.endX) || !finite(raw.endY) ||
+        ((raw.referenceX !== undefined || raw.referenceY !== undefined) &&
+          (!finite(raw.referenceX) || !finite(raw.referenceY)))) {
+      throw new Error(`Invalid ruler at index ${index}.`);
+    }
+    if (rulerIds.has(raw.id)) throw new Error(`Duplicate ruler id: ${raw.id}.`);
+    rulerIds.add(raw.id);
+    return raw as Ruler;
+  });
+};
+
+const assertPixelArray = (raw: unknown, containerWidth: number, containerHeight: number): PixelArray => {
+  if (!isRecord(raw) || !finite(raw.x) || !finite(raw.y) ||
+      !finite(raw.width) || raw.width <= 0 || raw.width >= containerWidth ||
+      !finite(raw.height) || raw.height <= 0 || raw.height >= containerHeight ||
+      typeof raw.visible !== 'boolean' ||
+      raw.x < -containerWidth / 2 - 1e-9 || raw.x + raw.width > containerWidth / 2 + 1e-9 ||
+      raw.y < -containerHeight / 2 - 1e-9 || raw.y + raw.height > containerHeight / 2 + 1e-9) {
+    throw new Error('Invalid pixel array.');
+  }
+  return raw as PixelArray;
+};
+
+const assertPadInset = (raw: unknown, containerWidth: number, containerHeight: number): number => {
+  if (!finite(raw) || raw < 0 || raw * 2 >= containerWidth || raw * 2 >= containerHeight) {
+    throw new Error('Invalid pad inset.');
+  }
+  return raw;
+};
 
 const assertProject = (value: unknown): ProjectSnapshot => {
   if (!isRecord(value)) throw new Error('Project data must be an object.');
@@ -61,57 +121,48 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     masterCells[key] = raw as Cell;
   }
 
-  const ids = new Set<string>();
-  const names = new Set<string>();
-  const instances = value.instances.map((raw, index) => {
-    if (!isRecord(raw) || !nonEmptyString(raw.id) || !nonEmptyString(raw.cellId) ||
-        !nonEmptyString(raw.name) || !finite(raw.x) || !finite(raw.y) ||
-        !nonEmptyString(raw.orientation) || !orientations.has(raw.orientation) ||
-        (raw.locked !== undefined && typeof raw.locked !== 'boolean')) {
-      throw new Error(`Invalid instance at index ${index}.`);
-    }
-    if (!masterCells[raw.cellId]) throw new Error(`Instance ${raw.name} references a missing master.`);
-    if (ids.has(raw.id)) throw new Error(`Duplicate instance id: ${raw.id}.`);
-    if (names.has(raw.name)) throw new Error(`Duplicate instance name: ${raw.name}.`);
-    ids.add(raw.id);
-    names.add(raw.name);
-    return raw as Instance;
-  });
-
-  const rulerIds = new Set<string>();
-  const rulers = value.rulers.map((raw, index) => {
-    if (!isRecord(raw) || !nonEmptyString(raw.id) || !finite(raw.startX) ||
-        !finite(raw.startY) || !finite(raw.endX) || !finite(raw.endY) ||
-        ((raw.referenceX !== undefined || raw.referenceY !== undefined) &&
-          (!finite(raw.referenceX) || !finite(raw.referenceY)))) {
-      throw new Error(`Invalid ruler at index ${index}.`);
-    }
-    if (rulerIds.has(raw.id)) throw new Error(`Duplicate ruler id: ${raw.id}.`);
-    rulerIds.add(raw.id);
-    return raw as Ruler;
-  });
+  const instances = assertInstances(value.instances, masterCells);
+  const rulers = assertRulers(value.rulers);
 
   let pixelArray: PixelArray | null = null;
   if (value.pixelArray !== undefined && value.pixelArray !== null) {
-    const raw = value.pixelArray;
-    if (!isRecord(raw) || !finite(raw.x) || !finite(raw.y) ||
-        !finite(raw.width) || raw.width <= 0 || raw.width >= value.topWidth ||
-        !finite(raw.height) || raw.height <= 0 || raw.height >= value.topHeight ||
-        typeof raw.visible !== 'boolean' ||
-        raw.x < -value.topWidth / 2 - 1e-9 || raw.x + raw.width > value.topWidth / 2 + 1e-9 ||
-        raw.y < -value.topHeight / 2 - 1e-9 || raw.y + raw.height > value.topHeight / 2 + 1e-9) {
-      throw new Error('Invalid pixel array.');
-    }
-    pixelArray = raw as PixelArray;
+    pixelArray = assertPixelArray(value.pixelArray, value.topWidth, value.topHeight);
   }
 
   let padInset: number | undefined;
   if (value.padInset !== undefined) {
-    if (!finite(value.padInset) || value.padInset < 0 ||
-        value.padInset * 2 >= value.topWidth || value.padInset * 2 >= value.topHeight) {
-      throw new Error('Invalid pad inset.');
+    padInset = assertPadInset(value.padInset, value.topWidth, value.topHeight);
+  }
+
+  let cellViews: Record<string, CellViewContent> | undefined;
+  if (value.cellViews !== undefined) {
+    if (!isRecord(value.cellViews)) throw new Error('Cell views must be an object.');
+    const parsedViews: Record<string, CellViewContent> = {};
+    for (const [cellId, rawView] of Object.entries(value.cellViews)) {
+      const master = masterCells[cellId];
+      if (!master) throw new Error(`Cell view ${cellId} references a missing master.`);
+      if (!isRecord(rawView) || !Array.isArray(rawView.instances) || !Array.isArray(rawView.rulers)) {
+        throw new Error(`Invalid cell view for ${master.cellName}.`);
+      }
+      const viewInstances = assertInstances(rawView.instances, masterCells);
+      const viewRulers = assertRulers(rawView.rulers);
+      const viewPixelArray = rawView.pixelArray !== undefined && rawView.pixelArray !== null
+        ? assertPixelArray(rawView.pixelArray, master.width, master.height)
+        : undefined;
+      const viewPadInset = rawView.padInset !== undefined
+        ? assertPadInset(rawView.padInset, master.width, master.height)
+        : undefined;
+      parsedViews[cellId] = {
+        instances: viewInstances,
+        rulers: viewRulers,
+        ...(rawView.pixelArray === undefined ? {} : { pixelArray: viewPixelArray ?? null }),
+        ...(viewPadInset === undefined ? {} : { padInset: viewPadInset }),
+      };
     }
-    padInset = value.padInset;
+    getTopologicalCellOrder(Object.keys(parsedViews), parsedViews);
+    if (Object.keys(parsedViews).length > 0) {
+      cellViews = parsedViews;
+    }
   }
 
   return {
@@ -125,6 +176,7 @@ const assertProject = (value: unknown): ProjectSnapshot => {
     rulers,
     ...(value.pixelArray === undefined ? {} : { pixelArray }),
     ...(padInset === undefined ? {} : { padInset }),
+    ...(cellViews === undefined ? {} : { cellViews }),
   };
 };
 

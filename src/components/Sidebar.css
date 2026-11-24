@@ -116,6 +116,53 @@
   flex-wrap: wrap;
 }
 
+.top-cell-card--subcell {
+  border-color: rgba(41, 151, 255, 0.45);
+  background: rgba(41, 151, 255, 0.08);
+}
+
+.return-top-btn {
+  margin-top: 2px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(41, 151, 255, 0.38);
+  background: rgba(41, 151, 255, 0.14);
+  color: #64d2ff;
+  font-size: 11.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background-color 0.18s var(--ease-apple), color 0.18s var(--ease-apple);
+}
+
+.return-top-btn:hover {
+  background: rgba(41, 151, 255, 0.24);
+  color: #ffffff;
+}
+
+.cell-item--open {
+  border-color: rgba(41, 151, 255, 0.55);
+  background: rgba(41, 151, 255, 0.1);
+}
+
+.subcount-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1.5px 6px;
+  border-radius: 999px;
+  background: rgba(41, 151, 255, 0.16);
+  color: #64d2ff;
+  white-space: nowrap;
+}
+
+.icon-btn--active {
+  color: #5ac8fa !important;
+  background: rgba(41, 151, 255, 0.18);
+}
+
 .color-swatch-grid {
   display: flex;
   gap: 8px;

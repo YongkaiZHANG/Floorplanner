@@ -90,6 +90,7 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     rulers: state.rulers,
     pixelArray: state.pixelArray ?? null,
     ...(state.padInset !== undefined && state.padInset > 0 ? { padInset: state.padInset } : {}),
+    ...(state.cellViews && Object.keys(state.cellViews).length > 0 ? { cellViews: state.cellViews } : {}),
   };
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${-maxY} ${vbW} ${vbH}" style="background-color: #f8fafc;">\n`;
@@ -281,12 +282,12 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
 };
 
 export const exportSVG = () => {
-  const state = useStore.getState();
-  const svg = generateSvgMarkup(getProjectSnapshot(state));
+  const snapshot = getProjectSnapshot(useStore.getState());
+  const svg = generateSvgMarkup(snapshot);
   const blob = new Blob([svg], { type: 'image/svg+xml' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const filename = `${state.topCellName}_floorplan.svg`;
+  const filename = `${snapshot.topCellName}_floorplan.svg`;
   a.href = url;
   a.download = filename;
   document.body.appendChild(a);
