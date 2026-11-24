@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getProjectSnapshot, PIXEL_ARRAY_ALIGNMENT_ID, useStore } from '../store/useStore';
+import { getProjectSnapshot, makeShapeAlignmentId, parseShapeAlignmentId, PIXEL_ARRAY_ALIGNMENT_ID, useStore } from '../store/useStore';
 import { generateSkillCode, downloadSkillFile } from '../utils/skillExport';
 import type { SkillExportOptions, SkillHierarchyMode } from '../utils/skillExport';
 import { exportSVG, extractProjectFromSvg } from '../utils/svgExport';
@@ -17,7 +17,7 @@ import type { ToastKind, ToastMessage } from './ToastViewport';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, descendStack, rootView, openCellView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, setSelection, undo, redo, alignSelectedInstances, alignSelectedInstancesToBoundary, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, descendStack, rootView, openCellView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, selectedShapeId, setSelection, undo, redo, alignSelectedInstances, alignSelectedInstancesToBoundary, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
@@ -80,21 +80,32 @@ export const Topbar: React.FC = () => {
     : topCellName;
   const isDirty = savedSignature === null ? history.past.length > 0 : projectSignature !== savedSignature;
   const saveStatus = isDirty ? 'Unsaved' : savedSignature === null ? 'Not saved' : 'Saved';
+  const selectedRectShape = selectedShapeId
+    ? shapes.find(shape => shape.id === selectedShapeId && shape.kind !== 'text') ?? null
+    : null;
   const alignmentSource = edgeAlignmentSession
     ? instances.find(instance => instance.id === edgeAlignmentSession.sourceId)
     : null;
+  const alignmentSourceShape = edgeAlignmentSession
+    ? (() => {
+        const sid = parseShapeAlignmentId(edgeAlignmentSession.sourceId);
+        return sid ? shapes.find(shape => shape.id === sid) ?? null : null;
+      })()
+    : null;
   const alignmentSourceName = edgeAlignmentSession?.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
     ? 'Pixel Array'
-    : edgeAlignmentSession && edgeAlignmentSession.sourceIds.length > 1
-      ? `${edgeAlignmentSession.sourceIds.length} selected objects${edgeAlignmentSession.sourceEdge ? ` via ${alignmentSource?.name ?? 'chosen edge'}` : ''}`
-      : alignmentSource?.name ?? 'IP';
+    : alignmentSourceShape
+      ? (alignmentSourceShape.label?.trim() || `${alignmentSourceShape.layer}/${alignmentSourceShape.purpose}`)
+      : edgeAlignmentSession && edgeAlignmentSession.sourceIds.length > 1
+        ? `${edgeAlignmentSession.sourceIds.length} selected objects${edgeAlignmentSession.sourceEdge ? ` via ${alignmentSource?.name ?? 'chosen edge'}` : ''}`
+        : alignmentSource?.name ?? 'IP';
   const alignmentAxis = edgeAlignmentSession?.sourceEdge
     ? (edgeAlignmentSession.sourceEdge === 'left' || edgeAlignmentSession.sourceEdge === 'right' || edgeAlignmentSession.sourceEdge === 'horizontal-center'
         ? 'horizontally'
         : 'vertically')
     : null;
   const alignmentStep = edgeAlignmentSession?.sourceEdge
-    ? 'Click a green IP, pixel-array, top-cell, or ruler reference'
+    ? 'Click any green/cyan edge (IP, sub-cell, parent cell, boundary, or ruler)'
     : edgeAlignmentSession && edgeAlignmentSession.sourceIds.length > 1
       ? 'Click an amber edge on any selected object'
       : `Click an amber edge of ${alignmentSourceName}`;
@@ -418,7 +429,7 @@ export const Topbar: React.FC = () => {
           <button
             className={`mode-btn mode-btn--autodim${showAutoDim ? ' active' : ''}`}
             onClick={toggleAutoDim}
-            title="Auto-Dimension: show a nearest-gap overview, then select one IP to focus only its local gaps."
+            title="Auto-Dimension: shows nearest clearances across IPs, drawn shapes, inner padring/sub-cell walls, and Edit-in-Place context; select any block or rectangle to focus its local gaps."
           >
             <FiGrid /> <span className="topbar-label-lg">Auto-Dim</span>
           </button>
@@ -456,8 +467,14 @@ export const Topbar: React.FC = () => {
           <EditingToolbar
             canUndo={history.past.length > 0}
             canRedo={history.future.length > 0}
-            selectionCount={pixelArraySelected ? 1 : selectedInstanceIds.length}
-            anchorName={pixelArraySelected ? 'Pixel Array' : instances.find(instance => instance.id === selectedInstanceId)?.name}
+            selectionCount={pixelArraySelected || selectedRectShape ? 1 : selectedInstanceIds.length}
+            anchorName={
+              pixelArraySelected
+                ? 'Pixel Array'
+                : selectedRectShape
+                  ? (selectedRectShape.label?.trim() || `${selectedRectShape.layer}/${selectedRectShape.purpose}`)
+                  : instances.find(instance => instance.id === selectedInstanceId)?.name
+            }
             boundaryLabel={boundaryLabel}
             onUndo={undo}
             onRedo={redo}
@@ -466,6 +483,7 @@ export const Topbar: React.FC = () => {
             onStartEdgeAlign={() => {
               setAppMode('select');
               if (pixelArraySelected) startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
+              else if (selectedRectShape) startEdgeAlignment(makeShapeAlignmentId(selectedRectShape.id));
               else if (selectedInstanceId) startEdgeAlignment(selectedInstanceId);
             }}
           />

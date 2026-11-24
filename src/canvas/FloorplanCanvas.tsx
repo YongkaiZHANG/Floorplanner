@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { Stage, Layer, Rect, Text, Group, Line, Circle } from 'react-konva';
-import { useStore, computePadGroupPositions, getTransformProps, isCellEmpty, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
+import { useStore, computePadGroupPositions, getTransformProps, isCellEmpty, makeShapeAlignmentId, PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, snapPadToAutoOrientedEdge, snapPadToNearestEdge } from '../store/useStore';
 import type { Instance } from '../store/useStore';
 import { applyMoveConstraint, getAlignmentEdgeAxis, getPhysicalBounds, isActiveMosaic } from '../utils/alignment';
 import type { AlignmentEdge, CadenceOrientation, MoveConstraintMode } from '../utils/alignment';
@@ -13,8 +13,12 @@ import { formatGridValue, snapToGrid } from '../utils/grid';
 import {
   applyCadenceOrientationVector,
   applyCadenceTransformPoint,
+  boxesStrictlyOverlap,
+  collectEipAncestorReferenceBoxes,
+  collectInstanceDescendantBoxes,
   computeActiveToBaseTransform,
   invertCadenceTransform,
+  transformBoxByCadence,
 } from '../utils/hierarchy';
 import {
   estimateTextBoxSize,
@@ -70,6 +74,7 @@ export const FloorplanCanvas: React.FC = () => {
   const [hoveredRulerId, setHoveredRulerId] = useState<string | null>(null);
   const [hoveredAutoDimKey, setHoveredAutoDimKey] = useState<string | null>(null);
   const [hoveredAlignEdge, setHoveredAlignEdge] = useState<string | null>(null);
+  const [hoveredAlignMeta, setHoveredAlignMeta] = useState<{ label: string; x: number; y: number } | null>(null);
   const [snapIndicator, setSnapIndicator] = useState<{ x: number; y: number } | null>(null);
 
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
@@ -296,6 +301,30 @@ export const FloorplanCanvas: React.FC = () => {
   const editToBasePoint = useCallback((ex: number, ey: number) => (
     isEditInPlace ? applyCadenceTransformPoint(eipForwardTransform, ex, ey) : { x: ex, y: ey }
   ), [isEditInPlace, eipForwardTransform]);
+
+  // Lower-level sub-instances, mosaic tiles, and drawn rectangles inside hierarchical instances of the active view.
+  const activeDescendantBoxes = useMemo(
+    () => collectInstanceDescendantBoxes(instances, masterCells, cellViews),
+    [instances, masterCells, cellViews],
+  );
+
+  // Higher-level ancestor/sibling instances (and their lower-level children) visible during Edit-in-Place (X),
+  // mapped directly into the active cellview's local coordinate frame.
+  const eipAncestorBoxes = useMemo(
+    () => (
+      isEditInPlace
+        ? collectEipAncestorReferenceBoxes(liveEipChain, rootView, masterCells, cellViews, eipInverseTransform)
+        : []
+    ),
+    [isEditInPlace, liveEipChain, rootView, masterCells, cellViews, eipInverseTransform],
+  );
+
+  useEffect(() => {
+    if (!edgeAlignmentSession) {
+      setHoveredAlignEdge(null);
+      setHoveredAlignMeta(null);
+    }
+  }, [edgeAlignmentSession]);
 
   const isSubCellEmpty = isSubCellCanvas && shapes.length === 0 && instances.length === 0 && !pixelArray;
   const isTrulyEmptyBaseView = !baseIsRoot && (
@@ -778,8 +807,14 @@ export const FloorplanCanvas: React.FC = () => {
           break;
         case 'a':
           e.preventDefault();
-          if (state.pixelArraySelected) state.startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
-          else if (state.selectedInstanceId) state.startEdgeAlignment(state.selectedInstanceId);
+          if (state.pixelArraySelected) {
+            state.startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
+          } else if (state.selectedInstanceId) {
+            state.startEdgeAlignment(state.selectedInstanceId);
+          } else if (state.selectedShapeId) {
+            const shape = state.shapes.find(item => item.id === state.selectedShapeId && item.kind !== 'text');
+            if (shape) state.startEdgeAlignment(makeShapeAlignmentId(shape.id));
+          }
           break;
         case 'escape':
           if (stretchSessionRef.current) {
@@ -914,7 +949,7 @@ export const FloorplanCanvas: React.FC = () => {
 
   const getInstanceCorners = (inst: Instance) => {
     const master = masterCells[inst.cellId];
-    if (!master) return null;
+    if (!master || isCellEmpty(master)) return null;
     const bounds = getPhysicalBounds({
       ...inst,
       width: master.width,
@@ -1003,6 +1038,22 @@ export const FloorplanCanvas: React.FC = () => {
         for (let i=0; i<4; i++) {
           const a = corners[i];
           const b = corners[(i+1)%4];
+          segments.push({ a, b, axis: Math.abs(a.x - b.x) <= 1e-9 ? 'vertical' : 'horizontal' });
+        }
+      }
+
+      // cross-hierarchy lower-level sub-cells/tiles/shapes and higher-level EIP ancestor cells
+      for (const ref of [...activeDescendantBoxes, ...eipAncestorBoxes]) {
+        const rb = ref.box;
+        const corners = [
+          editToBasePoint(rb.minX, rb.minY),
+          editToBasePoint(rb.maxX, rb.minY),
+          editToBasePoint(rb.maxX, rb.maxY),
+          editToBasePoint(rb.minX, rb.maxY),
+        ];
+        for (let i = 0; i < 4; i++) {
+          const a = corners[i];
+          const b = corners[(i + 1) % 4];
           segments.push({ a, b, axis: Math.abs(a.x - b.x) <= 1e-9 ? 'vertical' : 'horizontal' });
         }
       }
@@ -1831,7 +1882,7 @@ export const FloorplanCanvas: React.FC = () => {
 
   const computeInstanceBBox = (inst: Instance): BBox | null => {
     const m = masterCells[inst.cellId];
-    if (!m) return null;
+    if (!m || isCellEmpty(m)) return null;
     const bounds = getPhysicalBounds({
       ...inst,
       width: m.width,
@@ -1864,7 +1915,7 @@ export const FloorplanCanvas: React.FC = () => {
     })
   ), [instances, masterCells]);
 
-  const renderGapAnnotations = (selectedId: string | null, autoMode: boolean) => {
+  const renderGapAnnotations = (selectedId: string | null, selectedRectId: string | null, autoMode: boolean) => {
     const sf = SCALE_FACTOR;
     const SEL_COLOR = '#0284c7';
     const SEL_BG = 'rgba(240, 249, 255, 0.94)';
@@ -1875,7 +1926,108 @@ export const FloorplanCanvas: React.FC = () => {
     const AUTO_BORDER = 'rgba(139, 92, 246, 0.45)';
     const placedLabelRects: ScreenLabelRect[] = [];
     const annotations: React.ReactNode[] = [];
-    const topBox: BBox = activeBoundaryBox;
+
+    // Die boundary mapped into active cellview coordinates (works both at top level AND during Edit-in-Place X).
+    const dieBoundaryBox: BBox | null = !isSubCellCanvas
+      ? activeBoundaryBox
+      : (isEditInPlace && baseIsRoot ? transformBoxByCadence(baseBoundaryBox, eipInverseTransform) : null);
+
+    const getLiveInstanceBBox = (inst: Instance): BBox | null => {
+      const offset = multiDragDelta && inst.id !== multiDragDelta.anchorId && selectedInstanceIds.includes(inst.id)
+        ? multiDragDelta
+        : null;
+      return computeInstanceBBox(
+        offset ? { ...inst, x: inst.x + offset.dx, y: inst.y + offset.dy } : inst,
+      );
+    };
+
+    const getLiveShapeBBox = (shape: LayoutShape): BBox => {
+      const preview = shapeResizePreview && shapeResizePreview.id === shape.id ? shapeResizePreview : null;
+      const sx = preview ? preview.x : shape.x;
+      const sy = preview ? preview.y : shape.y;
+      const sw = preview ? preview.width : shape.width;
+      const sh = preview ? preview.height : shape.height;
+      return { minX: sx, maxX: sx + sw, minY: sy, maxY: sy + sh };
+    };
+
+    const activeRectShapes = shapes.filter(shape => shape.kind !== 'text');
+
+    type NeighborEntry = { id: string; name: string; isPad: boolean; box: BBox };
+
+    const leafDescendantsByOwner = new Map<string, typeof activeDescendantBoxes>();
+    for (const ref of activeDescendantBoxes) {
+      if (!ref.ownerInstanceId || !ref.isLeaf) continue;
+      const list = leafDescendantsByOwner.get(ref.ownerInstanceId) ?? [];
+      list.push(ref);
+      leafDescendantsByOwner.set(ref.ownerInstanceId, list);
+    }
+
+    const eipRootAncestors: typeof eipAncestorBoxes = [];
+    const eipLeafDescendantsByOwner = new Map<string, typeof eipAncestorBoxes>();
+    for (const ref of eipAncestorBoxes) {
+      if (ref.ownerInstanceId && ref.isLeaf) {
+        const list = eipLeafDescendantsByOwner.get(ref.ownerInstanceId) ?? [];
+        list.push(ref);
+        eipLeafDescendantsByOwner.set(ref.ownerInstanceId, list);
+      }
+      // Root ancestor entries are either top sibling boxes (key matches eip-N-ancestor:ID without '/' or '[')
+      // or ancestor drawn shapes / pixel-array entries.
+      const isRootSibling = /^eip-\d+-ancestor:[^/[]+$/.test(ref.key);
+      const isAncestorShapeOrArray = /^eip-\d+-(shape-|pixel-array)/.test(ref.key);
+      if (isRootSibling || isAncestorShapeOrArray) {
+        eipRootAncestors.push(ref);
+      }
+    }
+
+    const buildNeighborPool = (
+      focusBox: BBox,
+      excludeInstanceId: string | null,
+      excludeShapeId: string | null,
+    ): NeighborEntry[] => {
+      const pool: NeighborEntry[] = [];
+      for (const inst of instances) {
+        if (inst.id === excludeInstanceId) continue;
+        const box = getLiveInstanceBBox(inst);
+        if (!box) continue;
+        const leaves = leafDescendantsByOwner.get(inst.id);
+        // When a hierarchical cell (like a 4-sided padring or asp_top) overlaps the focused block,
+        // expand it into its lower-level leaf cells/pads/shapes so Auto-Dim measures exact inner clearances.
+        if (leaves && leaves.length > 0 && boxesStrictlyOverlap(focusBox, box)) {
+          for (const leaf of leaves) {
+            pool.push({ id: leaf.key, name: leaf.label, isPad: leaf.isPad, box: leaf.box });
+          }
+        } else {
+          pool.push({
+            id: inst.id,
+            name: inst.name,
+            isPad: masterCells[inst.cellId]?.kind === 'pad',
+            box,
+          });
+        }
+      }
+      for (const shape of activeRectShapes) {
+        if (shape.id === excludeShapeId) continue;
+        pool.push({
+          id: `shape:${shape.id}`,
+          name: shape.label?.trim() || `${shape.layer}/${shape.purpose}`,
+          isPad: false,
+          box: getLiveShapeBBox(shape),
+        });
+      }
+      if (isEditInPlace) {
+        for (const anc of eipRootAncestors) {
+          const ancLeaves = anc.ownerInstanceId ? eipLeafDescendantsByOwner.get(anc.ownerInstanceId) : undefined;
+          if (!anc.isLeaf && ancLeaves && ancLeaves.length > 0 && boxesStrictlyOverlap(focusBox, anc.box)) {
+            for (const leaf of ancLeaves) {
+              pool.push({ id: leaf.key, name: leaf.label, isPad: leaf.isPad, box: leaf.box });
+            }
+          } else {
+            pool.push({ id: anc.key, name: anc.label, isPad: anc.isPad, box: anc.box });
+          }
+        }
+      }
+      return pool;
+    };
 
     type DimSpec = {
       x1: number;
@@ -2057,172 +2209,251 @@ export const FloorplanCanvas: React.FC = () => {
       return merged;
     };
 
-    if (selectedId) {
-      const sel = instances.find(i => i.id === selectedId);
-      if (sel) {
-        const selBox = computeInstanceBBox(sel);
-        const selIsPad = masterCells[sel.cellId]?.kind === 'pad';
-        if (selBox) {
-          const others = instances
-            .filter(i => i.id !== selectedId)
-            .map(i => ({
-              id: i.id,
-              name: i.name,
-              isPad: masterCells[i.cellId]?.kind === 'pad',
-              box: computeInstanceBBox(i),
-            }))
-            .filter(x => x.box !== null) as { id: string; name: string; isPad: boolean; box: BBox }[];
-
-          type Direction = 'right' | 'left' | 'top' | 'bottom';
-
-          const renderVisibleNeighbors = (direction: Direction) => {
-            const horizontal = direction === 'right' || direction === 'left';
-            const projectionStart = horizontal ? selBox.minY : selBox.minX;
-            const projectionEnd = horizontal ? selBox.maxY : selBox.maxX;
-
-            const rawInstanceCandidates = others.flatMap(other => {
-              const ob = other.box;
-              let distance: number;
-
-              if (direction === 'right') distance = ob.minX - selBox.maxX;
-              else if (direction === 'left') distance = selBox.minX - ob.maxX;
-              else if (direction === 'top') distance = ob.minY - selBox.maxY;
-              else distance = selBox.minY - ob.maxY;
-
-              if (distance < -0.0001) return [];
-
-              const overlapStart = Math.max(
-                projectionStart,
-                horizontal ? ob.minY : ob.minX,
-              );
-              const overlapEnd = Math.min(
-                projectionEnd,
-                horizontal ? ob.maxY : ob.maxX,
-              );
-              if (overlapEnd - overlapStart <= 0.0001) return [];
-
-              return [{
-                ...other,
-                distance,
-                overlap: { start: overlapStart, end: overlapEnd },
-                occludes: true,
-                relationship: 'gap' as const,
-              }];
-            });
-
-            // Collapse collinear equal-distance pads into a single clearance dimension when an IP is selected
-            const instanceCandidates = selIsPad
-              ? rawInstanceCandidates
-              : collapseCollinearPadCandidates(rawInstanceCandidates);
-
-            const pixelCandidates = pixelArray?.visible ? (() => {
-              const pixelBox: BBox = {
-                minX: pixelArray.x,
-                maxX: pixelArray.x + pixelArray.width,
-                minY: pixelArray.y,
-                maxY: pixelArray.y + pixelArray.height,
-              };
-              const measurement = getIpPixelArrayEdgeMeasurements(selBox, pixelBox)
-                .find(item => item.direction === direction);
-              if (!measurement) return [];
-              const targetBox = { ...pixelBox };
-              if (direction === 'right') targetBox.minX = measurement.arrayCoordinate;
-              else if (direction === 'left') targetBox.maxX = measurement.arrayCoordinate;
-              else if (direction === 'top') targetBox.minY = measurement.arrayCoordinate;
-              else targetBox.maxY = measurement.arrayCoordinate;
-
-              return [{
-                id: 'pixel-array',
-                name: 'Pixel Array',
-                isPad: false,
-                box: targetBox,
-                distance: measurement.distance,
-                overlap: { start: measurement.projectionStart, end: measurement.projectionEnd },
-                occludes: false,
-                relationship: measurement.kind,
-              }];
-            })() : [];
-
-            const candidates = [...instanceCandidates, ...pixelCandidates]
-              .sort((a, b) => a.distance - b.distance);
-
-            let covered: Interval[] = [];
-            let hasVisibleNeighbor = false;
-
-            candidates.forEach(candidate => {
-              const visibleSegments = subtractCoveredIntervals(candidate.overlap, covered);
-              if (visibleSegments.length === 0) return;
-
-              hasVisibleNeighbor = true;
-              const largestVisibleSegment = visibleSegments.reduce((largest, segment) =>
-                segment.end - segment.start > largest.end - largest.start ? segment : largest,
-              );
-              const projectionCenter = (largestVisibleSegment.start + largestVisibleSegment.end) / 2;
-
-              if (candidate.distance > 0.0001) {
-                const label = candidate.relationship === 'overlap'
-                  ? `${snapLabel(candidate.distance)} overlap`
-                  : candidate.relationship === 'inside'
-                    ? `${snapLabel(candidate.distance)} to array`
-                    : `${snapLabel(candidate.distance)} → ${candidate.name}`;
-                const key = `gap-${direction}-${candidate.id}`;
-
-                if (direction === 'right') {
-                  annotations.push(renderDimSpec({ x1: selBox.maxX, y1: projectionCenter, x2: candidate.box.minX, y2: projectionCenter, label, key, perpDir: 'up', interactive: false, variant: 'selected' }, true));
-                } else if (direction === 'left') {
-                  annotations.push(renderDimSpec({ x1: candidate.box.maxX, y1: projectionCenter, x2: selBox.minX, y2: projectionCenter, label, key, perpDir: 'up', interactive: false, variant: 'selected' }, true));
-                } else if (direction === 'top') {
-                  annotations.push(renderDimSpec({ x1: projectionCenter, y1: selBox.maxY, x2: projectionCenter, y2: candidate.box.minY, label, key, perpDir: 'right', interactive: false, variant: 'selected' }, true));
-                } else {
-                  annotations.push(renderDimSpec({ x1: projectionCenter, y1: candidate.box.maxY, x2: projectionCenter, y2: selBox.minY, label, key, perpDir: 'right', interactive: false, variant: 'selected' }, true));
-                }
-              }
-
-              if (candidate.occludes) covered = addCoveredInterval(covered, candidate.overlap);
-            });
-
-            if (!hasVisibleNeighbor && !isSubCellCanvas) {
-              const projectionCenter = (projectionStart + projectionEnd) / 2;
-              if (direction === 'right') {
-                const gap = topBox.maxX - selBox.maxX;
-                if (gap > 0.0001) annotations.push(renderDimSpec({ x1: selBox.maxX, y1: projectionCenter, x2: topBox.maxX, y2: projectionCenter, label: snapLabel(gap), key: 'gap-right-boundary', perpDir: 'up', interactive: false, variant: 'selected' }, true));
-              } else if (direction === 'left') {
-                const gap = selBox.minX - topBox.minX;
-                if (gap > 0.0001) annotations.push(renderDimSpec({ x1: topBox.minX, y1: projectionCenter, x2: selBox.minX, y2: projectionCenter, label: snapLabel(gap), key: 'gap-left-boundary', perpDir: 'up', interactive: false, variant: 'selected' }, true));
-              } else if (direction === 'top') {
-                const gap = topBox.maxY - selBox.maxY;
-                if (gap > 0.0001) annotations.push(renderDimSpec({ x1: projectionCenter, y1: selBox.maxY, x2: projectionCenter, y2: topBox.maxY, label: snapLabel(gap), key: 'gap-top-boundary', perpDir: 'right', interactive: false, variant: 'selected' }, true));
-              } else {
-                const gap = selBox.minY - topBox.minY;
-                if (gap > 0.0001) annotations.push(renderDimSpec({ x1: projectionCenter, y1: topBox.minY, x2: projectionCenter, y2: selBox.minY, label: snapLabel(gap), key: 'gap-bottom-boundary', perpDir: 'right', interactive: false, variant: 'selected' }, true));
-              }
-            }
-          };
-
-          renderVisibleNeighbors('right');
-          renderVisibleNeighbors('left');
-          renderVisibleNeighbors('top');
-          renderVisibleNeighbors('bottom');
-        }
+    // Focused gap dimensions for either a selected instance OR a selected drawn rectangle.
+    const focusedTarget: { box: BBox; isPad: boolean; excludeInstId: string | null; excludeShapeId: string | null } | null = (() => {
+      if (selectedId) {
+        const sel = instances.find(i => i.id === selectedId);
+        if (!sel) return null;
+        const box = getLiveInstanceBBox(sel);
+        if (!box) return null;
+        return {
+          box,
+          isPad: masterCells[sel.cellId]?.kind === 'pad',
+          excludeInstId: sel.id,
+          excludeShapeId: null,
+        };
       }
+      if (selectedRectId) {
+        const selShape = activeRectShapes.find(s => s.id === selectedRectId);
+        if (!selShape) return null;
+        return {
+          box: getLiveShapeBBox(selShape),
+          isPad: false,
+          excludeInstId: null,
+          excludeShapeId: selShape.id,
+        };
+      }
+      return null;
+    })();
+
+    if (focusedTarget) {
+      const { box: selBox, isPad: selIsPad, excludeInstId, excludeShapeId } = focusedTarget;
+      const others = buildNeighborPool(selBox, excludeInstId, excludeShapeId);
+
+      type Direction = 'right' | 'left' | 'top' | 'bottom';
+
+      const renderVisibleNeighbors = (direction: Direction) => {
+        const horizontal = direction === 'right' || direction === 'left';
+        const projectionStart = horizontal ? selBox.minY : selBox.minX;
+        const projectionEnd = horizontal ? selBox.maxY : selBox.maxX;
+
+        const rawInstanceCandidates = others.flatMap(other => {
+          const ob = other.box;
+          let distance: number;
+
+          if (direction === 'right') distance = ob.minX - selBox.maxX;
+          else if (direction === 'left') distance = selBox.minX - ob.maxX;
+          else if (direction === 'top') distance = ob.minY - selBox.maxY;
+          else distance = selBox.minY - ob.maxY;
+
+          if (distance < -0.0001) return [];
+
+          const overlapStart = Math.max(
+            projectionStart,
+            horizontal ? ob.minY : ob.minX,
+          );
+          const overlapEnd = Math.min(
+            projectionEnd,
+            horizontal ? ob.maxY : ob.maxX,
+          );
+          if (overlapEnd - overlapStart <= 0.0001) return [];
+
+          return [{
+            ...other,
+            distance,
+            overlap: { start: overlapStart, end: overlapEnd },
+            occludes: true,
+            relationship: 'gap' as const,
+          }];
+        });
+
+        // Collapse collinear equal-distance pads into a single clearance dimension when an IP is selected
+        const instanceCandidates = selIsPad
+          ? rawInstanceCandidates
+          : collapseCollinearPadCandidates(rawInstanceCandidates);
+
+        const pixelCandidates = pixelArray?.visible ? (() => {
+          const pixelBox: BBox = {
+            minX: pixelArray.x,
+            maxX: pixelArray.x + pixelArray.width,
+            minY: pixelArray.y,
+            maxY: pixelArray.y + pixelArray.height,
+          };
+          const measurement = getIpPixelArrayEdgeMeasurements(selBox, pixelBox)
+            .find(item => item.direction === direction);
+          if (!measurement) return [];
+          const targetBox = { ...pixelBox };
+          if (direction === 'right') targetBox.minX = measurement.arrayCoordinate;
+          else if (direction === 'left') targetBox.maxX = measurement.arrayCoordinate;
+          else if (direction === 'top') targetBox.minY = measurement.arrayCoordinate;
+          else targetBox.maxY = measurement.arrayCoordinate;
+
+          return [{
+            id: 'pixel-array',
+            name: 'Pixel Array',
+            isPad: false,
+            box: targetBox,
+            distance: measurement.distance,
+            overlap: { start: measurement.projectionStart, end: measurement.projectionEnd },
+            occludes: false,
+            relationship: measurement.kind,
+          }];
+        })() : [];
+
+        const candidates = [...instanceCandidates, ...pixelCandidates]
+          .sort((a, b) => a.distance - b.distance);
+
+        let covered: Interval[] = [];
+        let hasVisibleNeighbor = false;
+
+        candidates.forEach(candidate => {
+          const visibleSegments = subtractCoveredIntervals(candidate.overlap, covered);
+          if (visibleSegments.length === 0) return;
+
+          hasVisibleNeighbor = true;
+          const largestVisibleSegment = visibleSegments.reduce((largest, segment) =>
+            segment.end - segment.start > largest.end - largest.start ? segment : largest,
+          );
+          const projectionCenter = (largestVisibleSegment.start + largestVisibleSegment.end) / 2;
+
+          if (candidate.distance > 0.0001) {
+            const label = candidate.relationship === 'overlap'
+              ? `${snapLabel(candidate.distance)} overlap`
+              : candidate.relationship === 'inside'
+                ? `${snapLabel(candidate.distance)} to array`
+                : `${snapLabel(candidate.distance)} → ${candidate.name}`;
+            const key = `gap-${direction}-${candidate.id}`;
+
+            if (direction === 'right') {
+              annotations.push(renderDimSpec({ x1: selBox.maxX, y1: projectionCenter, x2: candidate.box.minX, y2: projectionCenter, label, key, perpDir: 'up', interactive: false, variant: 'selected' }, true));
+            } else if (direction === 'left') {
+              annotations.push(renderDimSpec({ x1: candidate.box.maxX, y1: projectionCenter, x2: selBox.minX, y2: projectionCenter, label, key, perpDir: 'up', interactive: false, variant: 'selected' }, true));
+            } else if (direction === 'top') {
+              annotations.push(renderDimSpec({ x1: projectionCenter, y1: selBox.maxY, x2: projectionCenter, y2: candidate.box.minY, label, key, perpDir: 'right', interactive: false, variant: 'selected' }, true));
+            } else {
+              annotations.push(renderDimSpec({ x1: projectionCenter, y1: candidate.box.maxY, x2: projectionCenter, y2: selBox.minY, label, key, perpDir: 'right', interactive: false, variant: 'selected' }, true));
+            }
+          }
+
+          if (candidate.occludes) covered = addCoveredInterval(covered, candidate.overlap);
+        });
+
+        if (!hasVisibleNeighbor && dieBoundaryBox) {
+          const projectionCenter = (projectionStart + projectionEnd) / 2;
+          if (direction === 'right') {
+            const gap = dieBoundaryBox.maxX - selBox.maxX;
+            if (gap > 0.0001) annotations.push(renderDimSpec({ x1: selBox.maxX, y1: projectionCenter, x2: dieBoundaryBox.maxX, y2: projectionCenter, label: snapLabel(gap), key: 'gap-right-boundary', perpDir: 'up', interactive: false, variant: 'selected' }, true));
+          } else if (direction === 'left') {
+            const gap = selBox.minX - dieBoundaryBox.minX;
+            if (gap > 0.0001) annotations.push(renderDimSpec({ x1: dieBoundaryBox.minX, y1: projectionCenter, x2: selBox.minX, y2: projectionCenter, label: snapLabel(gap), key: 'gap-left-boundary', perpDir: 'up', interactive: false, variant: 'selected' }, true));
+          } else if (direction === 'top') {
+            const gap = dieBoundaryBox.maxY - selBox.maxY;
+            if (gap > 0.0001) annotations.push(renderDimSpec({ x1: projectionCenter, y1: selBox.maxY, x2: projectionCenter, y2: dieBoundaryBox.maxY, label: snapLabel(gap), key: 'gap-top-boundary', perpDir: 'right', interactive: false, variant: 'selected' }, true));
+          } else {
+            const gap = selBox.minY - dieBoundaryBox.minY;
+            if (gap > 0.0001) annotations.push(renderDimSpec({ x1: projectionCenter, y1: dieBoundaryBox.minY, x2: projectionCenter, y2: selBox.minY, label: snapLabel(gap), key: 'gap-bottom-boundary', perpDir: 'right', interactive: false, variant: 'selected' }, true));
+          }
+        }
+      };
+
+      renderVisibleNeighbors('right');
+      renderVisibleNeighbors('left');
+      renderVisibleNeighbors('top');
+      renderVisibleNeighbors('bottom');
     }
 
-    // Global Auto-Dim overview: focus on IP-to-IP gaps and collapsed IP-to-pad-row clearances,
-    // excluding dense pad-to-pad clutter and culling overlapping screen-space labels.
-    if (autoMode && !selectedId) {
-      const allBoxes = instances
-        .map(i => ({
-          id: i.id,
-          name: i.name,
-          isPad: masterCells[i.cellId]?.kind === 'pad',
-          box: computeInstanceBBox(i),
-        }))
-        .filter(x => x.box !== null) as { id: string; name: string; isPad: boolean; box: BBox }[];
+    // Global Auto-Dim overview: supports hierarchical overlapping containers (e.g. padring),
+    // drawn rectangles, Edit-in-Place higher-level context, and pad-only sub-cells.
+    if (autoMode && !focusedTarget) {
+      type OverviewItem = NeighborEntry & { isActiveSource: boolean; ownerId?: string };
+
+      const activeItems: Array<NeighborEntry & { ownerId?: string }> = [
+        ...instances.flatMap(inst => {
+          const box = getLiveInstanceBBox(inst);
+          if (!box) return [];
+          return [{
+            id: inst.id,
+            name: inst.name,
+            isPad: masterCells[inst.cellId]?.kind === 'pad',
+            box,
+            ownerId: inst.id,
+          }];
+        }),
+        ...activeRectShapes.map(shape => ({
+          id: `shape:${shape.id}`,
+          name: shape.label?.trim() || `${shape.layer}/${shape.purpose}`,
+          isPad: false,
+          box: getLiveShapeBBox(shape),
+        })),
+      ];
+
+      // Expand any active hierarchical container whose outer box strictly overlaps another active item
+      // (e.g. a 4-sided padring surrounding CORE) into its lower-level leaf cells/pads.
+      const expandedActive: OverviewItem[] = [];
+      for (const item of activeItems) {
+        const leaves = item.ownerId ? leafDescendantsByOwner.get(item.ownerId) : undefined;
+        const overlapsOther = Boolean(leaves && leaves.length > 0)
+          && activeItems.some(other => other.id !== item.id && boxesStrictlyOverlap(item.box, other.box));
+        if (overlapsOther && leaves) {
+          for (const leaf of leaves) {
+            expandedActive.push({
+              id: leaf.key,
+              name: leaf.label,
+              isPad: leaf.isPad,
+              box: leaf.box,
+              isActiveSource: false,
+            });
+          }
+        } else {
+          expandedActive.push({ ...item, isActiveSource: true });
+        }
+      }
+
+      const ancestorTargets: OverviewItem[] = isEditInPlace
+        ? eipRootAncestors.flatMap(anc => {
+            const ancLeaves = anc.ownerInstanceId ? eipLeafDescendantsByOwner.get(anc.ownerInstanceId) : undefined;
+            const overlapsAnyActive = Boolean(!anc.isLeaf && ancLeaves && ancLeaves.length > 0)
+              && expandedActive.some(active => boxesStrictlyOverlap(active.box, anc.box));
+            if (overlapsAnyActive && ancLeaves) {
+              return ancLeaves.map(leaf => ({
+                id: leaf.key,
+                name: leaf.label,
+                isPad: leaf.isPad,
+                box: leaf.box,
+                isActiveSource: false,
+              }));
+            }
+            return [{
+              id: anc.key,
+              name: anc.label,
+              isPad: anc.isPad,
+              box: anc.box,
+              isActiveSource: false,
+            }];
+          })
+        : [];
+
+      const allBoxes: OverviewItem[] = [...expandedActive, ...ancestorTargets];
+      const activeSources = expandedActive.filter(item => item.isActiveSource);
+      const nonPadSources = activeSources.filter(item => !item.isPad);
+      // In pad-only cellviews (e.g. editing inside padring), measure pad-to-pad clearances; otherwise focus on IPs/shapes.
+      const sources = nonPadSources.length > 0 ? nonPadSources : activeSources;
+
       const seenPairs = new Set<string>();
       const specs: DimSpec[] = [];
 
       type AutoDirection = 'right' | 'left' | 'top' | 'bottom';
-      allBoxes.filter(source => !source.isPad).forEach(source => {
+      sources.forEach(source => {
         (['right', 'left', 'top', 'bottom'] as AutoDirection[]).forEach(direction => {
           const horizontal = direction === 'right' || direction === 'left';
           const rawTargets = allBoxes.flatMap(target => {
@@ -2255,11 +2486,11 @@ export const FloorplanCanvas: React.FC = () => {
             }];
           });
 
-          const collapsed = collapseCollinearPadCandidates(rawTargets);
+          const collapsed = source.isPad ? rawTargets.sort((a, b) => a.distance - b.distance) : collapseCollinearPadCandidates(rawTargets);
           const nearest = collapsed[0];
           if (!nearest) return;
 
-          const pairKey = nearest.isPad
+          const pairKey = nearest.isPad && !source.isPad
             ? `${source.id}|${direction}|${nearest.id}`
             : [source.id, nearest.id].sort().join('|');
           if (seenPairs.has(pairKey)) return;
@@ -3220,15 +3451,12 @@ export const FloorplanCanvas: React.FC = () => {
                   const instFS = nameFS * 0.6;
                   const totalTextH = nameFS + subFS * 1.3 + instFS * 1.3;
                   const startY = (sibH - totalTextH) / 2;
-                  return (
-                    <Group
-                      key={`eip-sib-${sib.id}`}
-                      x={sib.x * SCALE_FACTOR}
-                      y={sib.y * SCALE_FACTOR}
-                      rotation={st.rotation}
-                      scaleX={st.scaleX}
-                      scaleY={st.scaleY}
-                    >
+                  const sibMosaic = isActiveMosaic(sib.mosaic) ? sib.mosaic : null;
+                  const sibRows = sibMosaic ? sibMosaic.rows : 1;
+                  const sibCols = sibMosaic ? sibMosaic.cols : 1;
+                  const sibLodOnly = sibRows * sibCols > 400;
+                  const renderSibTile = (showLabel: boolean) => (
+                    <>
                       {!sibHasContent && (
                         <>
                           <Rect
@@ -3241,7 +3469,7 @@ export const FloorplanCanvas: React.FC = () => {
                             stroke="#334155"
                             strokeWidth={1 / stageScale}
                           />
-                          {screenH >= 24 && screenW >= 30 && (
+                          {showLabel && screenH >= 24 && screenW >= 30 && (
                             <Group x={sibOx} y={sibOy + sibH} scaleY={-1}>
                               {screenH > 48 && (
                                 <Text
@@ -3289,6 +3517,35 @@ export const FloorplanCanvas: React.FC = () => {
                         </>
                       )}
                       {sibHasContent && renderCellViewContents(sib.cellId, sibW, sibH)}
+                    </>
+                  );
+                  return (
+                    <Group
+                      key={`eip-sib-${sib.id}`}
+                      x={sib.x * SCALE_FACTOR}
+                      y={sib.y * SCALE_FACTOR}
+                      rotation={st.rotation}
+                      scaleX={st.scaleX}
+                      scaleY={st.scaleY}
+                    >
+                      {sibMosaic ? (() => {
+                        const tiles: React.ReactNode[] = [];
+                        for (let r = 0; r < sibRows; r += 1) {
+                          for (let c = 0; c < sibCols; c += 1) {
+                            if (sibLodOnly && r > 0 && r < sibRows - 1 && c > 0 && c < sibCols - 1) continue;
+                            tiles.push(
+                              <Group
+                                key={`eip-sib-${sib.id}-${r}-${c}`}
+                                x={c * sibMosaic.colPitch * SCALE_FACTOR}
+                                y={r * sibMosaic.rowPitch * SCALE_FACTOR}
+                              >
+                                {renderSibTile(sibRows * sibCols <= 24)}
+                              </Group>,
+                            );
+                          }
+                        }
+                        return tiles;
+                      })() : renderSibTile(true)}
                     </Group>
                   );
                 })}
@@ -4156,7 +4413,7 @@ export const FloorplanCanvas: React.FC = () => {
             );
           })}
 
-          {/* Cadence-style edge picker: source edge first, then a fixed target edge. */}
+          {/* Cadence-style edge picker: source edge first, then ANY target edge across same-level, lower-level sub-cells, higher-level EIP context, shapes, boundary, or rulers. */}
           {edgeAlignmentSession && (() => {
             const session = edgeAlignmentSession;
             const sourceAxis = session.sourceEdge ? getAlignmentEdgeAxis(session.sourceEdge) : null;
@@ -4165,6 +4422,16 @@ export const FloorplanCanvas: React.FC = () => {
               if (edge === 'right') return [box.maxX, box.minY, box.maxX, box.maxY];
               if (edge === 'bottom') return [box.minX, box.minY, box.maxX, box.minY];
               return [box.minX, box.maxY, box.maxX, box.maxY];
+            };
+            const edgeCoord = (box: BBox, edge: AlignmentEdge): number => (
+              edge === 'left' ? box.minX
+                : edge === 'right' ? box.maxX
+                  : edge === 'bottom' ? box.minY
+                    : box.maxY
+            );
+            const edgeMidBase = (box: BBox, edge: AlignmentEdge) => {
+              const pts = edgeLine(box, edge);
+              return editToBasePoint((pts[0] + pts[2]) / 2, (pts[1] + pts[3]) / 2);
             };
 
             const ipEdges = instances.flatMap(instance => {
@@ -4183,6 +4450,7 @@ export const FloorplanCanvas: React.FC = () => {
                   || (!isSource && session.targetId === instance.id && session.targetEdge === edge);
                 const color = isSource ? '#f59e0b' : '#10b981';
                 const points = edgeLine(box, edge).map(value => value * SCALE_FACTOR);
+                const coord = edgeCoord(box, edge);
                 return (
                   <Line
                     key={`align-edge-${key}`}
@@ -4192,8 +4460,19 @@ export const FloorplanCanvas: React.FC = () => {
                     opacity={chosen || hoveredAlignEdge === key ? 1 : 0.78}
                     hitStrokeWidth={18 / stageScale}
                     lineCap="round"
-                    onMouseEnter={() => setHoveredAlignEdge(key)}
-                    onMouseLeave={() => setHoveredAlignEdge(null)}
+                    onMouseEnter={() => {
+                      setHoveredAlignEdge(key);
+                      const mid = edgeMidBase(box, edge);
+                      setHoveredAlignMeta({
+                        label: `${instance.name} · ${edge} = ${formatGridValue(coord, gridSize)} µm`,
+                        x: mid.x,
+                        y: mid.y,
+                      });
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredAlignEdge(null);
+                      setHoveredAlignMeta(null);
+                    }}
                     onClick={(event) => {
                       event.cancelBubble = true;
                       if (isSource) {
@@ -4211,6 +4490,65 @@ export const FloorplanCanvas: React.FC = () => {
               });
             });
 
+            const rectShapeEdges = shapes
+              .filter(shape => shape.kind !== 'text')
+              .flatMap(shape => {
+                const alignId = makeShapeAlignmentId(shape.id);
+                const isSource = session.sourceIds.includes(alignId);
+                if (!isSource && !sourceAxis) return [];
+                const box: BBox = {
+                  minX: shape.x,
+                  maxX: shape.x + shape.width,
+                  minY: shape.y,
+                  maxY: shape.y + shape.height,
+                };
+                const edges: AlignmentEdge[] = isSource
+                  ? (session.sourceEdge ? [session.sourceEdge] : ['left', 'right', 'bottom', 'top'])
+                  : sourceAxis === 'horizontal' ? ['left', 'right'] : ['bottom', 'top'];
+                const shapeName = shape.label?.trim() || `${shape.layer}/${shape.purpose}`;
+                return edges.map(edge => {
+                  const key = `shape-${shape.id}-${edge}`;
+                  const chosen = isSource && session.sourceEdge === edge;
+                  const coord = edgeCoord(box, edge);
+                  return (
+                    <Line
+                      key={`align-edge-${key}`}
+                      points={edgeLine(box, edge).map(value => value * SCALE_FACTOR)}
+                      stroke={isSource ? '#f59e0b' : '#10b981'}
+                      strokeWidth={(chosen || hoveredAlignEdge === key ? 5 : 2.8) / stageScale}
+                      opacity={chosen || hoveredAlignEdge === key ? 1 : 0.78}
+                      hitStrokeWidth={16 / stageScale}
+                      lineCap="round"
+                      onMouseEnter={() => {
+                        setHoveredAlignEdge(key);
+                        const mid = edgeMidBase(box, edge);
+                        setHoveredAlignMeta({
+                          label: `${shapeName} · ${edge} = ${formatGridValue(coord, gridSize)} µm`,
+                          x: mid.x,
+                          y: mid.y,
+                        });
+                      }}
+                      onMouseLeave={() => {
+                        setHoveredAlignEdge(null);
+                        setHoveredAlignMeta(null);
+                      }}
+                      onClick={event => {
+                        event.cancelBubble = true;
+                        if (isSource) {
+                          setEdgeAlignmentEdge(alignId, edge);
+                        } else {
+                          try {
+                            completeEdgeAlignmentToCoordinate(coord, `${shapeName}.${edge}`);
+                          } catch (error) {
+                            alert(error instanceof Error ? error.message : 'Unable to align to the shape edge.');
+                          }
+                        }
+                      }}
+                    />
+                  );
+                });
+              });
+
             const pixelArrayEdges = pixelArray?.visible ? (() => {
               const isSource = session.sourceIds.includes(PIXEL_ARRAY_ALIGNMENT_ID);
               if (!isSource && !sourceAxis) return [];
@@ -4227,6 +4565,7 @@ export const FloorplanCanvas: React.FC = () => {
                 const key = `pixel-array-${edge}`;
                 const chosen = (isSource && session.sourceEdge === edge)
                   || (!isSource && session.targetId === PIXEL_ARRAY_ALIGNMENT_ID && session.targetEdge === edge);
+                const coord = edgeCoord(box, edge);
                 return (
                   <Line
                     key={`align-edge-${key}`}
@@ -4236,8 +4575,19 @@ export const FloorplanCanvas: React.FC = () => {
                     opacity={chosen || hoveredAlignEdge === key ? 1 : 0.78}
                     hitStrokeWidth={18 / stageScale}
                     lineCap="round"
-                    onMouseEnter={() => setHoveredAlignEdge(key)}
-                    onMouseLeave={() => setHoveredAlignEdge(null)}
+                    onMouseEnter={() => {
+                      setHoveredAlignEdge(key);
+                      const mid = edgeMidBase(box, edge);
+                      setHoveredAlignMeta({
+                        label: `Pixel Array · ${edge} = ${formatGridValue(coord, gridSize)} µm`,
+                        x: mid.x,
+                        y: mid.y,
+                      });
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredAlignEdge(null);
+                      setHoveredAlignMeta(null);
+                    }}
                     onClick={event => {
                       event.cancelBubble = true;
                       if (isSource) {
@@ -4255,10 +4605,60 @@ export const FloorplanCanvas: React.FC = () => {
               });
             })() : [];
 
+            // Cross-hierarchy target edges: lower-level sub-cells/tiles/shapes inside hierarchical instances
+            // AND higher-level sibling cells (and their children) visible during Edit-in-Place (X).
+            const crossHierarchyTargets = sourceAxis ? (() => {
+              const targetEdges: AlignmentEdge[] = sourceAxis === 'horizontal' ? ['left', 'right'] : ['bottom', 'top'];
+              const refs = [
+                ...activeDescendantBoxes.filter(ref => !ref.ownerInstanceId || !session.sourceIds.includes(ref.ownerInstanceId)),
+                ...eipAncestorBoxes,
+              ];
+              return refs.flatMap(ref => (
+                targetEdges.map(edge => {
+                  const key = `xref-${ref.key}-${edge}`;
+                  const isHov = hoveredAlignEdge === key;
+                  const coord = edgeCoord(ref.box, edge);
+                  return (
+                    <Line
+                      key={`align-edge-${key}`}
+                      points={edgeLine(ref.box, edge).map(value => value * SCALE_FACTOR)}
+                      stroke="#06b6d4"
+                      strokeWidth={(isHov ? 4.8 : 2.1) / stageScale}
+                      dash={isHov ? undefined : [5 / stageScale, 3 / stageScale]}
+                      opacity={isHov ? 1 : 0.76}
+                      hitStrokeWidth={14 / stageScale}
+                      lineCap="round"
+                      onMouseEnter={() => {
+                        setHoveredAlignEdge(key);
+                        const mid = edgeMidBase(ref.box, edge);
+                        setHoveredAlignMeta({
+                          label: `${ref.label} · ${edge} = ${formatGridValue(coord, gridSize)} µm`,
+                          x: mid.x,
+                          y: mid.y,
+                        });
+                      }}
+                      onMouseLeave={() => {
+                        setHoveredAlignEdge(null);
+                        setHoveredAlignMeta(null);
+                      }}
+                      onClick={event => {
+                        event.cancelBubble = true;
+                        try {
+                          completeEdgeAlignmentToCoordinate(coord, `${ref.label}.${edge}`);
+                        } catch (error) {
+                          alert(error instanceof Error ? error.message : 'Unable to align to the cross-hierarchy cell edge.');
+                        }
+                      }}
+                    />
+                  );
+                })
+              ));
+            })() : [];
+
             const showEipRootBoundary = isEditInPlace && baseIsRoot;
             const showActiveBoundary = !isSubCellCanvas || (!isEditInPlace && !activeMasterCell?.autoBounds && topWidth > 0 && topHeight > 0);
             if (!sourceAxis || (!showEipRootBoundary && !showActiveBoundary)) {
-              return [...ipEdges, ...pixelArrayEdges];
+              return [...ipEdges, ...rectShapeEdges, ...pixelArrayEdges, ...crossHierarchyTargets];
             }
             const boundaryEdges: AlignmentEdge[] = sourceAxis === 'horizontal'
               ? ['left', 'right']
@@ -4277,6 +4677,7 @@ export const FloorplanCanvas: React.FC = () => {
               : activeBoundaryBox;
             const boundaryTargets = boundaryEdges.map(edge => {
               const key = `top-${edge}`;
+              const coord = edgeCoord(boundaryBox, edge);
               return (
                 <Line
                   key={`align-edge-${key}`}
@@ -4286,19 +4687,23 @@ export const FloorplanCanvas: React.FC = () => {
                   opacity={hoveredAlignEdge === key ? 1 : 0.78}
                   hitStrokeWidth={18 / stageScale}
                   lineCap="round"
-                  onMouseEnter={() => setHoveredAlignEdge(key)}
-                  onMouseLeave={() => setHoveredAlignEdge(null)}
+                  onMouseEnter={() => {
+                    setHoveredAlignEdge(key);
+                    const mid = edgeMidBase(boundaryBox, edge);
+                    setHoveredAlignMeta({
+                      label: `${baseCellName} boundary · ${edge} = ${formatGridValue(coord, gridSize)} µm`,
+                      x: mid.x,
+                      y: mid.y,
+                    });
+                  }}
+                  onMouseLeave={() => {
+                    setHoveredAlignEdge(null);
+                    setHoveredAlignMeta(null);
+                  }}
                   onClick={event => {
                     event.cancelBubble = true;
                     try {
                       if (showEipRootBoundary) {
-                        const coord = edge === 'left'
-                          ? boundaryBox.minX
-                          : edge === 'right'
-                            ? boundaryBox.maxX
-                            : edge === 'bottom'
-                              ? boundaryBox.minY
-                              : boundaryBox.maxY;
                         completeEdgeAlignmentToCoordinate(coord, `${baseCellName} boundary`);
                       } else {
                         completeEdgeAlignmentToBoundary(edge as 'left' | 'right' | 'bottom' | 'top');
@@ -4310,7 +4715,7 @@ export const FloorplanCanvas: React.FC = () => {
                 />
               );
             });
-            return [...ipEdges, ...pixelArrayEdges, ...boundaryTargets];
+            return [...ipEdges, ...rectShapeEdges, ...pixelArrayEdges, ...crossHierarchyTargets, ...boundaryTargets];
           })()}
 
           {selectionBox && (
@@ -5060,11 +5465,52 @@ export const FloorplanCanvas: React.FC = () => {
           {rulers.map(r => renderRuler(r, r.id, appMode === 'select' && !edgeAlignmentSession ? () => deleteRuler(r.id) : undefined))}
           {isMeasuring && currentRuler && renderRuler(currentRuler, 'temp_ruler')}
 
-          {/* Gap Annotations (selection-based + auto-dim, rendered upright in Base View space) */}
+          {/* Gap Annotations (selection-based for instances & rectangles + global Auto-Dim, rendered upright in Base View space) */}
           {renderGapAnnotations(
             edgeAlignmentSession || appMode === 'measure' ? null : selectedInstanceId,
+            edgeAlignmentSession || appMode === 'measure' ? null : selectedShapeId,
             showAutoDim && appMode === 'select' && !edgeAlignmentSession && !pixelArraySelected,
           )}
+
+          {/* Upright floating tooltip pill for hovered cross-hierarchy / same-level alignment edge */}
+          {edgeAlignmentSession && hoveredAlignMeta && (() => {
+            const fs = 11 / stageScale;
+            const padX = 7 / stageScale;
+            const pillW = Math.max(70 / stageScale, hoveredAlignMeta.label.length * fs * 0.6 + padX * 2);
+            const pillH = 20 / stageScale;
+            return (
+              <Group
+                x={hoveredAlignMeta.x * SCALE_FACTOR}
+                y={hoveredAlignMeta.y * SCALE_FACTOR + 18 / stageScale}
+                scaleY={-1}
+                listening={false}
+              >
+                <Rect
+                  x={-pillW / 2}
+                  y={-pillH / 2}
+                  width={pillW}
+                  height={pillH}
+                  cornerRadius={pillH / 2}
+                  fill="rgba(15, 23, 42, 0.92)"
+                  stroke="rgba(6, 182, 212, 0.85)"
+                  strokeWidth={1.2 / stageScale}
+                />
+                <Text
+                  x={-pillW / 2}
+                  y={-pillH / 2}
+                  width={pillW}
+                  height={pillH}
+                  align="center"
+                  verticalAlign="middle"
+                  text={hoveredAlignMeta.label}
+                  fill="#f8fafc"
+                  fontSize={fs}
+                  fontFamily={CANVAS_FONT_MONO}
+                  fontStyle="bold"
+                />
+              </Group>
+            );
+          })()}
 
           {/* Grid-Locked Canvas Anchor Reticle & Measure Edge Snap Indicator */}
           {appMode === 'measure' && snapIndicator ? (

@@ -123,6 +123,13 @@ export type PendingManualPadGroup = {
 };
 
 export const PIXEL_ARRAY_ALIGNMENT_ID = '__pixel_array__';
+export const SHAPE_ALIGNMENT_PREFIX = '__shape__:';
+export const makeShapeAlignmentId = (shapeId: string): string => `${SHAPE_ALIGNMENT_PREFIX}${shapeId}`;
+export const parseShapeAlignmentId = (alignmentId: string): string | null => (
+  alignmentId.startsWith(SHAPE_ALIGNMENT_PREFIX)
+    ? alignmentId.slice(SHAPE_ALIGNMENT_PREFIX.length)
+    : null
+);
 
 export type EdgeAlignmentSession = {
   /** Every object that moves together. sourceId identifies the member whose edge was picked. */
@@ -1357,12 +1364,21 @@ const selectionAfterInstancesChange = (state: ProjectState, instances: Instance[
   return { selectedInstanceId, selectedInstanceIds };
 };
 
-const edgeAlignmentAfterInstancesChange = (state: ProjectState, instances: Instance[]) => {
+const edgeAlignmentAfterInstancesChange = (
+  state: ProjectState,
+  instances: Instance[],
+  shapes: LayoutShape[] = state.shapes,
+) => {
   const session = state.edgeAlignmentSession;
   if (!session) return null;
   const existingIds = new Set(instances.map(instance => instance.id));
-  const exists = (id: string) => existingIds.has(id)
-    || (id === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible));
+  const existingShapeIds = new Set(shapes.filter(shape => shape.kind !== 'text').map(shape => shape.id));
+  const exists = (id: string) => {
+    if (existingIds.has(id)) return true;
+    if (id === PIXEL_ARRAY_ALIGNMENT_ID) return Boolean(state.pixelArray?.visible);
+    const shapeId = parseShapeAlignmentId(id);
+    return shapeId !== null && existingShapeIds.has(shapeId);
+  };
   return session.sourceIds.every(exists) && exists(session.sourceId) && (!session.targetId || exists(session.targetId))
     ? session
     : null;
@@ -1382,6 +1398,20 @@ const getAlignable = (state: ProjectState, id: string) => {
       orientation: 'R0',
     };
   }
+  const shapeId = parseShapeAlignmentId(id);
+  if (shapeId !== null) {
+    const shape = state.shapes.find(item => item.id === shapeId && item.kind !== 'text');
+    if (!shape) throw new Error('The alignment shape no longer exists');
+    return {
+      id,
+      name: shape.label?.trim() || `${shape.layer}/${shape.purpose}`,
+      x: shape.x,
+      y: shape.y,
+      width: shape.width,
+      height: shape.height,
+      orientation: 'R0',
+    };
+  }
   const instance = state.instances.find(item => item.id === id);
   if (!instance) throw new Error('The alignment instance no longer exists');
   const master = state.masterCells[instance.cellId];
@@ -1394,10 +1424,22 @@ const alignmentPositionPatch = (
   sourceId: string,
   x: number,
   y: number,
-): Pick<ProjectSnapshot, 'instances' | 'pixelArray'> => {
+): Pick<ProjectSnapshot, 'instances' | 'pixelArray'> & { shapes?: LayoutShape[] } => {
   if (sourceId === PIXEL_ARRAY_ALIGNMENT_ID) {
     if (!state.pixelArray) throw new Error('The pixel array no longer exists');
     return { instances: state.instances, pixelArray: { ...state.pixelArray, x, y } };
+  }
+  const shapeId = parseShapeAlignmentId(sourceId);
+  if (shapeId !== null) {
+    const shape = state.shapes.find(item => item.id === shapeId);
+    if (!shape) throw new Error('The alignment shape no longer exists');
+    if (shape.locked) throw new Error('Cannot align because this shape is locked');
+    const snapped = snapUnboundedPosition(x, y, state.gridSize);
+    return {
+      instances: state.instances,
+      pixelArray: state.pixelArray,
+      shapes: state.shapes.map(item => (item.id === shapeId ? { ...item, x: snapped.x, y: snapped.y } : item)),
+    };
   }
   return {
     instances: state.instances.map(instance => (
@@ -1489,9 +1531,13 @@ const alignmentGroupPositionPatch = (
   pivotId: string,
   pivotX: number,
   pivotY: number,
-): Pick<ProjectSnapshot, 'instances' | 'pixelArray'> => {
+): Pick<ProjectSnapshot, 'instances' | 'pixelArray'> & { shapes?: LayoutShape[] } => {
   if (pivotId === PIXEL_ARRAY_ALIGNMENT_ID) {
     if (sourceIds.length !== 1) throw new Error('The pixel array cannot be part of an instance alignment group');
+    return alignmentPositionPatch(state, pivotId, pivotX, pivotY);
+  }
+  if (parseShapeAlignmentId(pivotId) !== null) {
+    if (sourceIds.length !== 1) throw new Error('A drawn shape cannot be part of an instance alignment group');
     return alignmentPositionPatch(state, pivotId, pivotX, pivotY);
   }
   const pivot = state.instances.find(instance => instance.id === pivotId);
@@ -1554,8 +1600,9 @@ const edgeAlignmentPatch = (
     { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize, unbounded: Boolean(state.activeCellId) || sourceId !== PIXEL_ARRAY_ALIGNMENT_ID },
   );
   const patch = alignmentGroupPositionPatch(state, sourceIds, sourceId, position.x, position.y);
+  const nextShapes = patch.shapes ?? state.shapes;
   const boundsSync = state.activeCellId
-    ? syncMasterBoundsForActiveCell(state, state.shapes, patch.instances, patch.pixelArray ?? null)
+    ? syncMasterBoundsForActiveCell(state, nextShapes, patch.instances, patch.pixelArray ?? null, false, Boolean(patch.shapes))
     : null;
   const offsetLabel = displaySpacing === undefined
     ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
@@ -1586,8 +1633,9 @@ const edgeAlignmentCoordinatePatch = (
     { topWidth: state.topWidth, topHeight: state.topHeight, gridSize: state.gridSize, unbounded: Boolean(state.activeCellId) || sourceId !== PIXEL_ARRAY_ALIGNMENT_ID },
   );
   const patch = alignmentGroupPositionPatch(state, sourceIds, sourceId, position.x, position.y);
+  const nextShapes = patch.shapes ?? state.shapes;
   const boundsSync = state.activeCellId
-    ? syncMasterBoundsForActiveCell(state, state.shapes, patch.instances, patch.pixelArray ?? null)
+    ? syncMasterBoundsForActiveCell(state, nextShapes, patch.instances, patch.pixelArray ?? null, false, Boolean(patch.shapes))
     : null;
   const offsetLabel = displaySpacing === undefined
     ? (offset === 0 ? '' : ` ${offset > 0 ? '+' : ''}${offset} um`)
@@ -2718,6 +2766,7 @@ export const useStore = create<ProjectState>((set) => ({
         ...(boundsSync ?? {}),
       }),
       selectedShapeId: state.selectedShapeId === id ? null : state.selectedShapeId,
+      edgeAlignmentSession: edgeAlignmentAfterInstancesChange(state, state.instances, shapes),
     };
   }),
 
@@ -4334,6 +4383,62 @@ export const useStore = create<ProjectState>((set) => ({
       return commitProjectPatch(state, `Align Pixel Array to ${refLabel} ${edge.replace('-', ' ')}`, { pixelArray });
     }
 
+    if (state.selectedInstanceIds.length === 0 && state.selectedShapeId) {
+      const targetShape = state.shapes.find(s => s.id === state.selectedShapeId && s.kind !== 'text');
+      if (!targetShape) return state;
+      if (targetShape.locked) {
+        throw new Error('Cannot align because the selected rectangle is locked');
+      }
+      const shapeBounds = getPhysicalBounds({
+        id: makeShapeAlignmentId(targetShape.id),
+        x: targetShape.x,
+        y: targetShape.y,
+        width: targetShape.width,
+        height: targetShape.height,
+        orientation: 'R0',
+      });
+      let nextPos: { x: number; y: number };
+      if (forwardTransform && inverseTransform) {
+        const c1 = applyCadenceTransformPoint(forwardTransform, shapeBounds.left, shapeBounds.bottom);
+        const c2 = applyCadenceTransformPoint(forwardTransform, shapeBounds.right, shapeBounds.top);
+        const baseBounds = {
+          left: Math.min(c1.x, c2.x),
+          right: Math.max(c1.x, c2.x),
+          bottom: Math.min(c1.y, c2.y),
+          top: Math.max(c1.y, c2.y),
+          centerX: (c1.x + c2.x) / 2,
+          centerY: (c1.y + c2.y) / 2,
+          width: Math.abs(c2.x - c1.x),
+          height: Math.abs(c2.y - c1.y),
+        };
+        const delta = boxEdgeCoordinate(refBox, edge) - getEdgeCoordinate(baseBounds, edge);
+        const editDelta = applyCadenceOrientationVector(
+          inverseTransform.orientation,
+          axis === 'horizontal' ? delta : 0,
+          axis === 'vertical' ? delta : 0,
+        );
+        nextPos = snapUnboundedPosition(targetShape.x + editDelta.dx, targetShape.y + editDelta.dy, state.gridSize);
+      } else {
+        const delta = boxEdgeCoordinate(refBox, edge) - getEdgeCoordinate(shapeBounds, edge);
+        nextPos = snapUnboundedPosition(
+          axis === 'horizontal' ? targetShape.x + delta : targetShape.x,
+          axis === 'vertical' ? targetShape.y + delta : targetShape.y,
+          state.gridSize,
+        );
+      }
+      if (Math.abs(nextPos.x - targetShape.x) <= 1e-9 && Math.abs(nextPos.y - targetShape.y) <= 1e-9) {
+        return state;
+      }
+      const shapes = state.shapes.map(s => (s.id === targetShape.id ? { ...s, x: nextPos.x, y: nextPos.y } : s));
+      const boundsSync = state.activeCellId
+        ? syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true)
+        : null;
+      return commitProjectPatch(state, `Align rectangle to ${refLabel} ${edge.replace('-', ' ')}`, {
+        shapes,
+        ...(boundsSync ?? {}),
+      });
+    }
+
     if (state.selectedInstanceIds.length === 0) return state;
     const selectedIds = new Set(state.selectedInstanceIds);
     let anyChanged = false;
@@ -4424,10 +4529,12 @@ export const useStore = create<ProjectState>((set) => ({
   )),
 
   startEdgeAlignment: (sourceId) => set((state) => {
+    const shapeId = parseShapeAlignmentId(sourceId);
     const sourceExists = state.instances.some(instance => instance.id === sourceId)
-      || (sourceId === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible));
+      || (sourceId === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible))
+      || (shapeId !== null && state.shapes.some(shape => shape.id === shapeId && shape.kind !== 'text'));
     if (!sourceExists) return state;
-    const sourceIds = sourceId === PIXEL_ARRAY_ALIGNMENT_ID
+    const sourceIds = sourceId === PIXEL_ARRAY_ALIGNMENT_ID || shapeId !== null
       ? [sourceId]
       : state.selectedInstanceIds.includes(sourceId)
         ? state.selectedInstanceIds.filter(id => state.instances.some(instance => instance.id === id))
@@ -4446,8 +4553,10 @@ export const useStore = create<ProjectState>((set) => ({
 
   setEdgeAlignmentEdge: (instanceId, edge) => set((state) => {
     const session = state.edgeAlignmentSession;
+    const shapeId = parseShapeAlignmentId(instanceId);
     const exists = state.instances.some(instance => instance.id === instanceId)
-      || (instanceId === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible));
+      || (instanceId === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible))
+      || (shapeId !== null && state.shapes.some(shape => shape.id === shapeId && shape.kind !== 'text'));
     if (!session || !exists) return state;
     if (session.sourceIds.includes(instanceId)) {
       return { edgeAlignmentSession: { ...session, sourceId: instanceId, sourceEdge: edge, targetId: null, targetEdge: null } };
@@ -4530,14 +4639,17 @@ export const useStore = create<ProjectState>((set) => ({
     const session = state.edgeAlignmentSession;
     if (!session?.sourceEdge) throw new Error('Choose the source edge first');
     if (!Number.isFinite(coordinate)) throw new RangeError('Boundary reference coordinate must be finite');
+    // Snap sub-grid cross-hierarchy coordinates (e.g. legacy odd-width centered sub-cells) to nearest legal grid point.
+    const snappedCoord = snapToGrid(coordinate, state.gridSize);
+    const effectiveCoordinate = Math.abs(snappedCoord - coordinate) > 1e-9 ? snappedCoord : coordinate;
     const spacing = parseEdgeAlignmentSpacing(session);
-    const offset = directionalSpacingOffset(getAlignable(state, session.sourceId), session.sourceEdge, coordinate, spacing);
+    const offset = directionalSpacingOffset(getAlignable(state, session.sourceId), session.sourceEdge, effectiveCoordinate, spacing);
     return {
       ...edgeAlignmentCoordinatePatch(
         state,
         session.sourceId,
         session.sourceEdge,
-        coordinate,
+        effectiveCoordinate,
         offset,
         referenceLabel,
         spacing,

@@ -155,7 +155,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
             }}
           >
             <FiAlignCenter />
-            <span><strong>Align by two edges… (A)</strong><small>Click any edge, then an IP, {boundaryLabel} boundary, or ruler</small></span>
+            <span><strong>Align by two edges… (A)</strong><small>Click any edge, then an IP, sub-cell, parent cell, {boundaryLabel} boundary, or ruler</small></span>
           </button>
           <div className="editing-toolbar__menu-section">Align to {boundaryLabel} boundary</div>
           <div className="editing-toolbar__boundary-grid">

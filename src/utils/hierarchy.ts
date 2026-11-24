@@ -1,5 +1,6 @@
+import { getPhysicalBounds, isActiveMosaic } from './alignment.ts';
 import type { CadenceOrientation } from './alignment.ts';
-import type { Instance, PixelArray, Ruler } from '../store/useStore.ts';
+import type { Cell, DescendContextFrame, Instance, PixelArray, RootViewSnapshot, Ruler } from '../store/useStore.ts';
 import type { LayoutShape } from './layoutLayers.ts';
 
 export type CellViewCoordinateMode = 'origin' | 'centered';
@@ -292,16 +293,427 @@ export const getHierarchyUsageCounts = (
       if (path.has(inst.cellId)) {
         throw new Error(`Circular hierarchy detected involving cell ${inst.cellId}.`);
       }
-      counts.set(inst.cellId, (counts.get(inst.cellId) ?? 0) + multiplier);
+      const tileCount = isActiveMosaic(inst.mosaic)
+        ? Math.max(1, Math.floor(inst.mosaic.rows)) * Math.max(1, Math.floor(inst.mosaic.cols))
+        : 1;
+      const effectiveMultiplier = multiplier * tileCount;
+      counts.set(inst.cellId, (counts.get(inst.cellId) ?? 0) + effectiveMultiplier);
       const childView = cellViews[inst.cellId];
       if (childView && childView.instances.length > 0) {
         const nextPath = new Set(path);
         nextPath.add(inst.cellId);
-        walk(childView.instances, multiplier, nextPath);
+        walk(childView.instances, effectiveMultiplier, nextPath);
       }
     }
   };
 
   walk(rootInstances, 1, new Set());
   return counts;
+};
+
+export type HierarchyBox = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+};
+
+export type HierarchyReferenceBox = {
+  /** Stable unique identifier across hierarchy levels. */
+  key: string;
+  /** Human-readable hierarchical path, e.g. `padring/I3 (PAD)` or `top_asic/CORE`. */
+  label: string;
+  /** True when the underlying cell is a pad master (enables Auto-Dim pad-row collapsing). */
+  isPad: boolean;
+  /** Source hierarchy relationship relative to the active cellview. */
+  level: 'child' | 'ancestor' | 'shape';
+  /** Active-level instance ID that owns this descendant box (used to exclude self-children). */
+  ownerInstanceId?: string;
+  /** True when this box represents a physical leaf (single block/pad/tile/rect rather than a container wrapper). */
+  isLeaf: boolean;
+  /** Axis-aligned physical bounding box in the active cellview's local coordinate frame. */
+  box: HierarchyBox;
+};
+
+/** Transforms an axis-aligned box by any Cadence placement transform `(x, y, orientation)`. */
+export const transformBoxByCadence = (
+  box: HierarchyBox,
+  transform: { x: number; y: number; orientation: string },
+): HierarchyBox => {
+  const p1 = applyCadenceTransformPoint(transform, box.minX, box.minY);
+  const p2 = applyCadenceTransformPoint(transform, box.maxX, box.maxY);
+  return {
+    minX: Math.min(p1.x, p2.x),
+    maxX: Math.max(p1.x, p2.x),
+    minY: Math.min(p1.y, p2.y),
+    maxY: Math.max(p1.y, p2.y),
+  };
+};
+
+export const boxesStrictlyOverlap = (a: HierarchyBox, b: HierarchyBox, epsilon = 1e-6): boolean => (
+  Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX) > epsilon
+  && Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY) > epsilon
+);
+
+const resolveViewCoordModeForWalk = (view?: CellViewContent): CellViewCoordinateMode => (
+  view?.coordinateMode
+    ?? ((view?.instances.length ?? 0) > 0 && (view?.shapes?.length ?? 0) === 0 ? 'centered' : 'origin')
+);
+
+const enumerateMosaicTileIndices = (
+  rows: number,
+  cols: number,
+  maxExpandedTiles: number,
+): Array<{ r: number; c: number }> => {
+  if (rows * cols <= maxExpandedTiles) {
+    const out: Array<{ r: number; c: number }> = [];
+    for (let r = 0; r < rows; r += 1) {
+      for (let c = 0; c < cols; c += 1) {
+        out.push({ r, c });
+      }
+    }
+    return out;
+  }
+  // For giant mosaics, still expose the 4 outer corner tiles so users can align/snap to array boundaries.
+  const seen = new Set<string>();
+  const corners = [
+    { r: 0, c: 0 },
+    { r: 0, c: cols - 1 },
+    { r: rows - 1, c: 0 },
+    { r: rows - 1, c: cols - 1 },
+  ];
+  return corners.filter(pt => {
+    const k = `${pt.r}:${pt.c}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+};
+
+export type CollectDescendantOptions = {
+  /** Base transform mapping `instances` into the target coordinate frame (default: identity). */
+  frameTransform?: { x: number; y: number; orientation: string };
+  /** Emit boxes for the root `instances` themselves as well as their lower-level children. */
+  includeRootBoxes?: boolean;
+  /** Tag assigned to all returned references (`'child'` or `'ancestor'`). */
+  level?: 'child' | 'ancestor';
+  /** Optional prefix prepended to human-readable labels (e.g. parent cell name). */
+  labelPrefix?: string;
+  /** Maximum depth of recursive hierarchy traversal (default: 6). */
+  maxDepth?: number;
+  /** Maximum tiles expanded per mosaic before falling back to corner tiles (default: 64). */
+  maxMosaicExpandedTiles?: number;
+  /** Hard cap on returned reference boxes so dense layouts remain responsive (default: 400). */
+  maxBoxes?: number;
+};
+
+/**
+ * Recursively collects exact physical bounding boxes of lower-level sub-instances,
+ * mosaic tiles, and drawn layout rectangles across hierarchical cellviews.
+ * Used by cross-hierarchy two-edge alignment (A), Auto-Dim, and Ruler edge snapping (K).
+ */
+export const collectInstanceDescendantBoxes = (
+  instances: readonly Instance[],
+  masterCells: Record<string, Cell>,
+  cellViews: Record<string, CellViewContent>,
+  options: CollectDescendantOptions = {},
+): HierarchyReferenceBox[] => {
+  const frameTransform = options.frameTransform ?? { x: 0, y: 0, orientation: 'R0' };
+  const includeRootBoxes = options.includeRootBoxes ?? false;
+  const level = options.level ?? 'child';
+  const labelPrefix = options.labelPrefix ? `${options.labelPrefix}/` : '';
+  const maxDepth = options.maxDepth ?? 6;
+  const maxMosaicExpandedTiles = options.maxMosaicExpandedTiles ?? 64;
+  const maxBoxes = options.maxBoxes ?? 400;
+  const results: HierarchyReferenceBox[] = [];
+
+  const pushBox = (entry: HierarchyReferenceBox) => {
+    if (results.length >= maxBoxes) return;
+    const { box } = entry;
+    if (box.maxX - box.minX <= 1e-9 || box.maxY - box.minY <= 1e-9) return;
+    results.push(entry);
+  };
+
+  const walkInstance = (
+    inst: Instance,
+    parentTransform: { x: number; y: number; orientation: string },
+    parentWidth: number,
+    parentHeight: number,
+    parentCoordMode: CellViewCoordinateMode,
+    ownerInstanceId: string | undefined,
+    keyPath: string,
+    labelPath: string,
+    depth: number,
+    emitSelf: boolean,
+    visited: Set<string>,
+  ) => {
+    if (results.length >= maxBoxes || depth > maxDepth) return;
+    const master = masterCells[inst.cellId];
+    if (!master || master.width <= 0 || master.height <= 0) return;
+    if (visited.has(inst.cellId)) return;
+
+    const instTransform = composeCadenceTransform(
+      parentTransform,
+      { x: inst.x, y: inst.y, orientation: inst.orientation },
+      parentWidth,
+      parentHeight,
+      parentCoordMode,
+    );
+    const view = cellViews[inst.cellId];
+    const subInstances = view?.instances ?? [];
+    const subRects = (view?.shapes ?? []).filter(shape => shape.kind !== 'text');
+    const hasSubGeometry = subInstances.length > 0 || subRects.length > 0;
+    const mosaic = isActiveMosaic(inst.mosaic) ? inst.mosaic : null;
+
+    if (emitSelf) {
+      const bounds = getPhysicalBounds({
+        id: inst.id,
+        x: instTransform.x,
+        y: instTransform.y,
+        orientation: instTransform.orientation,
+        width: master.width,
+        height: master.height,
+        originX: master.originX,
+        originY: master.originY,
+        mosaic: mosaic ?? undefined,
+      });
+      pushBox({
+        key: keyPath,
+        label: labelPath,
+        isPad: master.kind === 'pad',
+        level,
+        ownerInstanceId,
+        isLeaf: !hasSubGeometry && !mosaic,
+        box: {
+          minX: bounds.left,
+          maxX: bounds.right,
+          minY: bounds.bottom,
+          maxY: bounds.top,
+        },
+      });
+    }
+
+    if (!hasSubGeometry && !mosaic) return;
+    const nextVisited = new Set(visited);
+    nextVisited.add(inst.cellId);
+    const viewCoordMode = resolveViewCoordModeForWalk(view);
+    const shapeShiftX = viewCoordMode === 'centered' ? master.width / 2 : 0;
+    const shapeShiftY = viewCoordMode === 'centered' ? master.height / 2 : 0;
+
+    const tiles = mosaic
+      ? enumerateMosaicTileIndices(mosaic.rows, mosaic.cols, maxMosaicExpandedTiles)
+      : [{ r: 0, c: 0 }];
+
+    for (const { r, c } of tiles) {
+      if (results.length >= maxBoxes) break;
+      const tileOffset = mosaic
+        ? applyCadenceOrientationVector(instTransform.orientation, c * mosaic.colPitch, r * mosaic.rowPitch)
+        : { dx: 0, dy: 0 };
+      const tileTransform = {
+        x: instTransform.x + tileOffset.dx,
+        y: instTransform.y + tileOffset.dy,
+        orientation: instTransform.orientation,
+      };
+      const tileKey = mosaic ? `${keyPath}[${r},${c}]` : keyPath;
+      const tileLabel = mosaic ? `${labelPath}[${r},${c}]` : labelPath;
+
+      if (mosaic) {
+        const tileBounds = getPhysicalBounds({
+          id: `${inst.id}-${r}-${c}`,
+          x: tileTransform.x,
+          y: tileTransform.y,
+          orientation: tileTransform.orientation,
+          width: master.width,
+          height: master.height,
+          originX: master.originX,
+          originY: master.originY,
+        });
+        pushBox({
+          key: tileKey,
+          label: tileLabel,
+          isPad: master.kind === 'pad',
+          level,
+          ownerInstanceId,
+          isLeaf: !hasSubGeometry,
+          box: {
+            minX: tileBounds.left,
+            maxX: tileBounds.right,
+            minY: tileBounds.bottom,
+            maxY: tileBounds.top,
+          },
+        });
+      }
+
+      for (const rect of subRects) {
+        if (results.length >= maxBoxes) break;
+        const localBox: HierarchyBox = {
+          minX: rect.x + shapeShiftX,
+          maxX: rect.x + rect.width + shapeShiftX,
+          minY: rect.y + shapeShiftY,
+          maxY: rect.y + rect.height + shapeShiftY,
+        };
+        const worldBox = transformBoxByCadence(localBox, tileTransform);
+        const rectTag = rect.label?.trim() || `${rect.layer}/${rect.purpose}`;
+        pushBox({
+          key: `${tileKey}:shape:${rect.id}`,
+          label: `${tileLabel}/${rectTag}`,
+          isPad: master.kind === 'pad',
+          level,
+          ownerInstanceId,
+          isLeaf: true,
+          box: worldBox,
+        });
+      }
+
+      for (const subInst of subInstances) {
+        if (results.length >= maxBoxes) break;
+        const subMaster = masterCells[subInst.cellId];
+        const subLabel = subMaster ? `${tileLabel}/${subInst.name} (${subMaster.cellName})` : `${tileLabel}/${subInst.name}`;
+        walkInstance(
+          subInst,
+          tileTransform,
+          master.width,
+          master.height,
+          viewCoordMode,
+          ownerInstanceId,
+          `${tileKey}/${subInst.id}`,
+          subLabel,
+          depth + 1,
+          true,
+          nextVisited,
+        );
+      }
+    }
+  };
+
+  for (const inst of instances) {
+    if (results.length >= maxBoxes) break;
+    const master = masterCells[inst.cellId];
+    if (!master || master.width <= 0 || master.height <= 0) continue;
+    const ownerId = level === 'child' ? inst.id : `ancestor:${inst.id}`;
+    const rootLabel = `${labelPrefix}${inst.name}${master.cellName ? ` (${master.cellName})` : ''}`;
+    walkInstance(
+      inst,
+      frameTransform,
+      0,
+      0,
+      'origin',
+      ownerId,
+      `${level}:${inst.id}`,
+      rootLabel,
+      0,
+      includeRootBoxes,
+      new Set(),
+    );
+  }
+
+  return results;
+};
+
+/**
+ * During Edit-in-Place (X), collects all visible higher-level sibling instances
+ * (plus their lower-level children), higher-level drawn rectangles, and pixel arrays,
+ * mapped into the active cellview's local coordinate frame so cross-hierarchy alignment,
+ * Auto-Dim, and ruler snapping work seamlessly between lower-level and higher-level cells.
+ */
+export const collectEipAncestorReferenceBoxes = (
+  liveEipChain: ReadonlyArray<DescendContextFrame>,
+  rootView: RootViewSnapshot | null,
+  masterCells: Record<string, Cell>,
+  cellViews: Record<string, CellViewContent>,
+  eipInverseTransform: { x: number; y: number; orientation: string },
+  maxBoxes = 400,
+): HierarchyReferenceBox[] => {
+  if (liveEipChain.length === 0) return [];
+  const results: HierarchyReferenceBox[] = [];
+
+  for (let levelIdx = 0; levelIdx < liveEipChain.length; levelIdx += 1) {
+    if (results.length >= maxBoxes) break;
+    const frame = liveEipChain[levelIdx];
+    const parentId = frame.parentCellId;
+    const isRootLevel = parentId === null;
+    const parentView = parentId ? cellViews[parentId] : undefined;
+    const parentMaster = parentId ? masterCells[parentId] : undefined;
+    const parentInstances = isRootLevel
+      ? (rootView?.instances ?? [])
+      : (parentView?.instances ?? []);
+    const parentShapes = (isRootLevel
+      ? (rootView?.shapes ?? [])
+      : (parentView?.shapes ?? [])).filter(shape => shape.kind !== 'text');
+    const parentPixelArray = isRootLevel
+      ? (rootView?.pixelArray ?? null)
+      : (parentView?.pixelArray ?? null);
+    const parentW = isRootLevel ? (rootView?.topWidth ?? frame.parentWidth) : (parentMaster?.width ?? frame.parentWidth);
+    const parentH = isRootLevel ? (rootView?.topHeight ?? frame.parentHeight) : (parentMaster?.height ?? frame.parentHeight);
+    const parentCoordMode: CellViewCoordinateMode = isRootLevel
+      ? 'origin'
+      : resolveViewCoordModeForWalk(parentView);
+    const parentLabel = isRootLevel
+      ? (rootView?.topCellName ?? 'top')
+      : (parentMaster?.cellName ?? parentId);
+
+    const levelToBase = levelIdx === 0
+      ? { x: 0, y: 0, orientation: 'R0' as const }
+      : computeActiveToBaseTransform(liveEipChain.slice(0, levelIdx), parentCoordMode, parentW, parentH);
+    const levelToActive = composeCadenceTransform(eipInverseTransform, levelToBase, 0, 0, 'origin');
+
+    const siblingInstances = parentInstances.filter(inst => inst.id !== frame.instanceId);
+    const siblingBoxes = collectInstanceDescendantBoxes(
+      siblingInstances,
+      masterCells,
+      cellViews,
+      {
+        frameTransform: levelToActive,
+        includeRootBoxes: true,
+        level: 'ancestor',
+        labelPrefix: parentLabel,
+        maxBoxes: Math.max(0, maxBoxes - results.length),
+      },
+    );
+    for (const item of siblingBoxes) {
+      results.push({
+        ...item,
+        key: `eip-${levelIdx}-${item.key}`,
+        ...(item.ownerInstanceId ? { ownerInstanceId: `eip-${levelIdx}-${item.ownerInstanceId}` } : {}),
+      });
+    }
+
+    for (const shape of parentShapes) {
+      if (results.length >= maxBoxes) break;
+      const worldBox = transformBoxByCadence(
+        { minX: shape.x, maxX: shape.x + shape.width, minY: shape.y, maxY: shape.y + shape.height },
+        levelToActive,
+      );
+      results.push({
+        key: `eip-${levelIdx}-shape-${shape.id}`,
+        label: `${parentLabel}/${shape.label?.trim() || `${shape.layer}/${shape.purpose}`}`,
+        isPad: false,
+        level: 'ancestor',
+        isLeaf: true,
+        box: worldBox,
+      });
+    }
+
+    if (parentPixelArray?.visible && results.length < maxBoxes) {
+      const worldBox = transformBoxByCadence(
+        {
+          minX: parentPixelArray.x,
+          maxX: parentPixelArray.x + parentPixelArray.width,
+          minY: parentPixelArray.y,
+          maxY: parentPixelArray.y + parentPixelArray.height,
+        },
+        levelToActive,
+      );
+      results.push({
+        key: `eip-${levelIdx}-pixel-array`,
+        label: `${parentLabel}/Pixel Array`,
+        isPad: false,
+        level: 'ancestor',
+        isLeaf: true,
+        box: worldBox,
+      });
+    }
+  }
+
+  return results;
 };
