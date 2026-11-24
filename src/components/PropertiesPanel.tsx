@@ -1,6 +1,6 @@
 import React from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
-import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiColumns } from 'react-icons/fi';
+import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiExternalLink } from 'react-icons/fi';
 import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
 
@@ -12,7 +12,7 @@ export const PropertiesPanel: React.FC = () => {
     instances,
     cellViews,
     descendIntoInstance,
-    openCellViewInNewWindow,
+    openCellView,
     gridSize,
     selectedInstanceId,
     selectedInstanceIds,
@@ -350,11 +350,11 @@ export const PropertiesPanel: React.FC = () => {
                 <button
                   type="button"
                   className="btn new-window-btn"
-                  onClick={() => openCellViewInNewWindow(masterCell.id)}
-                  title={`Open ${masterCell.libName}/${masterCell.cellName}/layout in a separate Virtuoso window`}
+                  onClick={() => openCellView(masterCell.id)}
+                  title={`Open ${masterCell.libName}/${masterCell.cellName}/layout tab in the top cellview bar`}
                 >
-                  <FiColumns />
-                  <span>Open in New Window</span>
+                  <FiExternalLink />
+                  <span>Open Cellview Tab</span>
                 </button>
               </div>
             </div>
