@@ -36,7 +36,7 @@ const shortcutGroups: Array<{ title: string; items: Array<[string, string]> }> =
       ['Middle-drag / Space+drag', 'Pan the canvas'],
       ['Arrow keys / Shift+Arrow', 'Pan viewport (small / large step)'],
       ['F / Double-click canvas', 'Fit top cell to viewport'],
-      ['G / Shift+G', 'Toggle drafting grid / Snap anchor to visible grid'],
+      ['G / Shift+G', 'Toggle drafting grid / Toggle Vis & Snap badge (fixed to Grid)'],
     ],
   },
   {
@@ -395,7 +395,7 @@ export const TutorialModal: React.FC<TutorialModalProps> = ({ onClose, onLoadDem
                 </article>
                 <article className="tutorial-card">
                   <FiMousePointer />
-                  <div><strong>Adaptive grid &amp; viewport HUD</strong><p>Toggle the zoom-adaptive drafting grid (<kbd>G</kbd>) and use the floating bottom pill for quick zoom, 100% fit, and live cursor coordinates.</p></div>
+                  <div><strong>Fixed Virtuoso grid &amp; viewport HUD</strong><p>Toggle the drafting grid (<kbd>G</kbd>) locked to your exact defined grid spacing (zoom-invariant), and use the floating bottom pill for Move Mode (<kbd>F3</kbd>), zoom, 100% fit, and live cursor coordinates.</p></div>
                 </article>
                 <article className="tutorial-card">
                   <FiSave />

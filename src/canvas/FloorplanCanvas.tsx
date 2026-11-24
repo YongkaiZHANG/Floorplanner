@@ -51,7 +51,7 @@ import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
 const MIN_STAGE_SCALE = 1e-5;
-const MAX_STAGE_SCALE = 50;
+const MAX_STAGE_SCALE = 200;
 const MARQUEE_DRAG_THRESHOLD_PX = 3;
 const CANVAS_FONT_SANS = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif";
 const CANVAS_FONT_MONO = "ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace";
@@ -349,16 +349,8 @@ export const FloorplanCanvas: React.FC = () => {
   }, [baseIsRoot, isTrulyEmptyBaseView, baseWidth, baseHeight, baseBoundaryBox, gridSize]);
 
   const displayGrid = useMemo(
-    () => {
-      const spanX = !baseIsRoot && stageScale > 0 && dimensions.width > 1
-        ? dimensions.width / (stageScale * SCALE_FACTOR)
-        : Math.max(1, gridExtentUm.maxX - gridExtentUm.minX);
-      const spanY = !baseIsRoot && stageScale > 0 && dimensions.height > 1
-        ? dimensions.height / (stageScale * SCALE_FACTOR)
-        : Math.max(1, gridExtentUm.maxY - gridExtentUm.minY);
-      return computeDisplayGridStep(gridSize, stageScale, SCALE_FACTOR, Math.max(1, spanX), Math.max(1, spanY));
-    },
-    [gridSize, stageScale, gridExtentUm, baseIsRoot, dimensions.width, dimensions.height],
+    () => computeDisplayGridStep(gridSize, stageScale, SCALE_FACTOR),
+    [gridSize, stageScale],
   );
   const activeSnapStep = resolveActiveSnapStep(gridSize, displayGrid.minorStep, snapToVisibleGrid);
   const activeSnapStepRef = useRef(activeSnapStep);
@@ -2798,7 +2790,7 @@ export const FloorplanCanvas: React.FC = () => {
         dots: [] as Array<{ key: string; x: number; y: number }>,
       };
     }
-    const { minorStep, majorStep, showFineDots } = displayGrid;
+    const { minorStep, majorStep, showMinorLines, showMajorLines, showFineDots } = displayGrid;
     const lines: Array<{ key: string; points: number[]; major: boolean }> = [];
     const hasViewport = dimensions.width > 1 && dimensions.height > 1;
     const viewLeftUm = hasViewport ? (-stagePos.x / stageScale) / SCALE_FACTOR : gridExtentUm.minX;
@@ -2809,44 +2801,51 @@ export const FloorplanCanvas: React.FC = () => {
     const gxMax = !baseIsRoot ? viewRightUm : gridExtentUm.maxX;
     const gyMin = !baseIsRoot ? viewBottomUm : gridExtentUm.minY;
     const gyMax = !baseIsRoot ? viewTopUm : gridExtentUm.maxY;
-    const gxMinPx = gxMin * SCALE_FACTOR;
-    const gxMaxPx = gxMax * SCALE_FACTOR;
-    const gyMinPx = gyMin * SCALE_FACTOR;
-    const gyMaxPx = gyMax * SCALE_FACTOR;
-    const isMajor = (coord: number) => Math.abs(coord - Math.round(coord / majorStep) * majorStep) <= Math.max(1e-9, minorStep * 1e-6);
 
-    const startXIndex = Math.ceil((gxMin + 1e-9) / minorStep);
-    const endXIndex = Math.floor((gxMax - 1e-9) / minorStep);
-    if (endXIndex - startXIndex <= 400) {
-      for (let idx = startXIndex; idx <= endXIndex; idx += 1) {
-        if (idx === 0) continue;
-        const x = snapToGrid(idx * minorStep, gridSize);
-        const px = x * SCALE_FACTOR;
-        lines.push({ key: `gx-${idx}`, points: [px, gyMinPx, px, gyMaxPx], major: isMajor(x) });
+    // Clip line generation & endpoints to the visible viewport so fixed fine grids (e.g. 0.005 um on a 3000 um die)
+    // render crisply whenever zoomed in without hitting whole-die line caps or long offscreen strokes.
+    const visMinX = hasViewport ? Math.max(gxMin, viewLeftUm) : gxMin;
+    const visMaxX = hasViewport ? Math.min(gxMax, viewRightUm) : gxMax;
+    const visMinY = hasViewport ? Math.max(gyMin, viewBottomUm) : gyMin;
+    const visMaxY = hasViewport ? Math.min(gyMax, viewTopUm) : gyMax;
+    const visMinXPx = visMinX * SCALE_FACTOR;
+    const visMaxXPx = visMaxX * SCALE_FACTOR;
+    const visMinYPx = visMinY * SCALE_FACTOR;
+    const visMaxYPx = visMaxY * SCALE_FACTOR;
+
+    const lineStep = showMinorLines ? minorStep : (showMajorLines ? majorStep : 0);
+    if (lineStep > 0 && visMaxX > visMinX && visMaxY > visMinY) {
+      const isMajor = (coord: number) => Math.abs(coord - Math.round(coord / majorStep) * majorStep) <= Math.max(1e-9, minorStep * 1e-6);
+
+      const startXIndex = Math.ceil((visMinX + 1e-9) / lineStep);
+      const endXIndex = Math.floor((visMaxX - 1e-9) / lineStep);
+      if (endXIndex - startXIndex <= 450) {
+        for (let idx = startXIndex; idx <= endXIndex; idx += 1) {
+          if (idx === 0) continue;
+          const x = snapToGrid(idx * lineStep, gridSize);
+          const px = x * SCALE_FACTOR;
+          lines.push({ key: `gx-${idx}`, points: [px, visMinYPx, px, visMaxYPx], major: !showMinorLines || isMajor(x) });
+        }
       }
-    }
-    const startYIndex = Math.ceil((gyMin + 1e-9) / minorStep);
-    const endYIndex = Math.floor((gyMax - 1e-9) / minorStep);
-    if (endYIndex - startYIndex <= 400) {
-      for (let idx = startYIndex; idx <= endYIndex; idx += 1) {
-        if (idx === 0) continue;
-        const y = snapToGrid(idx * minorStep, gridSize);
-        const py = y * SCALE_FACTOR;
-        lines.push({ key: `gy-${idx}`, points: [gxMinPx, py, gxMaxPx, py], major: isMajor(y) });
+      const startYIndex = Math.ceil((visMinY + 1e-9) / lineStep);
+      const endYIndex = Math.floor((visMaxY - 1e-9) / lineStep);
+      if (endYIndex - startYIndex <= 450) {
+        for (let idx = startYIndex; idx <= endYIndex; idx += 1) {
+          if (idx === 0) continue;
+          const y = snapToGrid(idx * lineStep, gridSize);
+          const py = y * SCALE_FACTOR;
+          lines.push({ key: `gy-${idx}`, points: [visMinXPx, py, visMaxXPx, py], major: !showMinorLines || isMajor(y) });
+        }
       }
     }
 
     // When zoomed closely onto the defined gridSize, show crisp Virtuoso grid intersection dots inside the visible viewport.
     const dots: Array<{ key: string; x: number; y: number }> = [];
-    if (showFineDots && hasViewport) {
-      const minX = Math.max(gxMin, viewLeftUm);
-      const maxX = Math.min(gxMax, viewRightUm);
-      const minY = Math.max(gyMin, viewBottomUm);
-      const maxY = Math.min(gyMax, viewTopUm);
-      const ixStart = Math.ceil((minX - 1e-9) / minorStep);
-      const ixEnd = Math.floor((maxX + 1e-9) / minorStep);
-      const iyStart = Math.ceil((minY - 1e-9) / minorStep);
-      const iyEnd = Math.floor((maxY + 1e-9) / minorStep);
+    if (showFineDots && hasViewport && visMaxX > visMinX && visMaxY > visMinY) {
+      const ixStart = Math.ceil((visMinX - 1e-9) / minorStep);
+      const ixEnd = Math.floor((visMaxX + 1e-9) / minorStep);
+      const iyStart = Math.ceil((visMinY - 1e-9) / minorStep);
+      const iyEnd = Math.floor((visMaxY + 1e-9) / minorStep);
       const countX = Math.max(0, ixEnd - ixStart + 1);
       const countY = Math.max(0, iyEnd - iyStart + 1);
       if (countX * countY <= 900) {
@@ -3246,7 +3245,7 @@ export const FloorplanCanvas: React.FC = () => {
             />
           )}
 
-          {/* Virtuoso Minor & Major Drafting Grid (exact integer multiples of gridSize in Base View space) */}
+          {/* Virtuoso Minor & Major Drafting Grid (fixed to gridSize and 5× gridSize across zoom levels) */}
           {gridGeometry.lines.map(line => (
             <Line
               key={line.key}
@@ -5947,7 +5946,7 @@ export const FloorplanCanvas: React.FC = () => {
           type="button"
           className={`viewport-hud__btn${showGrid ? ' active' : ''}`}
           onClick={toggleGrid}
-          title={`Toggle drafting grid (G) · Display step: ${formatGridValue(displayGrid.minorStep, gridSize)} µm (major ${formatGridValue(displayGrid.majorStep, gridSize)} µm)`}
+          title={`Toggle drafting grid (G) · Fixed grid: ${formatGridValue(displayGrid.minorStep, gridSize)} µm (major ${formatGridValue(displayGrid.majorStep, gridSize)} µm)${!displayGrid.showMinorLines && !displayGrid.showMajorLines ? ' · Zoom in to view grid lines' : ''}`}
           aria-pressed={showGrid}
         >
           <FiGrid /> Grid
@@ -5958,8 +5957,8 @@ export const FloorplanCanvas: React.FC = () => {
           onClick={toggleSnapToVisibleGrid}
           title={
             snapToVisibleGrid
-              ? `Anchor & placement locked to visible grid (${formatGridValue(activeSnapStep, gridSize)} µm, exact ${displayGrid.multiplier}× multiple of ${formatGridValue(gridSize, gridSize)} µm) · Click or press Shift+G for defined grid`
-              : `Anchor & placement locked to defined grid (${formatGridValue(gridSize, gridSize)} µm) · Click or press Shift+G to lock onto visible grid lines (${formatGridValue(displayGrid.minorStep, gridSize)} µm)`
+              ? `Visible grid & snap locked to defined grid (${formatGridValue(activeSnapStep, gridSize)} µm, fixed across zoom levels) · Click or press Shift+G for Snap label`
+              : `Anchor & placement locked to defined grid (${formatGridValue(gridSize, gridSize)} µm, fixed across zoom levels) · Click or press Shift+G for Vis label`
           }
           aria-pressed={snapToVisibleGrid}
         >

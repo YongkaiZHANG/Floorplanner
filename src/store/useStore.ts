@@ -250,7 +250,7 @@ export type ProjectState = {
   showAutoDim: boolean;
   showOverlapDrc: boolean;
   showGrid: boolean;
-  /** When enabled, canvas anchor/drag/placement snap to visible grid lines (exact multiples of gridSize). */
+  /** Transient HUD preference for displaying the fixed-grid snap badge as Vis vs Snap (always equal to gridSize). */
   snapToVisibleGrid: boolean;
   
   placementMasterId: string | null;
