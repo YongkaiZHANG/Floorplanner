@@ -968,6 +968,7 @@ type CommitPatch = Partial<ProjectSnapshot> & {
   activeCoordinateMode?: CellViewCoordinateMode;
   openViewIds?: Array<string | null>;
   viewBreadcrumb?: string[];
+  descendStack?: DescendContextFrame[];
 };
 
 const commitProjectPatch = (
@@ -995,6 +996,7 @@ const commitProjectPatch = (
     rootView: nextRootView,
     activeCellId: nextActiveCellId,
     viewBreadcrumb: patch.viewBreadcrumb !== undefined ? patch.viewBreadcrumb : state.viewBreadcrumb,
+    descendStack: patch.descendStack !== undefined ? patch.descendStack : state.descendStack,
   };
   const syncedCellViews = mergeActiveViewIntoCellViews(nextStateLike);
   const after = getProjectSnapshot({ ...nextStateLike, cellViews: syncedCellViews });
@@ -1022,6 +1024,54 @@ const applyCanonicalSnapshot = (
     const viewBreadcrumb = filteredBreadcrumb.at(-1) === state.activeCellId
       ? filteredBreadcrumb
       : [...filteredBreadcrumb, state.activeCellId];
+    // Re-validate Edit-in-Place descendStack against the restored snapshot so undone/moved ancestor instances stay accurate
+    let nextDescendStack: DescendContextFrame[] = [];
+    if (state.descendStack.length > 0 && state.descendStack.at(-1)?.cellId === state.activeCellId) {
+      const rebuilt: DescendContextFrame[] = [];
+      let valid = true;
+      for (const frame of state.descendStack) {
+        if (!snapshot.masterCells[frame.cellId]) {
+          valid = false;
+          break;
+        }
+        if (frame.parentCellId === null) {
+          const restoredInst = snapshot.instances.find(i => i.id === frame.instanceId && i.cellId === frame.cellId);
+          if (!restoredInst) {
+            valid = false;
+            break;
+          }
+          rebuilt.push({
+            ...frame,
+            instanceName: restoredInst.name,
+            x: restoredInst.x,
+            y: restoredInst.y,
+            orientation: restoredInst.orientation,
+            parentCoordinateMode: 'origin',
+            parentWidth: snapshot.topWidth,
+            parentHeight: snapshot.topHeight,
+          });
+        } else {
+          const parentMaster = snapshot.masterCells[frame.parentCellId];
+          const parentView = cellViews[frame.parentCellId];
+          const restoredInst = parentView?.instances.find(i => i.id === frame.instanceId && i.cellId === frame.cellId);
+          if (!parentMaster || !restoredInst) {
+            valid = false;
+            break;
+          }
+          rebuilt.push({
+            ...frame,
+            instanceName: restoredInst.name,
+            x: restoredInst.x,
+            y: restoredInst.y,
+            orientation: restoredInst.orientation,
+            parentCoordinateMode: resolveStoredCoordinateMode(parentView),
+            parentWidth: parentMaster.width,
+            parentHeight: parentMaster.height,
+          });
+        }
+      }
+      if (valid) nextDescendStack = rebuilt;
+    }
     return {
       gridSize: snapshot.gridSize,
       libraries,
@@ -1051,6 +1101,7 @@ const applyCanonicalSnapshot = (
       activeCellId: state.activeCellId,
       openViewIds: ensureOpenViewTab(state.openViewIds, state.activeCellId, snapshot.masterCells),
       viewBreadcrumb,
+      descendStack: nextDescendStack,
       history,
       ...selectionAfterInstancesChange(state, instances),
       selectedShapeId: state.selectedShapeId && shapes.some(s => s.id === state.selectedShapeId) ? state.selectedShapeId : null,
@@ -2371,10 +2422,11 @@ export const useStore = create<ProjectState>((set) => ({
       };
       const shapes = [...state.shapes, shape];
       const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
+      const shouldSwitchToOrigin = Boolean(state.activeCellId) && (state.activeCoordinateMode === 'origin' || state.instances.length === 0);
       return {
         ...commitProjectPatch(state, `Draw ${layer}/${purpose} rect`, {
           shapes,
-          ...(state.activeCellId ? { activeCoordinateMode: 'origin' as CellViewCoordinateMode } : {}),
+          ...(shouldSwitchToOrigin ? { activeCoordinateMode: 'origin' as CellViewCoordinateMode } : {}),
           ...(boundsSync ?? {}),
         }),
         selectedShapeId: id,
@@ -3783,7 +3835,21 @@ export const useStore = create<ProjectState>((set) => ({
   toggleGrid: () => set((state) => ({ showGrid: !state.showGrid })),
   toggleSnapToVisibleGrid: () => set((state) => ({ snapToVisibleGrid: !state.snapToVisibleGrid })),
   toggleEditInPlaceContext: () => set((state) => ({ showEditInPlaceContext: !state.showEditInPlaceContext })),
-  togglePartialSelectMode: () => set((state) => ({ partialSelectMode: !state.partialSelectMode })),
+  togglePartialSelectMode: () => set((state) => {
+    const next = !state.partialSelectMode;
+    const switchToSelect = next && state.appMode !== 'select' && state.appMode !== 'stretch';
+    return {
+      partialSelectMode: next,
+      ...(switchToSelect ? {
+        appMode: 'select' as AppMode,
+        placementMasterId: null,
+        pendingInstanceArray: null,
+        pendingManualPadGroup: null,
+        pendingPixelArraySize: null,
+        edgeAlignmentSession: null,
+      } : {}),
+    };
+  }),
 
   loadProject: (data) => set((state) => {
     const gridSize = data.gridSize ?? state.gridSize;

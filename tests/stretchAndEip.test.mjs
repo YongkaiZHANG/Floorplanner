@@ -191,3 +191,51 @@ test('Virtuoso Edit-in-Place (X) descent tracks context stack, partial stretch u
   useStore.getState().undo();
   assert.equal(useStore.getState().masterCells[coreId].width, 200);
 });
+
+test('undo inside Edit-in-Place refreshes or clears descendStack, deleteMasterCell clears EIP stack, and F4 switches out of conflicting modes', () => {
+  useStore.getState().loadProject(baseProject);
+  useStore.getState().createEmptyCell('xxxL_TOP', 'EIP_UNDO', '#3b82f6', true);
+  const cellId = useStore.getState().activeCellId;
+  useStore.getState().addShape({ layer: 'text', purpose: 'drawing', x: 0, y: 0, width: 100, height: 80 });
+
+  useStore.getState().openCellView(null);
+  useStore.getState().placeInstance(cellId, 0, 0, 'R0', 'I0');
+  const instId = useStore.getState().instances[0].id;
+  useStore.getState().updateInstancePosition(instId, 50, 20);
+
+  // Descend into moved I0 -> descendStack records (50, 20)
+  useStore.getState().descendIntoInstance(instId);
+  assert.equal(useStore.getState().descendStack[0].x, 50);
+  assert.equal(useStore.getState().descendStack[0].y, 20);
+
+  // Undo the move while inside EIP -> descendStack refreshes to (0, 0)
+  useStore.getState().undo();
+  assert.equal(useStore.getState().descendStack.length, 1);
+  assert.equal(useStore.getState().descendStack[0].x, 0);
+  assert.equal(useStore.getState().descendStack[0].y, 0);
+
+  // Undo the placement itself while inside EIP -> descendStack clears cleanly instead of holding a dangling instanceId
+  useStore.getState().undo();
+  assert.equal(useStore.getState().descendStack.length, 0);
+
+  // Redo restores placement; descend again, then deleteMasterCell clears descendStack and returns to top
+  useStore.getState().redo();
+  useStore.getState().openCellView(null);
+  useStore.getState().descendIntoInstance(useStore.getState().instances[0].id);
+  assert.equal(useStore.getState().descendStack.length, 1);
+  useStore.getState().deleteMasterCell(cellId);
+  assert.equal(useStore.getState().activeCellId, null);
+  assert.equal(useStore.getState().descendStack.length, 0);
+
+  // F4 (togglePartialSelectMode) switches out of 'rect' into 'select', but preserves 'stretch'
+  useStore.getState().setAppMode('rect');
+  if (useStore.getState().partialSelectMode) useStore.getState().togglePartialSelectMode();
+  useStore.getState().togglePartialSelectMode();
+  assert.equal(useStore.getState().partialSelectMode, true);
+  assert.equal(useStore.getState().appMode, 'select');
+  useStore.getState().togglePartialSelectMode();
+  useStore.getState().setAppMode('stretch');
+  useStore.getState().togglePartialSelectMode();
+  assert.equal(useStore.getState().partialSelectMode, true);
+  assert.equal(useStore.getState().appMode, 'stretch');
+});

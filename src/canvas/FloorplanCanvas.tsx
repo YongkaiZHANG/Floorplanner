@@ -183,11 +183,12 @@ export const FloorplanCanvas: React.FC = () => {
   }, [isOriginSubCell, activeMasterCell, topWidth, topHeight]);
 
   const isSubCellEmpty = isSubCellCanvas && shapes.length === 0 && instances.length === 0 && !pixelArray;
+  const isTrulyEmptySubCell = isSubCellEmpty && isCellEmpty({ width: topWidth, height: topHeight });
   const gridExtentUm = useMemo(() => {
     if (!isSubCellCanvas) {
       return { minX: -topWidth / 2, maxX: topWidth / 2, minY: -topHeight / 2, maxY: topHeight / 2 };
     }
-    if (isSubCellEmpty || topWidth <= 0 || topHeight <= 0) {
+    if (isTrulyEmptySubCell || topWidth <= 0 || topHeight <= 0) {
       const halfSpan = Math.max(gridSize * 200, 200);
       return { minX: -halfSpan, maxX: halfSpan, minY: -halfSpan * 0.75, maxY: halfSpan * 0.75 };
     }
@@ -197,7 +198,7 @@ export const FloorplanCanvas: React.FC = () => {
       minY: Math.min(activeBoundaryBox.minY, 0),
       maxY: Math.max(activeBoundaryBox.maxY, 0),
     };
-  }, [isSubCellCanvas, isSubCellEmpty, topWidth, topHeight, activeBoundaryBox, gridSize]);
+  }, [isSubCellCanvas, isTrulyEmptySubCell, topWidth, topHeight, activeBoundaryBox, gridSize]);
 
   const displayGrid = useMemo(
     () => {
@@ -291,7 +292,7 @@ export const FloorplanCanvas: React.FC = () => {
       let maxY = activeBoundaryBox.maxY;
 
       if (isSubCellCanvas) {
-        if (isSubCellEmpty || topWidth <= 0 || topHeight <= 0) {
+        if (isTrulyEmptySubCell || topWidth <= 0 || topHeight <= 0) {
           const halfW = Math.max(gridSize * 200, 200);
           const halfH = Math.max(gridSize * 150, 150);
           minX = -halfW;
@@ -334,7 +335,7 @@ export const FloorplanCanvas: React.FC = () => {
         y: offsetHeight / 2 + centerY * initialScale, 
       }); 
     }
-  }, [activeBoundaryBox, isSubCellCanvas, isSubCellEmpty, topWidth, topHeight, gridSize, descendStack.length, showEditInPlaceContext]);
+  }, [activeBoundaryBox, isSubCellCanvas, isTrulyEmptySubCell, topWidth, topHeight, gridSize, descendStack.length, showEditInPlaceContext]);
 
   const fitViewRef = useRef(fitView);
   useEffect(() => {
@@ -493,7 +494,7 @@ export const FloorplanCanvas: React.FC = () => {
           break;
         case 'q':
           e.preventDefault();
-          if (state.selectedInstanceId) {
+          if (state.selectedInstanceId || state.selectedShapeId || state.pixelArraySelected) {
             state.setRightSidebarPinned(!state.rightSidebarPinned);
           }
           break;
@@ -641,6 +642,11 @@ export const FloorplanCanvas: React.FC = () => {
 
     const handleWindowBlur = () => {
       setIsSpaceDown(false);
+      if (stretchDraggingRef.current) {
+        stretchDraggingRef.current = false;
+        stretchSessionRef.current = null;
+        setStretchSession(null);
+      }
     };
     
     window.addEventListener('keydown', handleKeyDown);
@@ -1233,6 +1239,8 @@ export const FloorplanCanvas: React.FC = () => {
     }
     if (stretchDraggingRef.current) {
       stretchDraggingRef.current = false;
+      stretchSessionRef.current = null;
+      setStretchSession(null);
     }
     if (partialMarqueeRef.current) {
       finishPartialMarquee(e.evt?.shiftKey ?? false);
@@ -2224,7 +2232,9 @@ export const FloorplanCanvas: React.FC = () => {
     visited: Set<string> = new Set(),
   ): React.ReactNode => {
     if (depth > 3 || visited.has(cellId)) return null;
-    const subView = cellViews[cellId];
+    const subView = cellId === activeCellId
+      ? { shapes, instances, coordinateMode: activeCoordinateMode }
+      : cellViews[cellId];
     if (!subView) return null;
     const subShapes = subView.shapes ?? [];
     const subInstances = subView.instances ?? [];
@@ -2284,7 +2294,9 @@ export const FloorplanCanvas: React.FC = () => {
           const subOy = (subMaster.originY ?? 0) * SCALE_FACTOR;
           const subW = subMaster.width * SCALE_FACTOR;
           const subH = subMaster.height * SCALE_FACTOR;
-          const subViewContent = cellViews[subInst.cellId];
+          const subViewContent = subInst.cellId === activeCellId
+            ? { shapes, instances }
+            : cellViews[subInst.cellId];
           const childHasContent = (subViewContent?.shapes?.length ?? 0) > 0 || (subViewContent?.instances?.length ?? 0) > 0;
           return (
             <Group
@@ -2343,7 +2355,7 @@ export const FloorplanCanvas: React.FC = () => {
         scaleX={stageScale}
         scaleY={-stageScale} 
         onDblClick={(e) => {
-          if (appMode !== 'select') return;
+          if (appMode !== 'select' || partialSelectMode) return;
           let node = e.target as Konva.Node | null;
           while (node) {
             if (node.name() === 'pixel-array') {
@@ -2469,22 +2481,32 @@ export const FloorplanCanvas: React.FC = () => {
 
           {/* Cadence Virtuoso Edit-in-Place (X) dimmed ancestor/top context rendered in exact physical alignment */}
           {isSubCellCanvas && descendStack.length > 0 && showEditInPlaceContext && descendStack.map((frame, levelIdx) => {
-            const chain = descendStack.slice(levelIdx);
+            const chain = descendStack.slice(levelIdx).map(step => {
+              const liveParent = step.parentCellId ? masterCells[step.parentCellId] : null;
+              return {
+                ...step,
+                parentWidth: liveParent?.width ?? (step.parentCellId === null ? (rootView?.topWidth ?? step.parentWidth) : step.parentWidth),
+                parentHeight: liveParent?.height ?? (step.parentCellId === null ? (rootView?.topHeight ?? step.parentHeight) : step.parentHeight),
+              };
+            });
             const invTransform = computeAncestorToActiveTransform(chain, activeCoordinateMode, topWidth, topHeight);
             const invProps = getTransformProps(invTransform.orientation);
-            const isRootLevel = frame.parentCellId === null;
+            const parentId = frame.parentCellId;
+            const isRootLevel = parentId === null;
+            const parentView = parentId ? cellViews[parentId] : undefined;
+            const parentMaster = parentId ? masterCells[parentId] : undefined;
             const parentInstances = isRootLevel
               ? (rootView?.instances ?? [])
-              : (cellViews[frame.parentCellId!]?.instances ?? []);
+              : (parentView?.instances ?? []);
             const parentShapes = isRootLevel
               ? (rootView?.shapes ?? [])
-              : (cellViews[frame.parentCellId!]?.shapes ?? []);
+              : (parentView?.shapes ?? []);
             const parentPixelArray = isRootLevel
               ? (rootView?.pixelArray ?? null)
-              : (cellViews[frame.parentCellId!]?.pixelArray ?? null);
-            const parentW = isRootLevel ? (rootView?.topWidth ?? frame.parentWidth) : frame.parentWidth;
-            const parentH = isRootLevel ? (rootView?.topHeight ?? frame.parentHeight) : frame.parentHeight;
-            const parentName = isRootLevel ? (rootView?.topCellName ?? 'TOP') : (masterCells[frame.parentCellId!]?.cellName ?? 'PARENT');
+              : (parentView?.pixelArray ?? null);
+            const parentW = isRootLevel ? (rootView?.topWidth ?? frame.parentWidth) : (parentMaster?.width ?? frame.parentWidth);
+            const parentH = isRootLevel ? (rootView?.topHeight ?? frame.parentHeight) : (parentMaster?.height ?? frame.parentHeight);
+            const parentName = isRootLevel ? (rootView?.topCellName ?? 'TOP') : (parentMaster?.cellName ?? 'PARENT');
             const levelOpacity = levelIdx === descendStack.length - 1 ? 0.30 : 0.17;
             const siblingInstances = parentInstances.filter(inst => inst.id !== frame.instanceId);
 
@@ -2558,7 +2580,9 @@ export const FloorplanCanvas: React.FC = () => {
                   const sibOy = (sibMaster.originY ?? 0) * SCALE_FACTOR;
                   const sibW = sibMaster.width * SCALE_FACTOR;
                   const sibH = sibMaster.height * SCALE_FACTOR;
-                  const sibView = cellViews[sib.cellId];
+                  const sibView = sib.cellId === activeCellId
+                    ? { shapes, instances }
+                    : cellViews[sib.cellId];
                   const sibHasContent = (sibView?.shapes?.length ?? 0) > 0 || (sibView?.instances?.length ?? 0) > 0;
                   return (
                     <Group
@@ -2631,9 +2655,10 @@ export const FloorplanCanvas: React.FC = () => {
               name="pixel-array"
               x={pixelArray.x * SCALE_FACTOR}
               y={pixelArray.y * SCALE_FACTOR}
-              draggable={appMode === 'select' && !edgeAlignmentSession}
+              draggable={appMode === 'select' && !partialSelectMode && !edgeAlignmentSession}
               dragBoundFunc={pixelArrayDragBoundFunc}
               onClick={(event) => {
+                if (appMode === 'stretch' || partialSelectMode) return;
                 event.cancelBubble = true;
                 if (appMode === 'select' && !edgeAlignmentSession) setPixelArraySelected(true);
               }}

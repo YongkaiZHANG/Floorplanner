@@ -161,11 +161,14 @@ export const VirtuosoCellViewBar: React.FC = () => {
             const tabMaster = tabId ? masterCells[tabId] : null;
             if (!isRoot && !tabMaster) return null;
             const isActive = activeCellId === tabId;
-            const lib = isRoot ? rootLibName : tabMaster!.libName;
-            const cell = isRoot ? rootCellName : tabMaster!.cellName;
+            const lib = isRoot ? rootLibName : (tabMaster?.libName ?? '');
+            const cell = isRoot ? rootCellName : (tabMaster?.cellName ?? '');
+            const tabColor = isRoot ? '#2997ff' : (tabMaster?.color ?? '#3b82f6');
             const dims = isRoot
               ? `${rootWidth.toFixed(1)} × ${rootHeight.toFixed(1)} µm`
-              : `${tabMaster!.width.toFixed(1)} × ${tabMaster!.height.toFixed(1)} µm`;
+              : tabMaster && tabMaster.width > 0 && tabMaster.height > 0
+                ? `${tabMaster.width.toFixed(1)} × ${tabMaster.height.toFixed(1)} µm`
+                : 'empty';
             return (
               <div
                 key={tabId ?? '__root__'}
@@ -187,7 +190,7 @@ export const VirtuosoCellViewBar: React.FC = () => {
                 >
                   <span
                     className="virtuoso-tab__swatch"
-                    style={{ backgroundColor: isRoot ? '#2997ff' : tabMaster!.color }}
+                    style={{ backgroundColor: tabColor }}
                   />
                   <span className="virtuoso-tab__lib">{lib}</span>
                   <span className="virtuoso-tab__sep">/</span>
