@@ -1,6 +1,6 @@
 import React from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
-import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight } from 'react-icons/fi';
+import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiColumns } from 'react-icons/fi';
 import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
 
@@ -12,6 +12,7 @@ export const PropertiesPanel: React.FC = () => {
     instances,
     cellViews,
     descendIntoInstance,
+    openCellViewInNewWindow,
     gridSize,
     selectedInstanceId,
     selectedInstanceIds,
@@ -331,20 +332,31 @@ export const PropertiesPanel: React.FC = () => {
                   <span className="prop-value pad-badge">Edge-bound pad</span>
                 </div>
               )}
-              <button
-                type="button"
-                className="btn descend-cell-btn"
-                onClick={() => descendIntoInstance(selectedInstance.id)}
-                title={`Descend into ${masterCell.libName}/${masterCell.cellName} layout view (E)`}
-              >
-                <FiCornerDownRight />
-                <span>
-                  Descend into {masterCell.cellName}
-                  {(cellViews[masterCell.id]?.instances.length ?? 0) > 0
-                    ? ` (${cellViews[masterCell.id].instances.length})`
-                    : ''}
-                </span>
-              </button>
+              <div className="hier-actions-stack">
+                <button
+                  type="button"
+                  className="btn descend-cell-btn"
+                  onClick={() => descendIntoInstance(selectedInstance.id)}
+                  title={`Descend Edit into ${masterCell.libName}/${masterCell.cellName}/layout (X)`}
+                >
+                  <FiCornerDownRight />
+                  <span>
+                    Descend Edit (X)
+                    {(cellViews[masterCell.id]?.instances.length ?? 0) > 0
+                      ? ` · ${cellViews[masterCell.id].instances.length}`
+                      : ''}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="btn new-window-btn"
+                  onClick={() => openCellViewInNewWindow(masterCell.id)}
+                  title={`Open ${masterCell.libName}/${masterCell.cellName}/layout in a separate Virtuoso window`}
+                >
+                  <FiColumns />
+                  <span>Open in New Window</span>
+                </button>
+              </div>
             </div>
 
             <div className="prop-section">

@@ -16,7 +16,7 @@ import { panViewportByArrow } from '../utils/viewport';
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { FiArrowUp, FiChevronRight, FiGrid, FiLayers, FiMaximize2, FiMinus, FiPlus, FiX } from 'react-icons/fi';
+import { FiGrid, FiMaximize2, FiMinus, FiPlus } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
@@ -70,21 +70,15 @@ export const FloorplanCanvas: React.FC = () => {
     setAppMode,
     topWidth,
     topHeight,
-    topLibName,
     topCellName,
     padInset,
     masterCells, 
     instances,
     cellViews,
     activeCellId,
+    windowLayoutMode,
     openViewIds,
-    viewBreadcrumb,
-    rootView,
-    openCellView,
-    closeCellViewTab,
     descendIntoInstance,
-    ascendToParent,
-    navigateBreadcrumb,
     rulers,
     gridSize, 
     updateInstancePosition,
@@ -145,8 +139,11 @@ export const FloorplanCanvas: React.FC = () => {
   }, [topWidth, topHeight]);
 
   useEffect(() => {
-    fitView();
-  }, [activeCellId, fitView]);
+    const timer = window.setTimeout(() => {
+      fitView();
+    }, 20);
+    return () => window.clearTimeout(timer);
+  }, [activeCellId, windowLayoutMode, openViewIds.length, fitView]);
 
   useEffect(() => {
     const updateSize = () => {
@@ -1570,8 +1567,7 @@ export const FloorplanCanvas: React.FC = () => {
             }
             const id = node.id();
             if (id && instances.some(instance => instance.id === id)) {
-              setSelectedInstance(id);
-              setRightSidebarPinned(true);
+              descendIntoInstance(id);
               return;
             }
             node = node.getParent();
@@ -2453,98 +2449,6 @@ export const FloorplanCanvas: React.FC = () => {
           })()}
         </Layer>
       </Stage>
-      {(openViewIds.length > 1 || activeCellId !== null || Object.keys(cellViews).length > 0) && (
-        <div className="virtuoso-window-bar">
-          {openViewIds.length > 1 && (
-            <div className="view-tabs" role="tablist" aria-label="Open cell view tabs">
-              {openViewIds.map(tabId => {
-                const isRootTab = tabId === null;
-                const tabMaster = tabId ? masterCells[tabId] : null;
-                if (!isRootTab && !tabMaster) return null;
-                const isActive = activeCellId === tabId;
-                const tabLib = isRootTab ? (rootView?.topLibName ?? topLibName) : tabMaster!.libName;
-                const tabCell = isRootTab ? (rootView?.topCellName ?? topCellName) : tabMaster!.cellName;
-                return (
-                  <div key={tabId ?? '__root__'} className={`view-tab${isActive ? ' active' : ''}`}>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={isActive}
-                      className="view-tab__btn"
-                      onClick={() => openCellView(tabId)}
-                      title={`Switch to ${tabLib}/${tabCell}/layout`}
-                    >
-                      <span className="view-tab__lib">{tabLib}</span>
-                      <span className="view-tab__sep">/</span>
-                      <span>{tabCell}</span>
-                      {isRootTab && <span className="view-tab__badge">TOP</span>}
-                    </button>
-                    {openViewIds.length > 1 && (
-                      <button
-                        type="button"
-                        className="view-tab__close"
-                        onClick={() => closeCellViewTab(tabId)}
-                        title={`Close ${tabCell} tab`}
-                        aria-label={`Close ${tabCell} tab`}
-                      >
-                        <FiX />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {(activeCellId !== null || Object.keys(cellViews).length > 0) && (
-            <nav className="hierarchy-bar" aria-label="Cell view hierarchy">
-              <FiLayers className="hierarchy-bar__icon" />
-              <button
-                type="button"
-                className={`hierarchy-bar__crumb${activeCellId === null ? ' active' : ''}`}
-                onClick={() => navigateBreadcrumb(-1)}
-                title="Switch to Top Cell view"
-              >
-                <span className="hierarchy-bar__lib">{rootView?.topLibName ?? topLibName}</span>
-                <span className="hierarchy-bar__sep">/</span>
-                <span>{rootView?.topCellName ?? topCellName}</span>
-              </button>
-              {viewBreadcrumb.map((cellId, idx) => {
-                const crumbMaster = masterCells[cellId];
-                if (!crumbMaster) return null;
-                const isCurrent = idx === viewBreadcrumb.length - 1;
-                return (
-                  <React.Fragment key={`${cellId}-${idx}`}>
-                    <FiChevronRight className="hierarchy-bar__chevron" />
-                    <button
-                      type="button"
-                      className={`hierarchy-bar__crumb${isCurrent ? ' active' : ''}`}
-                      onClick={() => navigateBreadcrumb(idx)}
-                      title={`Open ${crumbMaster.libName}/${crumbMaster.cellName}`}
-                    >
-                      <span className="hierarchy-bar__lib">{crumbMaster.libName}</span>
-                      <span className="hierarchy-bar__sep">/</span>
-                      <span>{crumbMaster.cellName}</span>
-                    </button>
-                  </React.Fragment>
-                );
-              })}
-              {activeCellId !== null && (
-                <>
-                  <span className="hierarchy-bar__divider" aria-hidden="true" />
-                  <button
-                    type="button"
-                    className="hierarchy-bar__up"
-                    onClick={ascendToParent}
-                    title="Return to parent cell view (Ctrl+B / Shift+B)"
-                  >
-                    <FiArrowUp /> Return
-                  </button>
-                </>
-              )}
-            </nav>
-          )}
-        </div>
-      )}
       {appMode === 'measure' && (
         <div className="coordinate-overlay measure-mode-hint">
           Measure Mode · Click two snapped points · Press O for Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc cancels

@@ -2,7 +2,7 @@ import React from 'react';
 import { Topbar } from './components/Topbar';
 import { Sidebar } from './components/Sidebar';
 import { PropertiesPanel } from './components/PropertiesPanel';
-import { FloorplanCanvas } from './canvas/FloorplanCanvas';
+import { VirtuosoWorkspace } from './components/VirtuosoWorkspace';
 import './App.css';
 
 const App: React.FC = () => {
@@ -11,7 +11,7 @@ const App: React.FC = () => {
       <Topbar />
       <div className="main-content">
         <Sidebar />
-        <FloorplanCanvas />
+        <VirtuosoWorkspace />
         <PropertiesPanel />
       </div>
     </div>

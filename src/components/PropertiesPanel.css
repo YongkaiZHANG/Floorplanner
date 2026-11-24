@@ -192,17 +192,36 @@
   margin-bottom: 8px;
 }
 
+.hier-actions-stack {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .descend-cell-btn {
   width: 100%;
-  margin-top: 12px;
   justify-content: center;
   border-color: rgba(41, 151, 255, 0.38);
-  background: rgba(41, 151, 255, 0.12);
+  background: rgba(41, 151, 255, 0.14);
   color: #64d2ff;
 }
 
 .descend-cell-btn:hover {
-  background: rgba(41, 151, 255, 0.22);
+  background: rgba(41, 151, 255, 0.24);
+  color: #ffffff;
+}
+
+.new-window-btn {
+  width: 100%;
+  justify-content: center;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.new-window-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
   color: #ffffff;
 }
 

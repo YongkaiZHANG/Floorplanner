@@ -950,3 +950,34 @@ test('creating a library like xxxL_TOP can move all cells or individual cells in
     /duplicate cell name "ADC"/,
   );
 });
+
+test('opening multiple IP cellviews in separate split windows manages focus, layout mode, and tab closing', () => {
+  useStore.getState().loadProject({ ...emptyProject, topLibName: 'xxxL_TOP', topCellName: 'top_asic' });
+  useStore.getState().addMasterCell('xxxL_TOP', 'CORE', 60, 40, '#2563eb');
+  useStore.getState().addMasterCell('xxxL_TOP', 'TM', 20, 15, '#22c55e');
+  const core = Object.values(useStore.getState().masterCells).find(m => m.cellName === 'CORE');
+  const tm = Object.values(useStore.getState().masterCells).find(m => m.cellName === 'TM');
+
+  assert.equal(useStore.getState().windowLayoutMode, 'tabs');
+  assert.deepEqual(useStore.getState().openViewIds, [null]);
+
+  // Open CORE in a separate split window alongside top_asic
+  useStore.getState().openCellViewInNewWindow(core.id);
+  assert.equal(useStore.getState().activeCellId, core.id);
+  assert.deepEqual(useStore.getState().openViewIds, [null, core.id]);
+  assert.equal(useStore.getState().windowLayoutMode, 'split');
+
+  // Open TM in a third window
+  useStore.getState().openCellViewInNewWindow(tm.id);
+  assert.equal(useStore.getState().activeCellId, tm.id);
+  assert.deepEqual(useStore.getState().openViewIds, [null, core.id, tm.id]);
+  assert.equal(useStore.getState().windowLayoutMode, 'split');
+
+  // Closing tabs back down to 1 window automatically returns to 'tabs' mode
+  useStore.getState().closeCellViewTab(tm.id);
+  assert.equal(useStore.getState().activeCellId, core.id);
+  assert.equal(useStore.getState().windowLayoutMode, 'split');
+  useStore.getState().closeCellViewTab(core.id);
+  assert.equal(useStore.getState().activeCellId, null);
+  assert.equal(useStore.getState().windowLayoutMode, 'tabs');
+});

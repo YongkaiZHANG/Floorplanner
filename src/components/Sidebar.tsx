@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
 import type { Cell, PadSide, PendingInstanceArray } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiEdit3, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight, FiArrowDownCircle } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiEdit3, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight, FiArrowDownCircle, FiColumns } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
 import { wouldCreateHierarchyCycle } from '../utils/hierarchy';
@@ -28,7 +28,7 @@ export const Sidebar: React.FC = () => {
     setTopConfig, setPadInset,
     masterCells, instances, cellViews, activeCellId, rootView,
     createLibrary, renameLibrary, deleteLibrary, moveCellToLibrary, moveAllCellsToLibrary,
-    openCellView, descendIntoInstance,
+    openCellView, openCellViewInNewWindow, descendIntoInstance,
     selectedInstanceIds, setSelectedInstance,
     addMasterCell, updateMasterCell, deleteMasterCell, createPadRow, prepareManualPadPlacement,
     pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
@@ -583,9 +583,16 @@ export const Sidebar: React.FC = () => {
                             <button
                               className={`icon-btn${activeCellId === null ? ' icon-btn--active' : ''}`}
                               onClick={() => openCellView(null)}
-                              title="Open Top Cell layout view"
+                              title={`Open ${rootCellName} layout view`}
                             >
                               <FiEdit3 />
+                            </button>
+                            <button
+                              className="icon-btn"
+                              onClick={() => openCellViewInNewWindow(null)}
+                              title={`Open ${rootCellName} in separate split window`}
+                            >
+                              <FiColumns />
                             </button>
                             <button
                               className="icon-btn"
@@ -655,6 +662,13 @@ export const Sidebar: React.FC = () => {
                                 title={`Open ${cell.cellName} layout view`}
                               >
                                 <FiEdit3 />
+                              </button>
+                              <button
+                                className="icon-btn"
+                                onClick={() => openCellViewInNewWindow(cell.id)}
+                                title={`Open ${cell.cellName} in separate split window`}
+                              >
+                                <FiColumns />
                               </button>
                               <button className="icon-btn" onClick={() => openEditModal(cell)} title="Cell Properties">
                                 <FiSettings />

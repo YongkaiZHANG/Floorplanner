@@ -142,8 +142,10 @@ export type ProjectState = {
   cellViews: Record<string, CellViewContent>;
   /** Currently open master cell ID on canvas, or null when editing the Top Cell. */
   activeCellId: string | null;
-  /** Open Virtuoso cell view tabs (null represents the Top Cell). */
+  /** Open Virtuoso cell view windows/tabs (null represents the Top Cell). */
   openViewIds: Array<string | null>;
+  /** Single tabbed window vs side-by-side split Virtuoso cellview windows. */
+  windowLayoutMode: 'tabs' | 'split';
   /** Hierarchy navigation stack of master cell IDs from top child to activeCellId. */
   viewBreadcrumb: string[];
   /** Saved Top Cell state while descended into a master cell layout view. */
@@ -188,6 +190,8 @@ export type ProjectState = {
   moveCellToLibrary: (cellId: string | null, targetLib: string) => void;
   moveAllCellsToLibrary: (targetLib: string) => void;
   openCellView: (cellId: string | null) => void;
+  openCellViewInNewWindow: (cellId: string | null) => void;
+  setWindowLayoutMode: (mode: 'tabs' | 'split') => void;
   closeCellViewTab: (cellId: string | null) => void;
   descendIntoInstance: (instanceId: string) => void;
   ascendToParent: () => void;
@@ -1217,6 +1221,7 @@ export const useStore = create<ProjectState>((set) => ({
   cellViews: {},
   activeCellId: null,
   openViewIds: [null],
+  windowLayoutMode: 'tabs',
   viewBreadcrumb: [],
   rootView: null,
   selectedInstanceId: null,
@@ -1617,13 +1622,37 @@ export const useStore = create<ProjectState>((set) => ({
   openCellView: (cellId) => set((state) => (
     switchToCellView(state, cellId, cellId ? [cellId] : [])
   )),
+  openCellViewInNewWindow: (cellId) => set((state) => {
+    if (cellId !== null && !state.masterCells[cellId]) return state;
+    const nextOpenViewIds = ensureOpenViewTab(state.openViewIds, cellId, state.masterCells);
+    if (cellId === state.activeCellId) {
+      return {
+        openViewIds: nextOpenViewIds,
+        windowLayoutMode: nextOpenViewIds.length >= 2 ? 'split' : state.windowLayoutMode,
+      };
+    }
+    const switched = switchToCellView(
+      { ...state, openViewIds: nextOpenViewIds },
+      cellId,
+      cellId ? [cellId] : [],
+    );
+    return {
+      ...switched,
+      openViewIds: nextOpenViewIds,
+      windowLayoutMode: nextOpenViewIds.length >= 2 ? 'split' : 'tabs',
+    };
+  }),
+  setWindowLayoutMode: (mode) => set((state) => ({
+    windowLayoutMode: mode === 'split' && state.openViewIds.length < 2 ? 'tabs' : mode,
+  })),
   closeCellViewTab: (cellId) => set((state) => {
     if (state.openViewIds.length <= 1) return state;
     const idx = state.openViewIds.indexOf(cellId);
     if (idx === -1) return state;
     const nextOpenViewIds = state.openViewIds.filter(id => id !== cellId);
+    const nextLayoutMode = nextOpenViewIds.length < 2 ? 'tabs' : state.windowLayoutMode;
     if (state.activeCellId !== cellId) {
-      return { openViewIds: nextOpenViewIds };
+      return { openViewIds: nextOpenViewIds, windowLayoutMode: nextLayoutMode };
     }
     const fallbackTarget = nextOpenViewIds[Math.max(0, idx - 1)] ?? null;
     const switched = switchToCellView(
@@ -1631,7 +1660,7 @@ export const useStore = create<ProjectState>((set) => ({
       fallbackTarget,
       fallbackTarget ? [fallbackTarget] : [],
     );
-    return { ...switched, openViewIds: nextOpenViewIds };
+    return { ...switched, openViewIds: nextOpenViewIds, windowLayoutMode: nextLayoutMode };
   }),
   descendIntoInstance: (instanceId) => set((state) => {
     const inst = state.instances.find(item => item.id === instanceId);
@@ -2972,6 +3001,7 @@ export const useStore = create<ProjectState>((set) => ({
       cellViews: loadedCellViews,
       activeCellId: null,
       openViewIds: [null],
+      windowLayoutMode: 'tabs',
       viewBreadcrumb: [],
       rootView: null,
       pendingPixelArraySize: null,
