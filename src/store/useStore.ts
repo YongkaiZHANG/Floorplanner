@@ -182,9 +182,11 @@ export type ProjectState = {
   setRightSidebarPinned: (pinned: boolean) => void;
   setPlacement: (masterId: string | null, orientation?: string, arrayConfig?: PendingInstanceArray | null) => void;
   setPlacementOrientation: (orientation: string) => void;
-  createLibrary: (libName: string) => void;
+  createLibrary: (libName: string, moveAllCells?: boolean) => void;
   renameLibrary: (oldName: string, newName: string) => void;
   deleteLibrary: (libName: string) => void;
+  moveCellToLibrary: (cellId: string | null, targetLib: string) => void;
+  moveAllCellsToLibrary: (targetLib: string) => void;
   openCellView: (cellId: string | null) => void;
   closeCellViewTab: (cellId: string | null) => void;
   descendIntoInstance: (instanceId: string) => void;
@@ -1473,14 +1475,34 @@ export const useStore = create<ProjectState>((set) => ({
     };
   }),
   setPlacementOrientation: (orientation) => set({ placementOrientation: orientation }),
-  createLibrary: (rawLibName) => set((state) => {
+  createLibrary: (rawLibName, moveAllCells = false) => set((state) => {
     const libName = rawLibName.trim();
     if (!libName) throw new Error('Library name is required');
     if (state.libraries.includes(libName)) {
       throw new Error(`Library ${libName} already exists`);
     }
     const libraries = [...state.libraries, libName].sort((a, b) => a.localeCompare(b));
-    return commitProjectPatch(state, `Create library ${libName}`, { libraries });
+    if (!moveAllCells) {
+      return commitProjectPatch(state, `Create library ${libName}`, { libraries });
+    }
+    const rootId = getRootIdentity(state);
+    const seenNames = new Set<string>([rootId.topCellName]);
+    for (const master of Object.values(state.masterCells)) {
+      if (seenNames.has(master.cellName)) {
+        throw new Error(`Cannot move all cells into ${libName}: duplicate cell name "${master.cellName}" across libraries.`);
+      }
+      seenNames.add(master.cellName);
+    }
+    const masterCells = Object.fromEntries(
+      Object.entries(state.masterCells).map(([id, master]) => [id, { ...master, libName }]),
+    );
+    const rootView = state.rootView ? { ...state.rootView, topLibName: libName } : state.rootView;
+    return commitProjectPatch(state, `Create library ${libName} and move all cells`, {
+      libraries,
+      masterCells,
+      topLibName: libName,
+      ...(rootView !== state.rootView ? { rootView } : {}),
+    });
   }),
   renameLibrary: (rawOldName, rawNewName) => set((state) => {
     const oldName = rawOldName.trim();
@@ -1523,6 +1545,74 @@ export const useStore = create<ProjectState>((set) => ({
     }
     const libraries = state.libraries.filter(lib => lib !== libName);
     return commitProjectPatch(state, `Delete library ${libName}`, { libraries });
+  }),
+  moveCellToLibrary: (cellId, rawTargetLib) => set((state) => {
+    const targetLib = rawTargetLib.trim();
+    if (!targetLib) throw new Error('Target library name is required');
+    const rootId = getRootIdentity(state);
+    const libraries = state.libraries.includes(targetLib)
+      ? state.libraries
+      : [...state.libraries, targetLib].sort((a, b) => a.localeCompare(b));
+
+    if (cellId === null) {
+      if (rootId.topLibName === targetLib) return state;
+      if (Object.values(state.masterCells).some(m => m.libName === targetLib && m.cellName === rootId.topCellName)) {
+        throw new Error(`Cell ${targetLib}/${rootId.topCellName} already exists.`);
+      }
+      if (state.activeCellId !== null && state.rootView) {
+        return commitProjectPatch(state, `Move ${rootId.topCellName} to ${targetLib}`, {
+          libraries,
+          rootView: { ...state.rootView, topLibName: targetLib },
+        });
+      }
+      return commitProjectPatch(state, `Move ${rootId.topCellName} to ${targetLib}`, {
+        libraries,
+        topLibName: targetLib,
+      });
+    }
+
+    const master = state.masterCells[cellId];
+    if (!master || master.libName === targetLib) return state;
+    if (targetLib === rootId.topLibName && master.cellName === rootId.topCellName) {
+      throw new Error(`Cell ${targetLib}/${master.cellName} collides with Top Cell.`);
+    }
+    if (Object.values(state.masterCells).some(m => m.id !== cellId && m.libName === targetLib && m.cellName === master.cellName)) {
+      throw new Error(`Cell ${targetLib}/${master.cellName} already exists.`);
+    }
+    const masterCells = {
+      ...state.masterCells,
+      [cellId]: { ...master, libName: targetLib },
+    };
+    return commitProjectPatch(state, `Move ${master.cellName} to ${targetLib}`, {
+      libraries,
+      masterCells,
+      ...(state.activeCellId === cellId ? { topLibName: targetLib } : {}),
+    });
+  }),
+  moveAllCellsToLibrary: (rawTargetLib) => set((state) => {
+    const targetLib = rawTargetLib.trim();
+    if (!targetLib) throw new Error('Target library name is required');
+    const rootId = getRootIdentity(state);
+    const seenNames = new Set<string>([rootId.topCellName]);
+    for (const master of Object.values(state.masterCells)) {
+      if (seenNames.has(master.cellName)) {
+        throw new Error(`Cannot move all cells into ${targetLib}: duplicate cell name "${master.cellName}" across libraries.`);
+      }
+      seenNames.add(master.cellName);
+    }
+    const libraries = state.libraries.includes(targetLib)
+      ? state.libraries
+      : [...state.libraries, targetLib].sort((a, b) => a.localeCompare(b));
+    const masterCells = Object.fromEntries(
+      Object.entries(state.masterCells).map(([id, master]) => [id, { ...master, libName: targetLib }]),
+    );
+    const rootView = state.rootView ? { ...state.rootView, topLibName: targetLib } : state.rootView;
+    return commitProjectPatch(state, `Move all cells into ${targetLib}`, {
+      libraries,
+      masterCells,
+      topLibName: targetLib,
+      ...(rootView !== state.rootView ? { rootView } : {}),
+    });
   }),
   openCellView: (cellId) => set((state) => (
     switchToCellView(state, cellId, cellId ? [cellId] : [])

@@ -918,3 +918,35 @@ test('only Pixel Array may overlap other cells; regular cells reject overlap on 
   assert.equal(useStore.getState().pixelArray?.visible, true);
   assert.equal(useStore.getState().pixelArray?.width, 60);
 });
+
+test('creating a library like xxxL_TOP can move all cells or individual cells into it cleanly with undo', () => {
+  useStore.getState().loadProject({ ...emptyProject, topLibName: 'chip_lib', topCellName: 'top_asic' });
+  useStore.getState().addMasterCell('chip_lib', 'CORE', 30, 20, '#2563eb');
+  useStore.getState().addMasterCell('analog_lib', 'ADC', 10, 10, '#22c55e');
+
+  // Create xxxL_TOP and move all existing cells into it in one atomic undoable action
+  const beforeMoveAll = useStore.getState().history.past.length;
+  useStore.getState().createLibrary('xxxL_TOP', true);
+  assert.equal(useStore.getState().topLibName, 'xxxL_TOP');
+  assert.ok(Object.values(useStore.getState().masterCells).every(m => m.libName === 'xxxL_TOP'));
+  assert.equal(useStore.getState().history.past.length, beforeMoveAll + 1);
+
+  // Move one individual cell to another library, and move Top Cell to another library
+  const adc = Object.values(useStore.getState().masterCells).find(m => m.cellName === 'ADC');
+  useStore.getState().moveCellToLibrary(adc.id, 'analog_lib');
+  assert.equal(useStore.getState().masterCells[adc.id].libName, 'analog_lib');
+  useStore.getState().moveCellToLibrary(null, 'chip_lib');
+  assert.equal(useStore.getState().topLibName, 'chip_lib');
+
+  // Pull every cell back into xxxL_TOP with moveAllCellsToLibrary
+  useStore.getState().moveAllCellsToLibrary('xxxL_TOP');
+  assert.equal(useStore.getState().topLibName, 'xxxL_TOP');
+  assert.equal(useStore.getState().masterCells[adc.id].libName, 'xxxL_TOP');
+
+  // Duplicate cell name across libraries prevents colliding bulk move
+  useStore.getState().addMasterCell('analog_lib', 'ADC', 12, 12, '#f59e0b');
+  assert.throws(
+    () => useStore.getState().moveAllCellsToLibrary('xxxL_TOP'),
+    /duplicate cell name "ADC"/,
+  );
+});

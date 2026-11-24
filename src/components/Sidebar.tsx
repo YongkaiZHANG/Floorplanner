@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
 import type { Cell, PadSide, PendingInstanceArray } from '../store/useStore';
-import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiEdit3, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight } from 'react-icons/fi';
+import { FiLayers, FiBox, FiTarget, FiPlus, FiCrosshair, FiSettings, FiTrash2, FiX, FiPaperclip, FiGrid, FiEye, FiEyeOff, FiMove, FiLock, FiSearch, FiEdit3, FiArrowUpLeft, FiFolder, FiFolderPlus, FiRotateCw, FiEdit2, FiChevronDown, FiChevronRight, FiArrowDownCircle } from 'react-icons/fi';
 import './Sidebar.css';
 import { formatGridValue } from '../utils/grid';
 import { wouldCreateHierarchyCycle } from '../utils/hierarchy';
@@ -27,7 +27,7 @@ export const Sidebar: React.FC = () => {
     topWidth, topHeight, topLibName, topCellName, padInset, libraries,
     setTopConfig, setPadInset,
     masterCells, instances, cellViews, activeCellId, rootView,
-    createLibrary, renameLibrary, deleteLibrary,
+    createLibrary, renameLibrary, deleteLibrary, moveCellToLibrary, moveAllCellsToLibrary,
     openCellView, descendIntoInstance,
     selectedInstanceIds, setSelectedInstance,
     addMasterCell, updateMasterCell, deleteMasterCell, createPadRow, prepareManualPadPlacement,
@@ -42,6 +42,9 @@ export const Sidebar: React.FC = () => {
   const [collapsedLibs, setCollapsedLibs] = useState<Record<string, boolean>>({});
   const [showNewLibModal, setShowNewLibModal] = useState(false);
   const [newLibraryDraft, setNewLibraryDraft] = useState('');
+  const [moveAllIntoNewLib, setMoveAllIntoNewLib] = useState(false);
+  const [draggedCellId, setDraggedCellId] = useState<string | null>(null);
+  const [dragOverLib, setDragOverLib] = useState<string | null>(null);
 
   // Virtuoso Create Instance form state
   const [instLibFilter, setInstLibFilter] = useState<string>('ALL');
@@ -153,13 +156,39 @@ export const Sidebar: React.FC = () => {
       return;
     }
     try {
-      createLibrary(trimmed);
+      createLibrary(trimmed, moveAllIntoNewLib);
       setCollapsedLibs(prev => ({ ...prev, [trimmed]: false }));
       setNewLibName(trimmed);
       setNewLibraryDraft('');
+      setMoveAllIntoNewLib(false);
       setShowNewLibModal(false);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Unable to create library.');
+    }
+  };
+
+  const handleMoveAllCellsToLib = (targetLib: string) => {
+    const totalProjectCells = Object.keys(masterCells).length + 1;
+    if (!confirm(`Move all ${totalProjectCells} cells into library "${targetLib}"?`)) return;
+    try {
+      moveAllCellsToLibrary(targetLib);
+      setCollapsedLibs(prev => ({ ...prev, [targetLib]: false }));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to move cells into that library.');
+    }
+  };
+
+  const handleDropCellOnLib = (targetLib: string, event: React.DragEvent) => {
+    event.preventDefault();
+    setDragOverLib(null);
+    const payload = event.dataTransfer.getData('text/plain') || draggedCellId;
+    setDraggedCellId(null);
+    if (!payload) return;
+    try {
+      moveCellToLibrary(payload === '__TOP__' ? null : payload, targetLib);
+      setCollapsedLibs(prev => ({ ...prev, [targetLib]: false }));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Unable to move cell into that library.');
     }
   };
 
@@ -428,6 +457,7 @@ export const Sidebar: React.FC = () => {
                 type="button"
                 onClick={() => {
                   setNewLibraryDraft('');
+                  setMoveAllIntoNewLib(false);
                   setShowNewLibModal(true);
                 }}
                 title="New Library (File → New → Library)"
@@ -445,15 +475,32 @@ export const Sidebar: React.FC = () => {
               const libCells = cellsByLibrary.get(lib) ?? [];
               const hasTopCell = rootLibName === lib;
               const totalCells = libCells.length + (hasTopCell ? 1 : 0);
+              const totalProjectCells = Object.keys(masterCells).length + 1;
               const isCollapsed = Boolean(collapsedLibs[lib]);
+              const isDropTarget = dragOverLib === lib;
               return (
-                <div key={lib} className="virtuoso-lib-folder" role="treeitem" aria-expanded={!isCollapsed}>
+                <div
+                  key={lib}
+                  className={`virtuoso-lib-folder${isDropTarget ? ' virtuoso-lib-folder--drop-target' : ''}`}
+                  role="treeitem"
+                  aria-expanded={!isCollapsed}
+                  onDragOver={event => {
+                    event.preventDefault();
+                    if (dragOverLib !== lib) setDragOverLib(lib);
+                  }}
+                  onDragLeave={event => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                      setDragOverLib(current => (current === lib ? null : current));
+                    }
+                  }}
+                  onDrop={event => handleDropCellOnLib(lib, event)}
+                >
                   <div className="virtuoso-lib-folder__header">
                     <button
                       type="button"
                       className="virtuoso-lib-folder__toggle"
                       onClick={() => toggleLibExpanded(lib)}
-                      title={`${isCollapsed ? 'Expand' : 'Collapse'} library ${lib}`}
+                      title={`${isCollapsed ? 'Expand' : 'Collapse'} library ${lib} · drop any cell here to move it`}
                     >
                       {isCollapsed ? <FiChevronRight /> : <FiChevronDown />}
                       <FiFolder className="virtuoso-lib-folder__icon" />
@@ -461,6 +508,16 @@ export const Sidebar: React.FC = () => {
                       <span className="virtuoso-lib-folder__count">{totalCells}</span>
                     </button>
                     <div className="virtuoso-lib-folder__actions">
+                      {totalCells < totalProjectCells && (
+                        <button
+                          type="button"
+                          className="lib-mini-btn"
+                          onClick={() => handleMoveAllCellsToLib(lib)}
+                          title={`Move all existing cells into ${lib}`}
+                        >
+                          <FiArrowDownCircle />
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="lib-mini-btn"
@@ -495,8 +552,18 @@ export const Sidebar: React.FC = () => {
                       {hasTopCell && (
                         <li
                           className={`cell-item cell-item--tree static${activeCellId === null ? ' cell-item--open' : ''}`}
+                          draggable
+                          onDragStart={event => {
+                            setDraggedCellId('__TOP__');
+                            event.dataTransfer.setData('text/plain', '__TOP__');
+                            event.dataTransfer.effectAllowed = 'move';
+                          }}
+                          onDragEnd={() => {
+                            setDraggedCellId(null);
+                            setDragOverLib(null);
+                          }}
                           onDoubleClick={() => openCellView(null)}
-                          title={`Double-click to open ${rootLibName}/${rootCellName}/layout`}
+                          title={`Double-click to open · Drag onto another library to move ${rootCellName}`}
                         >
                           <div className="cell-item__info">
                             <div className="cell-swatch cell-swatch--dashed">
@@ -548,8 +615,18 @@ export const Sidebar: React.FC = () => {
                           <li
                             key={cell.id}
                             className={`cell-item cell-item--tree static${isOpenView ? ' cell-item--open' : ''}`}
+                            draggable
+                            onDragStart={event => {
+                              setDraggedCellId(cell.id);
+                              event.dataTransfer.setData('text/plain', cell.id);
+                              event.dataTransfer.effectAllowed = 'move';
+                            }}
+                            onDragEnd={() => {
+                              setDraggedCellId(null);
+                              setDragOverLib(null);
+                            }}
                             onDoubleClick={() => openCellView(cell.id)}
-                            title={`Double-click to open ${cell.libName}/${cell.cellName}/layout`}
+                            title={`Double-click to open · Drag onto another library to move ${cell.cellName}`}
                           >
                             <div className="cell-item__info">
                               <div
@@ -782,12 +859,20 @@ export const Sidebar: React.FC = () => {
                 className="input-field"
                 value={newLibraryDraft}
                 onChange={e => setNewLibraryDraft(e.target.value)}
-                placeholder="e.g. analog_lib, io_lib, adc_lib"
+                placeholder="e.g. xxxL_TOP, analog_lib, io_lib"
                 required
                 autoFocus
               />
               <small className="field-help">Libraries group cells and map 1:1 to Cadence Virtuoso ddGetObj libraries in SKILL export.</small>
             </div>
+            <label className="checkbox-label" style={{ marginTop: '8px' }}>
+              <input
+                type="checkbox"
+                checked={moveAllIntoNewLib}
+                onChange={event => setMoveAllIntoNewLib(event.target.checked)}
+              />
+              Move all existing cells ({Object.keys(masterCells).length + 1}) into this library
+            </label>
             <div className="modal-actions">
               <button type="button" className="btn" onClick={() => setShowNewLibModal(false)}>Cancel</button>
               <button type="submit" className="btn btn-primary">Create Library</button>
@@ -1121,7 +1206,7 @@ export const Sidebar: React.FC = () => {
           }}>
             <div className="form-group">
               <label className="label">Library Name</label>
-              <input className="input-field" value={editTopLibName} onChange={e => setEditTopLibName(e.target.value)} required />
+              <input className="input-field" list="project-libraries" value={editTopLibName} onChange={e => setEditTopLibName(e.target.value)} required />
             </div>
             <div className="form-group">
               <label className="label">Cell Name</label>

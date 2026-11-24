@@ -253,6 +253,13 @@
   border: 1px solid var(--border-color);
   background: rgba(255, 255, 255, 0.03);
   overflow: hidden;
+  transition: border-color 0.16s var(--ease-apple), box-shadow 0.16s var(--ease-apple), background-color 0.16s var(--ease-apple);
+}
+
+.virtuoso-lib-folder--drop-target {
+  border-color: #2997ff;
+  background: rgba(41, 151, 255, 0.12);
+  box-shadow: 0 0 0 2px rgba(41, 151, 255, 0.25);
 }
 
 .virtuoso-lib-folder__header {
