@@ -6,6 +6,7 @@ import { exportSVG, extractProjectFromSvg } from '../utils/svgExport';
 import { computeFloorplanMetrics, downloadCsvFile, findBoundaryViolations, generateFloorplanCsv } from '../utils/floorplanMetrics';
 import { createCisDemoProject } from '../utils/demoProjects';
 import { formatGridValue } from '../utils/grid';
+import { formatLppLabel } from '../utils/layoutLayers';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
 import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiSquare, FiType, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle, FiFolder, FiChevronDown, FiCpu, FiFileText, FiCrop, FiMove } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
@@ -95,7 +96,7 @@ export const Topbar: React.FC = () => {
   const alignmentSourceName = edgeAlignmentSession?.sourceId === PIXEL_ARRAY_ALIGNMENT_ID
     ? 'Pixel Array'
     : alignmentSourceShape
-      ? (alignmentSourceShape.label?.trim() || `${alignmentSourceShape.layer}/${alignmentSourceShape.purpose}`)
+      ? (alignmentSourceShape.label?.trim() || formatLppLabel(alignmentSourceShape.layer, alignmentSourceShape.purpose))
       : edgeAlignmentSession && edgeAlignmentSession.sourceIds.length > 1
         ? `${edgeAlignmentSession.sourceIds.length} selected objects${edgeAlignmentSession.sourceEdge ? ` via ${alignmentSource?.name ?? 'chosen edge'}` : ''}`
         : alignmentSource?.name ?? 'IP';
@@ -472,7 +473,7 @@ export const Topbar: React.FC = () => {
               pixelArraySelected
                 ? 'Pixel Array'
                 : selectedRectShape
-                  ? (selectedRectShape.label?.trim() || `${selectedRectShape.layer}/${selectedRectShape.purpose}`)
+                  ? (selectedRectShape.label?.trim() || formatLppLabel(selectedRectShape.layer, selectedRectShape.purpose))
                   : instances.find(instance => instance.id === selectedInstanceId)?.name
             }
             boundaryLabel={boundaryLabel}

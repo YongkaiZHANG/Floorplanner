@@ -56,11 +56,15 @@ test('higher-level cell aligns accurately to lower-level sub-cell & mosaic tile 
   const state = useStore.getState();
   const descendants = collectInstanceDescendantBoxes(state.instances, state.masterCells, state.cellViews);
 
-  // Verify lower-level TOP_PAD and mosaic tiles [0,0], [0,1], [0,2] were collected at exact top_asic coordinates
-  const topPadRef = descendants.find(d => d.label.includes('TOP_PAD') && d.level === 'child' && !d.label.includes('text/drawing'));
-  const tile2Ref = descendants.find(d => d.label.includes('M_BOT_PADS') && d.label.includes('[0,2]') && !d.label.includes('text/drawing'));
-  assert.ok(topPadRef, 'Expected lower-level TOP_PAD reference box');
-  assert.ok(tile2Ref, 'Expected lower-level mosaic tile [0,2] reference box');
+  // Verify lower-level TOP_PAD and mosaic tiles [0,0], [0,1], [0,2] were collected concisely without redundant `/text/drawing` or `(cellName)` clutter
+  assert.equal(descendants.some(d => d.label.includes('drawing')), false, 'Expected no redundant /drawing labels in descendant boxes');
+  const topPadRef = descendants.find(d => d.label === 'U_PADRING/TOP_PAD' && d.level === 'child');
+  const tile2Ref = descendants.find(d => d.label === 'U_PADRING/M_BOT_PADS[0,2]');
+  assert.ok(topPadRef, 'Expected concise U_PADRING/TOP_PAD reference box');
+  assert.equal(topPadRef.isLeaf, true, 'Leaf PAD with single body rect should remain a leaf instance');
+  assert.equal(topPadRef.detailLabel, 'U_PADRING/TOP_PAD (PAD)');
+  assert.ok(tile2Ref, 'Expected concise U_PADRING/M_BOT_PADS[0,2] reference box');
+  assert.equal(tile2Ref.isLeaf, true);
   assert.deepEqual(topPadRef.box, { minX: 0, maxX: 20, minY: 240, maxY: 250 });
   assert.deepEqual(tile2Ref.box, { minX: 60, maxX: 80, minY: -250, maxY: -240 });
 

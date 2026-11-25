@@ -3,7 +3,7 @@ import { getProjectSnapshot, useStore } from '../store/useStore.ts';
 import { getPhysicalBounds, isActiveMosaic } from './alignment.ts';
 import { SCALE_FACTOR } from './canvasConstants.ts';
 import { formatGridValue } from './grid.ts';
-import { resolveLayerStyle, resolveTextFontFamilyCss } from './layoutLayers.ts';
+import { formatLppLabel, resolveLayerStyle, resolveTextFontFamilyCss } from './layoutLayers.ts';
 import type { LayoutShape } from './layoutLayers.ts';
 
 const escapeXml = (value: string): string => value
@@ -335,7 +335,7 @@ export const generateSvgMarkup = (state: ProjectSnapshot): string => {
     const sh = shape.height * sf;
     const dashAttr = style.strokeDash === 'dashed' ? ' stroke-dasharray="6,4"' : '';
     svg += `  <rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" fill="${escapeXml(style.color)}" fill-opacity="${style.fillOpacity}" stroke="${escapeXml(style.color)}" stroke-width="1.5"${dashAttr} vector-effect="non-scaling-stroke" />\n`;
-    const tag = shape.label?.trim() || `${shape.layer}/${shape.purpose}`;
+    const tag = shape.label?.trim() || formatLppLabel(shape.layer, shape.purpose);
     const tagFS = Math.min(sw * 0.12, sh * 0.22, baseFS * 1.1);
     svg += `  <text x="${sx + sw / 2}" y="${-(sy + sh / 2)}" fill="${escapeXml(style.color)}" font-family="monospace" font-size="${tagFS}" font-weight="600" text-anchor="middle" dominant-baseline="middle" transform="scale(1, -1)">${escapeXml(tag)}</text>\n`;
   });

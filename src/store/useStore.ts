@@ -14,7 +14,7 @@ import {
   wouldCreateHierarchyCycle,
 } from '../utils/hierarchy.ts';
 import type { CellViewContent, CellViewCoordinateMode } from '../utils/hierarchy.ts';
-import { computeCellContentBounds, estimateTextBoxSize } from '../utils/layoutLayers.ts';
+import { computeCellContentBounds, estimateTextBoxSize, formatLppLabel } from '../utils/layoutLayers.ts';
 import type { LayoutShape, LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers.ts';
 
 export type { InstanceMosaic, MoveConstraintMode } from '../utils/alignment.ts';
@@ -1404,7 +1404,7 @@ const getAlignable = (state: ProjectState, id: string) => {
     if (!shape) throw new Error('The alignment shape no longer exists');
     return {
       id,
-      name: shape.label?.trim() || `${shape.layer}/${shape.purpose}`,
+      name: shape.label?.trim() || formatLppLabel(shape.layer, shape.purpose),
       x: shape.x,
       y: shape.y,
       width: shape.width,
@@ -2581,7 +2581,7 @@ export const useStore = create<ProjectState>((set) => ({
           ...(rawShape.color?.trim() ? { color: rawShape.color.trim() } : {}),
           ...(rawShape.locked ? { locked: true } : {}),
         };
-        actionLabel = `Place text "${text}" (${layer}/${purpose})`;
+        actionLabel = `Place text "${text}" (${formatLppLabel(layer, purpose)})`;
       } else {
         if (!Number.isFinite(rawShape.width) || !Number.isFinite(rawShape.height)) {
           throw new RangeError('Rectangle coordinates and dimensions must be finite numbers.');
@@ -2603,7 +2603,7 @@ export const useStore = create<ProjectState>((set) => ({
           ...(rawShape.label?.trim() ? { label: rawShape.label.trim() } : {}),
           ...(rawShape.locked ? { locked: true } : {}),
         };
-        actionLabel = `Draw ${layer}/${purpose} rect`;
+        actionLabel = `Draw ${formatLppLabel(layer, purpose)} rect`;
       }
 
       const shapes = [...state.shapes, shape];
@@ -2702,7 +2702,7 @@ export const useStore = create<ProjectState>((set) => ({
         ...(nextLabel ? { label: nextLabel } : {}),
         ...(nextLocked ? { locked: true } : {}),
       };
-      actionLabel = `Edit ${nextLayer}/${nextPurpose} rect`;
+      actionLabel = `Edit ${formatLppLabel(nextLayer, nextPurpose)} rect`;
     }
 
     const shapes = state.shapes.map(s => (s.id === id ? updated : s));
@@ -2761,7 +2761,7 @@ export const useStore = create<ProjectState>((set) => ({
     const shapes = state.shapes.filter(s => s.id !== id);
     const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
     return {
-      ...commitProjectPatch(state, `Delete ${existing.layer}/${existing.purpose} rect`, {
+      ...commitProjectPatch(state, `Delete ${formatLppLabel(existing.layer, existing.purpose)} rect`, {
         shapes,
         ...(boundsSync ?? {}),
       }),
@@ -2781,7 +2781,7 @@ export const useStore = create<ProjectState>((set) => ({
       delete unlocked.locked;
       return unlocked;
     });
-    return commitProjectPatch(state, `${shouldLock ? 'Lock' : 'Unlock'} ${existing.layer}/${existing.purpose} rect`, { shapes });
+    return commitProjectPatch(state, `${shouldLock ? 'Lock' : 'Unlock'} ${formatLppLabel(existing.layer, existing.purpose)} rect`, { shapes });
   }),
 
   nudgeSelectedShape: (dx, dy) => set((state) => {
@@ -2796,7 +2796,7 @@ export const useStore = create<ProjectState>((set) => ({
         : s
     ));
     const boundsSync = syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true);
-    return commitProjectPatch(state, `Nudge ${existing.layer}/${existing.purpose} rect`, {
+    return commitProjectPatch(state, `Nudge ${formatLppLabel(existing.layer, existing.purpose)} rect`, {
       shapes,
       ...(boundsSync ?? {}),
     });
@@ -3797,7 +3797,7 @@ export const useStore = create<ProjectState>((set) => ({
           : null;
         didCut = true;
         return {
-          ...commitProjectPatch(state, `Cut ${target.kind === 'text' ? 'text label' : `${target.layer}/${target.purpose} rect`}`, {
+          ...commitProjectPatch(state, `Cut ${target.kind === 'text' ? 'text label' : `${formatLppLabel(target.layer, target.purpose)} rect`}`, {
             shapes,
             ...(boundsSync ?? {}),
           }),

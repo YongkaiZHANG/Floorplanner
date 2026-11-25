@@ -7,6 +7,7 @@ import { composeCadenceTransform } from '../src/utils/hierarchy.ts';
 import {
   computeCellContentBounds,
   estimateTextBoxSize,
+  formatLppLabel,
   normalizeRectFromPoints,
   resolveLayerStyle,
   resolveTextSkillFont,
@@ -52,6 +53,13 @@ test('resolveLayerStyle resolves Virtuoso presets including text/drawing and cus
 
   const custom = resolveLayerStyle('CUSTOM_FP', 'drawing', '#ff00aa');
   assert.equal(custom.color, '#ff00aa');
+
+  // formatLppLabel omits redundant default 'drawing' purpose while preserving custom purposes
+  assert.equal(formatLppLabel('text', 'drawing'), 'text');
+  assert.equal(formatLppLabel('M1', 'DRAWING'), 'M1');
+  assert.equal(formatLppLabel('prBoundary', ''), 'prBoundary');
+  assert.equal(formatLppLabel('M1', 'pin'), 'M1/pin');
+  assert.equal(formatLppLabel('text', 'label'), 'text/label');
 });
 
 test('getPhysicalBounds transforms non-zero (originX, originY) masters across all 8 orientations', () => {

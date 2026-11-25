@@ -50,6 +50,11 @@ test('resolveCanvasCursor uses normal arrow in select mode and hand only while p
     resolveCanvasCursor({ appMode: 'measure', edgeAlignmentActive: false, isPanning: true, isSpaceDown: true }),
     'grabbing',
   );
+  // Active Cadence RMB region zoom uses zoom-in cursor
+  assert.equal(
+    resolveCanvasCursor({ appMode: 'select', edgeAlignmentActive: false, isPanning: false, isSpaceDown: false, isRegionZooming: true }),
+    'zoom-in',
+  );
 });
 
 test('computeDisplayGridStep stays fixed to the defined gridSize across all zoom levels', () => {

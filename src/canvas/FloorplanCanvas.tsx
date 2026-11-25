@@ -22,6 +22,7 @@ import {
 } from '../utils/hierarchy';
 import {
   estimateTextBoxSize,
+  formatLppLabel,
   LAYOUT_TEXT_FONT_FAMILIES,
   normalizeRectFromPoints,
   resolveLayerStyle,
@@ -35,14 +36,13 @@ import type { SnapEdgeAxis } from '../utils/ruler';
 import {
   computeStretchedShapes,
   countPartialSelectedEdges,
-  countPartialSelectedShapes,
   hasPartialSelection,
   hitTestShapeEdgeOrCorner,
   mergePartialSelections,
   selectShapeEdgesInBox,
 } from '../utils/shapeStretch';
 import type { PartialShapeSelection, RectEdge, StretchHitResult } from '../utils/shapeStretch';
-import { panViewportByArrow } from '../utils/viewport';
+import { computeRegionZoomViewport, panViewportByArrow } from '../utils/viewport';
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
@@ -53,6 +53,7 @@ const ZOOM_SPEED = 1.1;
 const MIN_STAGE_SCALE = 1e-5;
 const MAX_STAGE_SCALE = 200;
 const MARQUEE_DRAG_THRESHOLD_PX = 3;
+const RMB_ZOOM_DRAG_THRESHOLD_PX = 8;
 const CANVAS_FONT_SANS = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif";
 const CANVAS_FONT_MONO = "ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace";
 
@@ -82,6 +83,20 @@ export const FloorplanCanvas: React.FC = () => {
   const selectionBoxRef = useRef<typeof selectionBox>(null);
   const marqueeDraggedRef = useRef(false);
   const ignoreBackgroundClickUntilRef = useRef(0);
+  const [rmbZoomBox, setRmbZoomBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+  const rmbZoomRef = useRef<{
+    startClientX: number;
+    startClientY: number;
+    startBaseX: number;
+    startBaseY: number;
+    currentBaseX: number;
+    currentBaseY: number;
+    didDrag: boolean;
+  } | null>(null);
+  const suppressContextMenuUntilRef = useRef(0);
+  const dimensionsRef = useRef(dimensions);
+  const stagePosRef = useRef(stagePos);
+  const stageScaleRef = useRef(stageScale);
   const [rectDraft, setRectDraft] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
   const rectDraftRef = useRef<typeof rectDraft>(null);
   const rectDraggingRef = useRef(false);
@@ -406,7 +421,95 @@ export const FloorplanCanvas: React.FC = () => {
     partialMarqueeDraggedRef.current = false;
     setPartialMarquee(null);
     setHoveredStretchHit(null);
+    rmbZoomRef.current = null;
+    setRmbZoomBox(null);
   }, [activeCellId]);
+
+  useEffect(() => {
+    dimensionsRef.current = dimensions;
+  }, [dimensions]);
+
+  useEffect(() => {
+    stagePosRef.current = stagePos;
+  }, [stagePos]);
+
+  useEffect(() => {
+    stageScaleRef.current = stageScale;
+  }, [stageScale]);
+
+  const finishRmbZoom = useCallback((cancel = false) => {
+    const active = rmbZoomRef.current;
+    if (!active) return;
+    rmbZoomRef.current = null;
+    setRmbZoomBox(null);
+    if (cancel) {
+      suppressContextMenuUntilRef.current = performance.now() + 1000;
+      return;
+    }
+    if (!active.didDrag) return;
+    suppressContextMenuUntilRef.current = performance.now() + 300;
+    const result = computeRegionZoomViewport(
+      {
+        minX: active.startBaseX,
+        maxX: active.currentBaseX,
+        minY: active.startBaseY,
+        maxY: active.currentBaseY,
+      },
+      dimensionsRef.current.width,
+      dimensionsRef.current.height,
+      SCALE_FACTOR,
+      MIN_STAGE_SCALE,
+      MAX_STAGE_SCALE,
+    );
+    if (result) {
+      setStageScale(result.scale);
+      setStagePos(result.position);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleWindowMouseMove = (event: MouseEvent) => {
+      const cur = rmbZoomRef.current;
+      if (!cur || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
+      const curPos = stagePosRef.current;
+      const curScale = stageScaleRef.current;
+      const rawBaseX = ((pointerX - curPos.x) / curScale) / SCALE_FACTOR;
+      const rawBaseY = ((pointerY - curPos.y) / -curScale) / SCALE_FACTOR;
+      const movedPx = Math.hypot(event.clientX - cur.startClientX, event.clientY - cur.startClientY);
+      const didDrag = cur.didDrag || movedPx >= RMB_ZOOM_DRAG_THRESHOLD_PX;
+      const next = { ...cur, currentBaseX: rawBaseX, currentBaseY: rawBaseY, didDrag };
+      rmbZoomRef.current = next;
+      if (didDrag) {
+        setRmbZoomBox({
+          startX: next.startBaseX,
+          startY: next.startBaseY,
+          currentX: next.currentBaseX,
+          currentY: next.currentBaseY,
+        });
+      }
+    };
+    const handleWindowMouseUp = (event: MouseEvent) => {
+      if (event.button === 2 && rmbZoomRef.current) {
+        finishRmbZoom(false);
+      }
+    };
+    const handleWindowBlur = () => {
+      if (rmbZoomRef.current) {
+        finishRmbZoom(true);
+      }
+    };
+    window.addEventListener('mousemove', handleWindowMouseMove);
+    window.addEventListener('mouseup', handleWindowMouseUp);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('mousemove', handleWindowMouseMove);
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [finishRmbZoom]);
 
   useEffect(() => {
     // Prune partial selection entries for deleted or locked shapes
@@ -809,6 +912,10 @@ export const FloorplanCanvas: React.FC = () => {
           }
           break;
         case 'escape':
+          if (rmbZoomRef.current) {
+            finishRmbZoom(true);
+            break;
+          }
           if (stretchSessionRef.current) {
             stretchSessionRef.current = null;
             stretchDraggingRef.current = false;
@@ -885,7 +992,7 @@ export const FloorplanCanvas: React.FC = () => {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleWindowBlur);
     };
-  }, [clearRulers, fitView, setAppMode, setSelectedInstance, updatePartialSelection]);
+  }, [clearRulers, finishRmbZoom, fitView, setAppMode, setSelectedInstance, updatePartialSelection]);
 
   const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -1182,6 +1289,24 @@ export const FloorplanCanvas: React.FC = () => {
   };
 
   const handleMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+    if (e.evt.button === 2) {
+      const pointer = stageRef.current?.getPointerPosition();
+      if (pointer) {
+        const startBaseX = ((pointer.x - stagePos.x) / stageScale) / SCALE_FACTOR;
+        const startBaseY = ((pointer.y - stagePos.y) / -stageScale) / SCALE_FACTOR;
+        rmbZoomRef.current = {
+          startClientX: e.evt.clientX,
+          startClientY: e.evt.clientY,
+          startBaseX,
+          startBaseY,
+          currentBaseX: startBaseX,
+          currentBaseY: startBaseY,
+          didDrag: false,
+        };
+      }
+      return;
+    }
+
     if (e.evt.button === 1 || (e.evt.button === 0 && isSpaceDown)) {
       setPanStart({ x: e.evt.clientX, y: e.evt.clientY, stageX: stagePos.x, stageY: stagePos.y });
       setIsPanning(true);
@@ -1341,6 +1466,10 @@ export const FloorplanCanvas: React.FC = () => {
   };
 
   const handleMouseMove = (e: KonvaEventObject<MouseEvent>) => {
+    if (rmbZoomRef.current?.didDrag) {
+      return;
+    }
+
     if (panStart) {
       setStagePos({
         x: panStart.stageX + (e.evt.clientX - panStart.x),
@@ -1533,6 +1662,10 @@ export const FloorplanCanvas: React.FC = () => {
   };
 
   const handleMouseUp = (e: KonvaEventObject<MouseEvent>) => {
+    if (e.evt.button === 2 && rmbZoomRef.current) {
+      finishRmbZoom(false);
+      return;
+    }
     if (panStart) {
       setPanStart(null);
       setIsPanning(false);
@@ -2001,7 +2134,7 @@ export const FloorplanCanvas: React.FC = () => {
         if (shape.id === excludeShapeId) continue;
         pool.push({
           id: `shape:${shape.id}`,
-          name: shape.label?.trim() || `${shape.layer}/${shape.purpose}`,
+          name: shape.label?.trim() || formatLppLabel(shape.layer, shape.purpose),
           isPad: false,
           box: getLiveShapeBBox(shape),
         });
@@ -2383,7 +2516,7 @@ export const FloorplanCanvas: React.FC = () => {
         }),
         ...activeRectShapes.map(shape => ({
           id: `shape:${shape.id}`,
-          name: shape.label?.trim() || `${shape.layer}/${shape.purpose}`,
+          name: shape.label?.trim() || formatLppLabel(shape.layer, shape.purpose),
           isPad: false,
           box: getLiveShapeBBox(shape),
         })),
@@ -2631,11 +2764,11 @@ export const FloorplanCanvas: React.FC = () => {
       const absDy = Math.abs(dy);
       const finalDist = formatGridValue(dist, gridSize);
       
-      let endTextString = `L: ${finalDist} µm`;
+      let endTextString = `${finalDist} µm`;
       if (absDx > 0.0001 && absDy > 0.0001) {
         const finalDx = formatGridValue(absDx, gridSize);
         const finalDy = formatGridValue(absDy, gridSize);
-        endTextString += ` | dX: ${finalDx} | dY: ${finalDy}`;
+        endTextString = `L: ${finalDist} µm | dX: ${finalDx} | dY: ${finalDy}`;
         
         // Draw right triangle dashed lines
         ticks.push(
@@ -3023,6 +3156,7 @@ export const FloorplanCanvas: React.FC = () => {
     edgeAlignmentActive: Boolean(edgeAlignmentSession),
     isPanning,
     isSpaceDown,
+    isRegionZooming: Boolean(rmbZoomBox),
   });
 
   const selectionHasLocked = useMemo(
@@ -3034,6 +3168,11 @@ export const FloorplanCanvas: React.FC = () => {
     <div
       className="canvas-container"
       ref={containerRef}
+      onContextMenu={event => {
+        if (performance.now() < suppressContextMenuUntilRef.current || rmbZoomRef.current?.didDrag) {
+          event.preventDefault();
+        }
+      }}
       style={{
         '--canvas-safe-left': `${leftSidebarPinned && windowLayoutMode !== 'split' ? 280 : 16}px`,
         '--canvas-safe-right': `${rightSidebarPinned && windowLayoutMode !== 'split' ? 280 : 16}px`,
@@ -3194,20 +3333,21 @@ export const FloorplanCanvas: React.FC = () => {
           }
         }}
         onContextMenu={(e) => {
+          e.evt.preventDefault();
+          if (performance.now() < suppressContextMenuUntilRef.current || rmbZoomRef.current?.didDrag) {
+            return;
+          }
           if (appMode === 'text') {
-            e.evt.preventDefault();
             setActiveTextConfig({
               orientation: rotateOrientationByQuarterTurns(activeTextOrientation, e.evt.shiftKey ? 1 : -1) as CadenceOrientation,
             });
             return;
           }
           if (appMode === 'place' && pendingCopyGroup) {
-            e.evt.preventDefault();
             rotatePendingCopyGroup(e.evt.shiftKey ? 1 : -1);
             return;
           }
           if (appMode === 'place' && placementMasterId) {
-            e.evt.preventDefault();
             setPlacementOrientation(rotateOrientationByQuarterTurns(placementOrientation, e.evt.shiftKey ? 1 : -1));
           }
         }}
@@ -3858,6 +3998,11 @@ export const FloorplanCanvas: React.FC = () => {
                   descendIntoInstance(inst.id);
                 }}
                 onContextMenu={(e) => {
+                  if (performance.now() < suppressContextMenuUntilRef.current || rmbZoomRef.current?.didDrag) {
+                    e.evt.preventDefault();
+                    e.cancelBubble = true;
+                    return;
+                  }
                   if (appMode !== 'select' || Boolean(edgeAlignmentSession)) return;
                   e.evt.preventDefault();
                   e.cancelBubble = true;
@@ -3879,7 +4024,9 @@ export const FloorplanCanvas: React.FC = () => {
                     <Line points={[0, -7 / stageScale, 0, 7 / stageScale]} stroke={isSelected ? '#f59e0b' : '#64748b'} strokeWidth={1.6 / stageScale} />
                     <Circle radius={3 / stageScale} fill="#ffffff" stroke={isSelected ? '#f59e0b' : '#64748b'} strokeWidth={1.4 / stageScale} />
                     <Text
-                      text={`${inst.name} · ${masterCell.cellName} (empty)`}
+                      text={inst.name.toLowerCase() === masterCell.cellName.toLowerCase()
+                        ? `${inst.name} (empty)`
+                        : `${inst.name} · ${masterCell.cellName} (empty)`}
                       x={8 / stageScale}
                       y={6 / stageScale}
                       fill="#64748b"
@@ -4008,6 +4155,11 @@ export const FloorplanCanvas: React.FC = () => {
                     setRightSidebarPinned(true);
                   }}
                   onContextMenu={event => {
+                    if (performance.now() < suppressContextMenuUntilRef.current || rmbZoomRef.current?.didDrag) {
+                      event.evt.preventDefault();
+                      event.cancelBubble = true;
+                      return;
+                    }
                     if (appMode !== 'select' || Boolean(edgeAlignmentSession) || shape.locked) return;
                     event.evt.preventDefault();
                     event.cancelBubble = true;
@@ -4093,9 +4245,7 @@ export const FloorplanCanvas: React.FC = () => {
             const sy = curY * SCALE_FACTOR;
             const sw = curW * SCALE_FACTOR;
             const sh = curH * SCALE_FACTOR;
-            const tagText = shape.label?.trim()
-              ? `${shape.label.trim()}\n${shape.layer}/${shape.purpose}`
-              : `${shape.layer}/${shape.purpose}`;
+            const tagText = shape.label?.trim() || formatLppLabel(shape.layer, shape.purpose);
             const handleSize = 7 / stageScale;
 
             const buildResizeCorners = () => {
@@ -4207,7 +4357,7 @@ export const FloorplanCanvas: React.FC = () => {
                       <Text
                         text={tagText}
                         x={4 / stageScale}
-                        y={Math.max(2 / stageScale, (sh - Math.min(13 / stageScale, sh * 0.28) * (shape.label?.trim() ? 2.3 : 1.2)) / 2)}
+                        y={Math.max(2 / stageScale, (sh - Math.min(13 / stageScale, sh * 0.28) * 1.2) / 2)}
                         width={Math.max(1, sw - 8 / stageScale)}
                         align="center"
                         fill={isSelected ? '#92400e' : style.color}
@@ -4504,7 +4654,7 @@ export const FloorplanCanvas: React.FC = () => {
                 const edges: AlignmentEdge[] = isSource
                   ? (session.sourceEdge ? [session.sourceEdge] : ['left', 'right', 'bottom', 'top'])
                   : sourceAxis === 'horizontal' ? ['left', 'right'] : ['bottom', 'top'];
-                const shapeName = shape.label?.trim() || `${shape.layer}/${shape.purpose}`;
+                const shapeName = shape.label?.trim() || formatLppLabel(shape.layer, shape.purpose);
                 return edges.map(edge => {
                   const key = `shape-${shape.id}-${edge}`;
                   const chosen = isSource && session.sourceEdge === edge;
@@ -4631,7 +4781,7 @@ export const FloorplanCanvas: React.FC = () => {
                         setHoveredAlignEdge(key);
                         const mid = edgeMidBase(ref.box, edge);
                         setHoveredAlignMeta({
-                          label: `${ref.label} · ${edge} = ${formatGridValue(coord, gridSize)} µm`,
+                          label: `${ref.detailLabel ?? ref.label} · ${edge} = ${formatGridValue(coord, gridSize)} µm`,
                           x: mid.x,
                           y: mid.y,
                         });
@@ -5207,9 +5357,12 @@ export const FloorplanCanvas: React.FC = () => {
             const baseMaxX = Math.max(c1.x, c2.x);
             const baseMaxY = Math.max(c1.y, c2.y);
             const isPrimary = selectedInstanceId === inst.id;
-            const tag = mosaic
-              ? `${inst.name} · ${masterCell.cellName} [${mosaic.rows}×${mosaic.cols}]`
+            const baseTag = inst.name.toLowerCase() === masterCell.cellName.toLowerCase()
+              ? inst.name
               : `${inst.name} · ${masterCell.cellName}`;
+            const tag = mosaic
+              ? `${baseTag} [${mosaic.rows}×${mosaic.cols}]`
+              : baseTag;
             const fs = 10.5 / stageScale;
             const pillW = Math.max(46 / stageScale, (tag.length * 6.3 + 12) / stageScale);
             const pillH = 17 / stageScale;
@@ -5263,15 +5416,13 @@ export const FloorplanCanvas: React.FC = () => {
             if (bw * stageScale < 34 || bh * stageScale < 20) return null;
             const isSelected = selectedShapeId === shape.id;
             const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
-            const tagText = shape.label?.trim()
-              ? `${shape.label.trim()}\n${shape.layer}/${shape.purpose}`
-              : `${shape.layer}/${shape.purpose}`;
+            const tagText = shape.label?.trim() || formatLppLabel(shape.layer, shape.purpose);
             return (
               <Group key={`eip-shape-label-${shape.id}`} x={bMinX} y={bMaxY} scaleY={-1} listening={false}>
                 <Text
                   text={tagText}
                   x={4 / stageScale}
-                  y={Math.max(2 / stageScale, (bh - Math.min(13 / stageScale, bh * 0.28) * (shape.label?.trim() ? 2.3 : 1.2)) / 2)}
+                  y={Math.max(2 / stageScale, (bh - Math.min(13 / stageScale, bh * 0.28) * 1.2) / 2)}
                   width={Math.max(1, bw - 8 / stageScale)}
                   align="center"
                   fill={isSelected ? '#92400e' : style.color}
@@ -5296,7 +5447,7 @@ export const FloorplanCanvas: React.FC = () => {
             const bMaxY = Math.max(p1.y, p2.y) * SCALE_FACTOR;
             const visW = Math.abs(p2.x - p1.x);
             const visH = Math.abs(p2.y - p1.y);
-            const dimLabel = `${activeDrawLayer}/${activeDrawPurpose} · ${formatGridValue(visW, gridSize)} × ${formatGridValue(visH, gridSize)} µm`;
+            const dimLabel = `${formatLppLabel(activeDrawLayer, activeDrawPurpose)} · ${formatGridValue(visW, gridSize)} × ${formatGridValue(visH, gridSize)} µm`;
             return (
               <Group x={bMinX} y={bMaxY + 16 / stageScale} scaleY={-1} listening={false}>
                 <Text
@@ -5511,6 +5662,68 @@ export const FloorplanCanvas: React.FC = () => {
             );
           })()}
 
+          {/* Cadence-style Right-Mouse-Button Region Zoom Box */}
+          {rmbZoomBox && (() => {
+            const zMinX = Math.min(rmbZoomBox.startX, rmbZoomBox.currentX);
+            const zMaxX = Math.max(rmbZoomBox.startX, rmbZoomBox.currentX);
+            const zMinY = Math.min(rmbZoomBox.startY, rmbZoomBox.currentY);
+            const zMaxY = Math.max(rmbZoomBox.startY, rmbZoomBox.currentY);
+            const zw = zMaxX - zMinX;
+            const zh = zMaxY - zMinY;
+            const bx = zMinX * SCALE_FACTOR;
+            const by = zMinY * SCALE_FACTOR;
+            const bw = zw * SCALE_FACTOR;
+            const bh = zh * SCALE_FACTOR;
+            const sizeLabel = `Zoom · ${formatGridValue(zw, gridSize)} × ${formatGridValue(zh, gridSize)} µm`;
+            const fs = 10.5 / stageScale;
+            const padX = 7 / stageScale;
+            const pillW = Math.max(76 / stageScale, sizeLabel.length * fs * 0.6 + padX * 2);
+            const pillH = 19 / stageScale;
+            return (
+              <Group listening={false}>
+                <Rect
+                  x={bx}
+                  y={by}
+                  width={bw}
+                  height={bh}
+                  fill="rgba(2, 132, 199, 0.09)"
+                  stroke="#0284c7"
+                  strokeWidth={1.6 / stageScale}
+                  dash={[6 / stageScale, 4 / stageScale]}
+                />
+                <Group
+                  x={bx + bw / 2}
+                  y={by + bh + 14 / stageScale}
+                  scaleY={-1}
+                >
+                  <Rect
+                    x={-pillW / 2}
+                    y={-pillH / 2}
+                    width={pillW}
+                    height={pillH}
+                    cornerRadius={pillH / 2}
+                    fill="rgba(15, 23, 42, 0.9)"
+                    stroke="#38bdf8"
+                    strokeWidth={1.1 / stageScale}
+                  />
+                  <Text
+                    x={-pillW / 2}
+                    y={-pillH / 2}
+                    width={pillW}
+                    height={pillH}
+                    align="center"
+                    verticalAlign="middle"
+                    text={sizeLabel}
+                    fill="#f8fafc"
+                    fontSize={fs}
+                    fontFamily={CANVAS_FONT_MONO}
+                    fontStyle="bold"
+                  />
+                </Group>
+              </Group>
+            );
+          })()}
+
           {/* Grid-Locked Canvas Anchor Reticle & Measure Edge Snap Indicator */}
           {appMode === 'measure' && snapIndicator ? (
             <Group x={snapIndicator.x * SCALE_FACTOR} y={snapIndicator.y * SCALE_FACTOR} listening={false}>
@@ -5518,7 +5731,7 @@ export const FloorplanCanvas: React.FC = () => {
               <Line points={[-9 / stageScale, 0, 9 / stageScale, 0]} stroke="#eab308" strokeWidth={1.1 / stageScale} />
               <Line points={[0, -9 / stageScale, 0, 9 / stageScale]} stroke="#eab308" strokeWidth={1.1 / stageScale} />
             </Group>
-          ) : snappedMousePos && !isPanning && !isSpaceDown ? (
+          ) : snappedMousePos && !isPanning && !isSpaceDown && !rmbZoomBox ? (
             <Group x={snappedMousePos.x * SCALE_FACTOR} y={snappedMousePos.y * SCALE_FACTOR} listening={false}>
               <Line points={[-7 / stageScale, 0, 7 / stageScale, 0]} stroke="#ffffff" strokeWidth={2.6 / stageScale} opacity={0.85} />
               <Line points={[0, -7 / stageScale, 0, 7 / stageScale]} stroke="#ffffff" strokeWidth={2.6 / stageScale} opacity={0.85} />
@@ -5776,17 +5989,17 @@ export const FloorplanCanvas: React.FC = () => {
       })()}
       {appMode === 'text' && (
         <div className="coordinate-overlay text-mode-hint">
-          Create Text (L) · Click canvas to place on {activeTextLayer || 'text'}/{activeTextPurpose || 'drawing'} ({activeTextFontSize} µm · {activeTextFontFamily}) · R or Right-Click rotates [{activeTextOrientation}] · Esc exits
+          Text (L) · Click to place on {formatLppLabel(activeTextLayer, activeTextPurpose)} ({activeTextFontSize} µm · {activeTextOrientation}) · R rotates · Esc exits
         </div>
       )}
       {appMode === 'measure' && (
         <div className="coordinate-overlay measure-mode-hint">
-          Measure Mode · Click two snapped points · Press O for Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc cancels
+          Ruler (K) · Click two points · O Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc exits
         </div>
       )}
       {appMode === 'pixel-array' && pendingPixelArraySize && (
         <div className="coordinate-overlay pixel-array-placement-hint">
-          Pixel Array {formatGridValue(pendingPixelArraySize.width, gridSize)} × {formatGridValue(pendingPixelArraySize.height, gridSize)} um · Click inside {topCellName} to place · Esc cancels
+          Pixel Array {formatGridValue(pendingPixelArraySize.width, gridSize)} × {formatGridValue(pendingPixelArraySize.height, gridSize)} µm · Click to place · Esc cancels
         </div>
       )}
       {isEditInPlace && (
@@ -5794,12 +6007,17 @@ export const FloorplanCanvas: React.FC = () => {
           <span className="eip-context-banner__badge">EDIT IN PLACE</span>
           <span className="eip-context-banner__path">
             {baseCellName}
-            {descendStack.map(frame => (
-              <React.Fragment key={`${frame.instanceId}-${frame.cellId}`}>
-                {' › '}
-                <strong>{frame.instanceName}</strong> ({masterCells[frame.cellId]?.cellName ?? frame.cellId})
-              </React.Fragment>
-            ))}
+            {descendStack.map(frame => {
+              const cellName = masterCells[frame.cellId]?.cellName ?? frame.cellId;
+              const sameName = frame.instanceName.toLowerCase() === cellName.toLowerCase();
+              return (
+                <React.Fragment key={`${frame.instanceId}-${frame.cellId}`}>
+                  {' › '}
+                  <strong>{frame.instanceName}</strong>
+                  {!sameName && ` (${cellName})`}
+                </React.Fragment>
+              );
+            })}
           </span>
           <button
             type="button"
@@ -5835,23 +6053,23 @@ export const FloorplanCanvas: React.FC = () => {
                       dx: stretchSession.currentX - stretchSession.anchorX,
                       dy: stretchSession.currentY - stretchSession.anchorY,
                     };
-                return `Stretch (S) · Move pointer to target and click to finish · dX ${formatGridValue(visDelta.dx, gridSize)}, dY ${formatGridValue(visDelta.dy, gridSize)} µm · Esc cancels`;
+                return `Stretch (S) · Click target · dX ${formatGridValue(visDelta.dx, gridSize)}, dY ${formatGridValue(visDelta.dy, gridSize)} µm · Esc cancels`;
               })()
             : hasPartialSelection(partialSelection)
-              ? `Stretch (S) · ${countPartialSelectedEdges(partialSelection)} edge${countPartialSelectedEdges(partialSelection) === 1 ? '' : 's'} on ${countPartialSelectedShapes(partialSelection)} shape${countPartialSelectedShapes(partialSelection) === 1 ? '' : 's'} selected · Click-drag to stretch · Alt+Arrows nudge · Shift+drag adds edges · Esc clears`
-              : 'Stretch (S) · Drag a box across rectangle edge(s)/corner(s) to partially select, or drag any edge directly · Esc exits'}
+              ? `Stretch (S) · ${countPartialSelectedEdges(partialSelection)} edge${countPartialSelectedEdges(partialSelection) === 1 ? '' : 's'} selected · Drag to stretch · Alt+Arrows nudge · Esc clears`
+              : 'Stretch (S) · Drag across rectangle edges/corners or drag an edge directly · Esc exits'}
         </div>
       )}
       {appMode === 'select' && partialSelectMode && !edgeAlignmentSession && (
         <div className="coordinate-overlay stretch-mode-hint">
           {hasPartialSelection(partialSelection)
-            ? `Partial Select (F4) · ${countPartialSelectedEdges(partialSelection)} edge${countPartialSelectedEdges(partialSelection) === 1 ? '' : 's'} selected · Press S to stretch · Alt+Arrows nudge · Shift+drag toggles edges · Esc clears`
-            : 'Partial Select (F4) · Drag a box over rectangle edge(s)/corner(s) or click an edge, then press S to stretch'}
+            ? `Partial Select (F4) · ${countPartialSelectedEdges(partialSelection)} edge${countPartialSelectedEdges(partialSelection) === 1 ? '' : 's'} selected · S stretches · Alt+Arrows nudge · Esc clears`
+            : 'Partial Select (F4) · Drag across or click rectangle edges, then press S to stretch'}
         </div>
       )}
       {isSubCellEmpty && appMode === 'select' && !partialSelectMode && !edgeAlignmentSession && (
         <div className="coordinate-overlay empty-cell-hint">
-          Empty Virtuoso cellview ({topCellName}) · Press R to draw a rectangle, L to place text (text/drawing), or I to instantiate a cell
+          Empty cellview ({topCellName}) · R rect · L text · I instance
         </div>
       )}
       {appMode === 'place' && pendingCopyGroup && (() => {
@@ -5868,7 +6086,7 @@ export const FloorplanCanvas: React.FC = () => {
               : 'Free';
         return (
           <div className="coordinate-overlay manual-pad-placement-hint">
-            Copy {count} object{count === 1 ? '' : 's'} (C) · Move: {modeLabel} (F3 / hold Shift for {moveConstraint === 'free' ? 'Ortho' : 'Free'}) · R or Right-Click rotates · Click to stamp · Esc finishes
+            Copy {count} object{count === 1 ? '' : 's'} (C) · {modeLabel} (F3 / Shift) · R rotates · Click to place · Esc finishes
           </div>
         );
       })()}
@@ -5876,9 +6094,9 @@ export const FloorplanCanvas: React.FC = () => {
         <div className="coordinate-overlay manual-pad-placement-hint">
           {masterCells[placementMasterId].kind === 'pad'
             ? (pendingManualPadGroup
-                ? `Manual Pad Groups · Auto-rotate by nearest edge · ${pendingManualPadGroup.count} pads at ${pendingManualPadGroup.pitch} um pitch · Click each group location · Esc finishes`
-                : `Pad Placement · ${masterCells[placementMasterId].libName}/${masterCells[placementMasterId].cellName} [${placementOrientation}] · Press R or Right-Click to rotate · Esc finishes`)
-            : `Create Instance · ${masterCells[placementMasterId].libName}/${masterCells[placementMasterId].cellName}${pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1) ? ` (${pendingInstanceArray.rows}×${pendingInstanceArray.cols}${pendingInstanceArray.asMosaic ? ' mosaic' : ''})` : ''} [${placementOrientation}] · Press R or Right-Click to rotate · Esc finishes`}
+                ? `Pad Group · ${pendingManualPadGroup.count} pads @ ${pendingManualPadGroup.pitch} µm · Click edge to place · Esc finishes`
+                : `Place Pad · ${masterCells[placementMasterId].cellName} [${placementOrientation}] · R rotates · Esc finishes`)
+            : `Place ${masterCells[placementMasterId].cellName}${pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1) ? ` (${pendingInstanceArray.rows}×${pendingInstanceArray.cols}${pendingInstanceArray.asMosaic ? ' mosaic' : ''})` : ''} [${placementOrientation}] · R rotates · Esc finishes`}
         </div>
       )}
       <div className="viewport-hud" aria-label="Viewport controls">
@@ -5903,7 +6121,7 @@ export const FloorplanCanvas: React.FC = () => {
           type="button"
           className="viewport-hud__btn"
           onClick={fitView}
-          title="Fit top cell to viewport (F)"
+          title="Fit cell to viewport (F) · Right-drag canvas to zoom into a region"
         >
           <FiMaximize2 /> {Math.max(1, Math.round((stageScale / fitScale) * 100))}%
         </button>
@@ -5911,7 +6129,7 @@ export const FloorplanCanvas: React.FC = () => {
           type="button"
           className="viewport-hud__btn"
           onClick={() => zoomAroundCenter(1.25)}
-          title="Zoom in"
+          title="Zoom in · Right-drag canvas to zoom into a region"
           aria-label="Zoom in"
         >
           <FiPlus />

@@ -5,6 +5,7 @@ import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
 import { findBoundaryViolations, findOverlapViolations } from '../utils/floorplanMetrics';
 import {
+  formatLppLabel,
   LAYOUT_TEXT_FONT_FAMILIES,
   LAYOUT_TEXT_FONT_STYLES,
   resolveLayerStyle,
@@ -432,7 +433,7 @@ export const PropertiesPanel: React.FC = () => {
           <>
             <div className="panel-header">
               <h3 className="section-title">{selectedShape.kind === 'text' ? 'Text Label' : 'Rectangle Shape'}</h3>
-              <span className="selection-count">{selectedShape.layer}/{selectedShape.purpose}</span>
+              <span className="selection-count">{formatLppLabel(selectedShape.layer, selectedShape.purpose)}</span>
             </div>
 
             <div className="prop-section">
@@ -462,10 +463,13 @@ export const PropertiesPanel: React.FC = () => {
                 <select
                   className="input-field"
                   disabled={Boolean(selectedShape.locked)}
-                  value={VIRTUOSO_LAYER_PRESETS.some(
-                    p => p.layer.toLowerCase() === selectedShape.layer.toLowerCase()
-                      && p.purpose.toLowerCase() === selectedShape.purpose.toLowerCase(),
-                  ) ? `${selectedShape.layer}/${selectedShape.purpose}` : '__custom__'}
+                  value={(() => {
+                    const matchedPreset = VIRTUOSO_LAYER_PRESETS.find(
+                      p => p.layer.toLowerCase() === selectedShape.layer.toLowerCase()
+                        && p.purpose.toLowerCase() === selectedShape.purpose.toLowerCase(),
+                    );
+                    return matchedPreset ? `${matchedPreset.layer}/${matchedPreset.purpose}` : '__custom__';
+                  })()}
                   onChange={event => {
                     const value = event.target.value;
                     if (value === '__custom__') return;
@@ -479,10 +483,10 @@ export const PropertiesPanel: React.FC = () => {
                 >
                   {VIRTUOSO_LAYER_PRESETS.map(p => (
                     <option key={`${p.layer}/${p.purpose}`} value={`${p.layer}/${p.purpose}`}>
-                      {p.layer} / {p.purpose}
+                      {formatLppLabel(p.layer, p.purpose)}
                     </option>
                   ))}
-                  <option value="__custom__">Custom ({selectedShape.layer}/{selectedShape.purpose})</option>
+                  <option value="__custom__">Custom ({formatLppLabel(selectedShape.layer, selectedShape.purpose)})</option>
                 </select>
               </div>
               <div className="form-row">
@@ -513,7 +517,7 @@ export const PropertiesPanel: React.FC = () => {
               </div>
               {selectedShape.kind !== 'text' && (
                 <div className="form-group" style={{ marginTop: '10px' }}>
-                  <label className="label">Optional Label (text/drawing)</label>
+                  <label className="label">Optional Label</label>
                   <input
                     type="text"
                     className="input-field"

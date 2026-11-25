@@ -54,6 +54,20 @@ export type LayoutShape = {
 
 export const isTextShape = (shape: Pick<LayoutShape, 'kind'>): boolean => shape.kind === 'text';
 
+/**
+ * Formats a Virtuoso Layer/Purpose Pair concisely for display labels, pills, and tooltips.
+ * Omits the default `drawing` purpose (e.g. `text/drawing` -> `text`, `M1/drawing` -> `M1`)
+ * while preserving non-default purposes (`M1/pin`, `text/label`).
+ */
+export const formatLppLabel = (layer: string, purpose?: string): string => {
+  const cleanLayer = layer.trim() || 'text';
+  const cleanPurpose = (purpose ?? '').trim();
+  if (!cleanPurpose || cleanPurpose.toLowerCase() === 'drawing') {
+    return cleanLayer;
+  }
+  return `${cleanLayer}/${cleanPurpose}`;
+};
+
 export const resolveTextFontFamilyCss = (family: LayoutTextFontFamily = 'stick'): string => {
   switch (family) {
     case 'sans':
@@ -110,18 +124,18 @@ export type LayerPreset = {
 };
 
 export const VIRTUOSO_LAYER_PRESETS: readonly LayerPreset[] = [
-  { layer: 'text', purpose: 'drawing', shortLabel: 'text/drw', color: '#06b6d4', fillOpacity: 0.22, strokeDash: 'solid' },
+  { layer: 'text', purpose: 'drawing', shortLabel: 'text', color: '#06b6d4', fillOpacity: 0.22, strokeDash: 'solid' },
   { layer: 'text', purpose: 'label', shortLabel: 'text/lbl', color: '#0891b2', fillOpacity: 0.2, strokeDash: 'solid' },
-  { layer: 'prBoundary', purpose: 'drawing', shortLabel: 'prBnd/drw', color: '#6366f1', fillOpacity: 0.12, strokeDash: 'dashed' },
-  { layer: 'M1', purpose: 'drawing', shortLabel: 'M1/drw', color: '#2563eb', fillOpacity: 0.3, strokeDash: 'solid' },
-  { layer: 'M2', purpose: 'drawing', shortLabel: 'M2/drw', color: '#ef4444', fillOpacity: 0.28, strokeDash: 'solid' },
-  { layer: 'M3', purpose: 'drawing', shortLabel: 'M3/drw', color: '#16a34a', fillOpacity: 0.28, strokeDash: 'solid' },
-  { layer: 'M4', purpose: 'drawing', shortLabel: 'M4/drw', color: '#f59e0b', fillOpacity: 0.28, strokeDash: 'solid' },
-  { layer: 'M5', purpose: 'drawing', shortLabel: 'M5/drw', color: '#9333ea', fillOpacity: 0.26, strokeDash: 'solid' },
-  { layer: 'AP', purpose: 'drawing', shortLabel: 'AP/drw', color: '#ec4899', fillOpacity: 0.24, strokeDash: 'solid' },
-  { layer: 'PO', purpose: 'drawing', shortLabel: 'PO/drw', color: '#dc2626', fillOpacity: 0.3, strokeDash: 'solid' },
-  { layer: 'OD', purpose: 'drawing', shortLabel: 'OD/drw', color: '#059669', fillOpacity: 0.26, strokeDash: 'solid' },
-  { layer: 'NW', purpose: 'drawing', shortLabel: 'NW/drw', color: '#b45309', fillOpacity: 0.16, strokeDash: 'dashed' },
+  { layer: 'prBoundary', purpose: 'drawing', shortLabel: 'prBnd', color: '#6366f1', fillOpacity: 0.12, strokeDash: 'dashed' },
+  { layer: 'M1', purpose: 'drawing', shortLabel: 'M1', color: '#2563eb', fillOpacity: 0.3, strokeDash: 'solid' },
+  { layer: 'M2', purpose: 'drawing', shortLabel: 'M2', color: '#ef4444', fillOpacity: 0.28, strokeDash: 'solid' },
+  { layer: 'M3', purpose: 'drawing', shortLabel: 'M3', color: '#16a34a', fillOpacity: 0.28, strokeDash: 'solid' },
+  { layer: 'M4', purpose: 'drawing', shortLabel: 'M4', color: '#f59e0b', fillOpacity: 0.28, strokeDash: 'solid' },
+  { layer: 'M5', purpose: 'drawing', shortLabel: 'M5', color: '#9333ea', fillOpacity: 0.26, strokeDash: 'solid' },
+  { layer: 'AP', purpose: 'drawing', shortLabel: 'AP', color: '#ec4899', fillOpacity: 0.24, strokeDash: 'solid' },
+  { layer: 'PO', purpose: 'drawing', shortLabel: 'PO', color: '#dc2626', fillOpacity: 0.3, strokeDash: 'solid' },
+  { layer: 'OD', purpose: 'drawing', shortLabel: 'OD', color: '#059669', fillOpacity: 0.26, strokeDash: 'solid' },
+  { layer: 'NW', purpose: 'drawing', shortLabel: 'NW', color: '#b45309', fillOpacity: 0.16, strokeDash: 'dashed' },
 ] as const;
 
 const FALLBACK_COLORS = [

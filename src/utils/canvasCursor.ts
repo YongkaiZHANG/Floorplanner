@@ -6,15 +6,18 @@ export type CanvasCursorState = {
   edgeAlignmentActive: boolean;
   isPanning: boolean;
   isSpaceDown: boolean;
+  isRegionZooming?: boolean;
 };
 
 /**
  * Resolves the native CSS cursor for the floorplan canvas.
  * Normal select mode uses the standard arrow pointer (`default`) instead of a hand;
- * hand cursors appear strictly while panning (`grabbing`) or holding Space (`grab`).
+ * hand cursors appear strictly while panning (`grabbing`) or holding Space (`grab`),
+ * and `zoom-in` appears while dragging a Cadence right-mouse-button zoom region.
  */
 export const resolveCanvasCursor = (state: CanvasCursorState): string => {
   if (state.isPanning) return 'grabbing';
+  if (state.isRegionZooming) return 'zoom-in';
   if (state.isSpaceDown) return 'grab';
   if (
     state.edgeAlignmentActive

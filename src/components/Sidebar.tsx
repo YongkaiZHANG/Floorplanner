@@ -6,7 +6,7 @@ import './Sidebar.css';
 import { isActiveMosaic } from '../utils/alignment';
 import { formatGridValue } from '../utils/grid';
 import { wouldCreateHierarchyCycle } from '../utils/hierarchy';
-import { resolveLayerStyle } from '../utils/layoutLayers';
+import { formatLppLabel, resolveLayerStyle } from '../utils/layoutLayers';
 
 const ORIENTATION_OPTIONS = ['R0', 'R90', 'R180', 'R270', 'MX', 'MY', 'MXR90', 'MYR90'] as const;
 
@@ -923,9 +923,13 @@ export const Sidebar: React.FC = () => {
                     <div className="inst-header">
                       <FiTarget className="inst-icon" />
                       <span className="inst-name">{inst.name}</span>
-                      <span className="inst-master">
-                        ({master.cellName}{isActiveMosaic(inst.mosaic) ? ` · ${inst.mosaic.rows}×${inst.mosaic.cols}` : ''})
-                      </span>
+                      {(master.cellName.toLowerCase() !== inst.name.toLowerCase() || isActiveMosaic(inst.mosaic)) && (
+                        <span className="inst-master">
+                          ({master.cellName.toLowerCase() !== inst.name.toLowerCase() ? master.cellName : ''}
+                          {master.cellName.toLowerCase() !== inst.name.toLowerCase() && isActiveMosaic(inst.mosaic) ? ' · ' : ''}
+                          {isActiveMosaic(inst.mosaic) ? `${inst.mosaic.rows}×${inst.mosaic.cols}` : ''})
+                        </span>
+                      )}
                       {inst.locked && (
                         <span className="inst-lock-badge" title="Locked">
                           <FiLock />
@@ -982,10 +986,10 @@ export const Sidebar: React.FC = () => {
                         />
                       )}
                       <span className="inst-name">
-                        {isText ? (shape.label?.trim() || 'Text') : `${shape.layer}/${shape.purpose}`}
+                        {isText ? (shape.label?.trim() || 'Text') : formatLppLabel(shape.layer, shape.purpose)}
                       </span>
                       {isText ? (
-                        <span className="inst-master">({shape.layer}/{shape.purpose})</span>
+                        <span className="inst-master">({formatLppLabel(shape.layer, shape.purpose)})</span>
                       ) : (
                         shape.label?.trim() && <span className="inst-master">({shape.label.trim()})</span>
                       )}

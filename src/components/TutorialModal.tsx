@@ -33,6 +33,7 @@ const shortcutGroups: Array<{ title: string; items: Array<[string, string]> }> =
     title: 'Navigation & View',
     items: [
       ['Scroll wheel', 'Zoom smoothly around pointer'],
+      ['Right-drag', 'Zoom in to drawn region (Cadence style)'],
       ['Middle-drag / Space+drag', 'Pan the canvas'],
       ['Arrow keys / Shift+Arrow', 'Pan viewport (small / large step)'],
       ['F / Double-click canvas', 'Fit top cell to viewport'],

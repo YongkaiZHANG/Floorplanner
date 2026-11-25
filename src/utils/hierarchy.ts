@@ -1,6 +1,7 @@
 import { getPhysicalBounds, isActiveMosaic } from './alignment.ts';
 import type { CadenceOrientation } from './alignment.ts';
 import type { Cell, DescendContextFrame, Instance, PixelArray, RootViewSnapshot, Ruler } from '../store/useStore.ts';
+import { formatLppLabel } from './layoutLayers.ts';
 import type { LayoutShape } from './layoutLayers.ts';
 
 export type CellViewCoordinateMode = 'origin' | 'centered';
@@ -321,8 +322,10 @@ export type HierarchyBox = {
 export type HierarchyReferenceBox = {
   /** Stable unique identifier across hierarchy levels. */
   key: string;
-  /** Human-readable hierarchical path, e.g. `padring/I3 (PAD)` or `top_asic/CORE`. */
+  /** Compact hierarchical instance path, e.g. `I3/I9` or `I0` (no redundant cell/purpose noise). */
   label: string;
+  /** Optional descriptive tooltip label including the leaf cell name when different, e.g. `I3/I9 (PAD)`. */
+  detailLabel?: string;
   /** True when the underlying cell is a pad master (enables Auto-Dim pad-row collapsing). */
   isPad: boolean;
   /** Source hierarchy relationship relative to the active cellview. */
@@ -462,8 +465,35 @@ export const collectInstanceDescendantBoxes = (
     const view = cellViews[inst.cellId];
     const subInstances = view?.instances ?? [];
     const subRects = (view?.shapes ?? []).filter(shape => shape.kind !== 'text');
-    const hasSubGeometry = subInstances.length > 0 || subRects.length > 0;
+    const viewCoordMode = resolveViewCoordModeForWalk(view);
+    const shapeShiftX = viewCoordMode === 'centered' ? master.width / 2 : 0;
+    const shapeShiftY = viewCoordMode === 'centered' ? master.height / 2 : 0;
+    const masterMinX = master.originX ?? 0;
+    const masterMinY = master.originY ?? 0;
+    const masterMaxX = masterMinX + master.width;
+    const masterMaxY = masterMinY + master.height;
+    // Skip any drawn rectangle whose bounds are identical to the cell's own bounding box
+    // (e.g. a leaf PAD defined by a single text/drawing body rect) so the leaf stays the
+    // cell instance itself instead of duplicating a verbose `/text/drawing` child box.
+    const distinctSubRects = subRects.filter(rect => {
+      const rMinX = rect.x + shapeShiftX;
+      const rMinY = rect.y + shapeShiftY;
+      const rMaxX = rMinX + rect.width;
+      const rMaxY = rMinY + rect.height;
+      return !(
+        Math.abs(rMinX - masterMinX) <= 1e-6
+        && Math.abs(rMinY - masterMinY) <= 1e-6
+        && Math.abs(rMaxX - masterMaxX) <= 1e-6
+        && Math.abs(rMaxY - masterMaxY) <= 1e-6
+      );
+    });
+    const hasSubGeometry = subInstances.length > 0 || distinctSubRects.length > 0;
     const mosaic = isActiveMosaic(inst.mosaic) ? inst.mosaic : null;
+    const withCellDetail = (pathLabel: string): string => (
+      master.cellName && master.cellName.toLowerCase() !== inst.name.toLowerCase()
+        ? `${pathLabel} (${master.cellName})`
+        : pathLabel
+    );
 
     if (emitSelf) {
       const bounds = getPhysicalBounds({
@@ -480,6 +510,7 @@ export const collectInstanceDescendantBoxes = (
       pushBox({
         key: keyPath,
         label: labelPath,
+        detailLabel: withCellDetail(labelPath),
         isPad: master.kind === 'pad',
         level,
         ownerInstanceId,
@@ -496,9 +527,6 @@ export const collectInstanceDescendantBoxes = (
     if (!hasSubGeometry && !mosaic) return;
     const nextVisited = new Set(visited);
     nextVisited.add(inst.cellId);
-    const viewCoordMode = resolveViewCoordModeForWalk(view);
-    const shapeShiftX = viewCoordMode === 'centered' ? master.width / 2 : 0;
-    const shapeShiftY = viewCoordMode === 'centered' ? master.height / 2 : 0;
 
     const tiles = mosaic
       ? enumerateMosaicTileIndices(mosaic.rows, mosaic.cols, maxMosaicExpandedTiles)
@@ -531,6 +559,7 @@ export const collectInstanceDescendantBoxes = (
         pushBox({
           key: tileKey,
           label: tileLabel,
+          detailLabel: withCellDetail(tileLabel),
           isPad: master.kind === 'pad',
           level,
           ownerInstanceId,
@@ -544,7 +573,7 @@ export const collectInstanceDescendantBoxes = (
         });
       }
 
-      for (const rect of subRects) {
+      for (const rect of distinctSubRects) {
         if (results.length >= maxBoxes) break;
         const localBox: HierarchyBox = {
           minX: rect.x + shapeShiftX,
@@ -553,7 +582,7 @@ export const collectInstanceDescendantBoxes = (
           maxY: rect.y + rect.height + shapeShiftY,
         };
         const worldBox = transformBoxByCadence(localBox, tileTransform);
-        const rectTag = rect.label?.trim() || `${rect.layer}/${rect.purpose}`;
+        const rectTag = rect.label?.trim() || formatLppLabel(rect.layer, rect.purpose);
         pushBox({
           key: `${tileKey}:shape:${rect.id}`,
           label: `${tileLabel}/${rectTag}`,
@@ -567,8 +596,7 @@ export const collectInstanceDescendantBoxes = (
 
       for (const subInst of subInstances) {
         if (results.length >= maxBoxes) break;
-        const subMaster = masterCells[subInst.cellId];
-        const subLabel = subMaster ? `${tileLabel}/${subInst.name} (${subMaster.cellName})` : `${tileLabel}/${subInst.name}`;
+        const subLabel = `${tileLabel}/${subInst.name}`;
         walkInstance(
           subInst,
           tileTransform,
@@ -591,7 +619,7 @@ export const collectInstanceDescendantBoxes = (
     const master = masterCells[inst.cellId];
     if (!master || master.width <= 0 || master.height <= 0) continue;
     const ownerId = level === 'child' ? inst.id : `ancestor:${inst.id}`;
-    const rootLabel = `${labelPrefix}${inst.name}${master.cellName ? ` (${master.cellName})` : ''}`;
+    const rootLabel = `${labelPrefix}${inst.name}`;
     walkInstance(
       inst,
       frameTransform,
@@ -648,9 +676,6 @@ export const collectEipAncestorReferenceBoxes = (
     const parentCoordMode: CellViewCoordinateMode = isRootLevel
       ? 'origin'
       : resolveViewCoordModeForWalk(parentView);
-    const parentLabel = isRootLevel
-      ? (rootView?.topCellName ?? 'top')
-      : (parentMaster?.cellName ?? parentId);
 
     const levelToBase = levelIdx === 0
       ? { x: 0, y: 0, orientation: 'R0' as const }
@@ -666,7 +691,6 @@ export const collectEipAncestorReferenceBoxes = (
         frameTransform: levelToActive,
         includeRootBoxes: true,
         level: 'ancestor',
-        labelPrefix: parentLabel,
         maxBoxes: Math.max(0, maxBoxes - results.length),
       },
     );
@@ -686,7 +710,7 @@ export const collectEipAncestorReferenceBoxes = (
       );
       results.push({
         key: `eip-${levelIdx}-shape-${shape.id}`,
-        label: `${parentLabel}/${shape.label?.trim() || `${shape.layer}/${shape.purpose}`}`,
+        label: shape.label?.trim() || formatLppLabel(shape.layer, shape.purpose),
         isPad: false,
         level: 'ancestor',
         isLeaf: true,
@@ -706,7 +730,7 @@ export const collectEipAncestorReferenceBoxes = (
       );
       results.push({
         key: `eip-${levelIdx}-pixel-array`,
-        label: `${parentLabel}/Pixel Array`,
+        label: 'Pixel Array',
         isPad: false,
         level: 'ancestor',
         isLeaf: true,
