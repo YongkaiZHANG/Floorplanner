@@ -8,22 +8,22 @@ import { createCisDemoProject } from '../utils/demoProjects';
 import { formatGridValue } from '../utils/grid';
 import { formatLppLabel } from '../utils/layoutLayers';
 import { loadRecovery, parseProjectDocument, saveRecovery } from '../store/projectDocument';
-import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiSquare, FiType, FiTrash2, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle, FiFolder, FiChevronDown, FiCpu, FiFileText, FiCrop, FiMove } from 'react-icons/fi';
+import { FiDownload, FiSettings, FiMousePointer, FiMinimize2, FiSquare, FiType, FiCode, FiCopy, FiUpload, FiX, FiBookOpen, FiGrid, FiSave, FiBarChart2, FiAlertTriangle, FiCheckCircle, FiFolder, FiChevronDown, FiCpu, FiFileText, FiCrop, FiMove } from 'react-icons/fi';
 import { TutorialModal } from './TutorialModal';
 import { EditingToolbar } from './EditingToolbar';
 import type { AlignmentAction } from './EditingToolbar';
 import type { AlignmentEdge } from '../utils/alignment';
-import { ToastViewport } from './ToastViewport';
-import type { ToastKind, ToastMessage } from './ToastViewport';
+import type { ToastKind } from '../store/useStore';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, descendStack, rootView, openCellView, gridSize, setGridSize, clearRulers, orthogonalRuler, toggleOrthogonalRuler, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, selectedShapeId, setSelection, undo, redo, alignSelectedInstances, alignSelectedInstancesToBoundary, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment } = useStore();
+  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, descendStack, rootView, openCellView, gridSize, setGridSize, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, selectedShapeId, setSelection, undo, redo, alignSelectedInstances, alignSelectedInstancesToBoundary, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment, pushToast } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
   const fileMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const skipNextGridBlurRef = useRef(false);
   const [showTutorial, setShowTutorial] = useState(() => {
     try {
       return localStorage.getItem('ic-floorplanner:tutorial-seen:v19') !== 'yes';
@@ -33,6 +33,7 @@ export const Topbar: React.FC = () => {
   });
   const [tempW, setTempW] = useState(topWidth.toString());
   const [tempH, setTempH] = useState(topHeight.toString());
+  const [tempGrid, setTempGrid] = useState(() => formatGridValue(gridSize, gridSize));
   const [draftGridSize, setDraftGridSize] = useState(() => formatGridValue(gridSize, gridSize));
   
   const [showCodePreview, setShowCodePreview] = useState(false);
@@ -40,7 +41,6 @@ export const Topbar: React.FC = () => {
   const [preserveExistingMasters, setPreserveExistingMasters] = useState(false);
   const [hierarchyMode, setHierarchyMode] = useState<SkillHierarchyMode>('zero-origin-direct');
   const [savedSignature, setSavedSignature] = useState<string | null>(null);
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const recoveryLoaded = useRef(false);
   const activeViewSnapshot = useMemo(() => ({
     gridSize,
@@ -112,16 +112,18 @@ export const Topbar: React.FC = () => {
       : `Click an amber edge of ${alignmentSourceName}`;
 
   const showToast = useCallback((message: string, kind: ToastKind = 'success') => {
-    const id = `${Date.now()}-${Math.random()}`;
-    setToasts(current => [...current, { id, message, kind }].slice(-3));
-    window.setTimeout(() => setToasts(current => current.filter(toast => toast.id !== id)), 3200);
-  }, []);
+    pushToast(message, kind);
+  }, [pushToast]);
 
   useEffect(() => {
     setDraftGridSize(formatGridValue(gridSize, gridSize));
   }, [gridSize]);
 
   const commitGridSize = () => {
+    if (skipNextGridBlurRef.current) {
+      skipNextGridBlurRef.current = false;
+      return;
+    }
     const size = Number(draftGridSize);
     if (!Number.isFinite(size) || size <= 0) {
       setDraftGridSize(formatGridValue(gridSize, gridSize));
@@ -161,7 +163,7 @@ export const Topbar: React.FC = () => {
         options,
       );
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to generate Cadence SKILL code.');
+      showToast(error instanceof Error ? error.message : 'Unable to generate Cadence SKILL code.', 'error');
       return null;
     }
   };
@@ -170,7 +172,9 @@ export const Topbar: React.FC = () => {
     const skillCode = createSkillCode();
     if (!skillCode) return;
     const snapshot = getProjectSnapshot(useStore.getState());
-    downloadSkillFile(`${snapshot.topCellName}.il`, skillCode);
+    const filename = `${snapshot.topCellName}.il`;
+    downloadSkillFile(filename, skillCode);
+    showToast(`${filename} downloaded`);
   };
 
   const handleExportCsv = () => {
@@ -180,7 +184,7 @@ export const Topbar: React.FC = () => {
       downloadCsvFile(filename, csv);
       showToast(`${filename} exported`);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to export the CSV table.');
+      showToast(error instanceof Error ? error.message : 'Unable to export the CSV table.', 'error');
     }
   };
 
@@ -197,7 +201,7 @@ export const Topbar: React.FC = () => {
   const handleSaveWorkspace = useCallback(() => {
     const snapshot = getProjectSnapshot(useStore.getState());
     if (!saveRecovery(snapshot)) {
-      alert('Unable to save the workspace in this browser. Check that site storage is available.');
+      showToast('Unable to save workspace in this browser. Check storage settings.', 'error');
       return;
     }
     setSavedSignature(JSON.stringify(snapshot));
@@ -209,7 +213,7 @@ export const Topbar: React.FC = () => {
       const filename = exportSVG();
       showToast(`${filename} exported`);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to export the SVG floorplan.');
+      showToast(error instanceof Error ? error.message : 'Unable to export the SVG floorplan.', 'error');
     }
   };
 
@@ -292,8 +296,8 @@ export const Topbar: React.FC = () => {
         } else {
           throw new Error('No valid data found');
         }
-      } catch {
-        alert('Invalid SVG project. Please choose an SVG exported from this tool.');
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Invalid SVG project. Choose an SVG exported from this tool.', 'error');
       }
     };
     reader.readAsText(file);
@@ -307,7 +311,7 @@ export const Topbar: React.FC = () => {
       else alignSelectedInstances(action);
       showToast(`Applied ${action.replaceAll('-', ' ')}`, 'info');
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to arrange the selected blocks.');
+      showToast(error instanceof Error ? error.message : 'Unable to arrange the selected blocks.', 'error');
     }
   };
 
@@ -316,7 +320,7 @@ export const Topbar: React.FC = () => {
       alignSelectedInstancesToBoundary(edge);
       showToast(`Aligned to ${boundaryLabel} ${edge.replaceAll('-', ' ')}`, 'info');
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to align to boundary.');
+      showToast(error instanceof Error ? error.message : 'Unable to align to boundary.', 'error');
     }
   };
 
@@ -332,21 +336,31 @@ export const Topbar: React.FC = () => {
   const openConfigModal = () => {
     setTempW(topWidth.toString());
     setTempH(topHeight.toString());
+    setTempGrid(formatGridValue(gridSize, gridSize));
     setShowConfig(true);
   };
 
-  const handleSaveConfig = () => {
+  const handleSaveConfig = (event?: React.FormEvent) => {
+    event?.preventDefault();
     const width = Number.parseFloat(tempW);
     const height = Number.parseFloat(tempH);
+    const nextGrid = Number.parseFloat(tempGrid);
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
       showToast('Top-cell width and height must be positive numbers.', 'error');
       return;
     }
+    if (!Number.isFinite(nextGrid) || nextGrid <= 0) {
+      showToast('Grid size must be a positive number.', 'error');
+      return;
+    }
     try {
+      if (Math.abs(nextGrid - gridSize) > 1e-12) {
+        setGridSize(nextGrid);
+      }
       setTopDimensions(width, height);
       setShowConfig(false);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Unable to resize the top cell.', 'error');
+      showToast(error instanceof Error ? error.message : 'Unable to update top-cell configuration.', 'error');
     }
   };
 
@@ -403,34 +417,17 @@ export const Topbar: React.FC = () => {
           <span className="mode-toggle__sep" aria-hidden="true" />
           <button 
             className={`mode-btn ${appMode === 'measure' ? 'active' : ''}`}
-            onClick={() => setAppMode('measure')}
-            title="Measure Distance (K)"
+            onClick={() => setAppMode(appMode === 'measure' ? 'select' : 'measure')}
+            title="Measure Distance / Rulers (K)"
+            aria-pressed={appMode === 'measure'}
           >
             <FiMinimize2 /> <span className="topbar-label-sm">Ruler</span>
           </button>
-          {appMode === 'measure' && (
-            <>
-              <button
-                className={`mode-btn${orthogonalRuler ? ' active' : ''}`}
-                onClick={toggleOrthogonalRuler}
-                title={`Orthogonal ruler lock (O): currently ${orthogonalRuler ? 'ON' : 'OFF'}`}
-                aria-pressed={orthogonalRuler}
-              >
-                <FiGrid /> <span className="topbar-label-lg">Ortho</span>
-              </button>
-              <button
-                className="mode-btn mode-btn--danger"
-                onClick={() => clearRulers()}
-                title="Clear all rulers (Shift+K)"
-              >
-                <FiTrash2 /> <span className="topbar-label-lg">Clear</span>
-              </button>
-            </>
-          )}
           <button
             className={`mode-btn mode-btn--autodim${showAutoDim ? ' active' : ''}`}
             onClick={toggleAutoDim}
-            title="Auto-Dimension: shows nearest clearances across IPs, drawn shapes, inner padring/sub-cell walls, and Edit-in-Place context; select any block or rectangle to focus its local gaps."
+            title="Auto-Dimension: nearest clearances across IPs, drawn shapes, sub-cell walls, and Edit-in-Place context"
+            aria-pressed={showAutoDim}
           >
             <FiGrid /> <span className="topbar-label-lg">Auto-Dim</span>
           </button>
@@ -454,7 +451,10 @@ export const Topbar: React.FC = () => {
                 inputMode="decimal"
                 value={edgeAlignmentSession.offset}
                 onChange={event => setEdgeAlignmentOffset(event.target.value)}
-                onKeyDown={event => { if (event.key === 'Escape') cancelEdgeAlignment(); }}
+                onKeyDown={event => {
+                  if (event.key === 'Escape') cancelEdgeAlignment();
+                  else if (event.key === 'Enter') event.currentTarget.blur();
+                }}
                 aria-label="Alignment spacing in micrometers"
               />
               <span>µm</span>
@@ -468,6 +468,8 @@ export const Topbar: React.FC = () => {
           <EditingToolbar
             canUndo={history.past.length > 0}
             canRedo={history.future.length > 0}
+            undoLabel={history.past[history.past.length - 1]?.label}
+            redoLabel={history.future[0]?.label}
             selectionCount={pixelArraySelected || selectedRectShape ? 1 : selectedInstanceIds.length}
             anchorName={
               pixelArraySelected
@@ -499,7 +501,7 @@ export const Topbar: React.FC = () => {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".svg,image/svg+xml"
+              accept=".svg,.flp,.json,image/svg+xml"
               onChange={handleLoadProject}
               style={{ display: 'none' }}
             />
@@ -523,10 +525,23 @@ export const Topbar: React.FC = () => {
                   role="menuitem"
                   onClick={() => {
                     setIsFileMenuOpen(false);
+                    handleSaveWorkspace();
+                  }}
+                >
+                  <FiSave /> <span>Save in Browser</span>
+                  <kbd className="kbd-hint">Ctrl+S</kbd>
+                </button>
+                <div className="topbar-dropdown__divider" />
+                <button
+                  type="button"
+                  className="topbar-dropdown__item"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsFileMenuOpen(false);
                     fileInputRef.current?.click();
                   }}
                 >
-                  <FiUpload /> <span>Import SVG Project…</span>
+                  <FiUpload /> <span>Import SVG / JSON…</span>
                 </button>
                 <button
                   type="button"
@@ -583,7 +598,7 @@ export const Topbar: React.FC = () => {
               style={{ cursor: 'default', opacity: 0.85 }}
               title={
                 topWidth <= 0 || topHeight <= 0
-                  ? `${topLibName}/${topCellName} is empty — draw shapes (e.g. text/drawing) or instantiate sub-cells to define its size`
+                  ? `${topLibName}/${topCellName} is empty — draw shapes or instantiate sub-cells to define its size`
                   : `${topLibName}/${topCellName} bounding box (${topWidth} × ${topHeight} µm) is derived automatically from its contents`
               }
             >
@@ -592,8 +607,11 @@ export const Topbar: React.FC = () => {
               </span>
             </span>
           )}
-          <div className="grid-settings">
-            <label>Grid:</label>
+          <label
+            className="grid-settings"
+            title="Defined placement & anchor snap grid (µm) — fixed across zoom levels"
+          >
+            <span className="grid-settings__prefix">G</span>
             <input 
               type="text"
               inputMode="decimal"
@@ -604,14 +622,15 @@ export const Topbar: React.FC = () => {
               onKeyDown={event => {
                 if (event.key === 'Enter') event.currentTarget.blur();
                 if (event.key === 'Escape') {
+                  skipNextGridBlurRef.current = true;
                   setDraftGridSize(formatGridValue(gridSize, gridSize));
                   event.currentTarget.blur();
                 }
               }}
-              className="input-field grid-input"
-              title="Defined placement & anchor snap grid (µm) — re-snaps all geometry to exact grid multiples"
+              className="grid-input"
               aria-label="Placement grid in micrometers"
             />
+            <span className="grid-settings__unit">µm</span>
             <datalist id="grid-size-presets">
               <option value="0.005" />
               <option value="0.01" />
@@ -625,7 +644,7 @@ export const Topbar: React.FC = () => {
               <option value="50" />
               <option value="100" />
             </datalist>
-          </div>
+          </label>
           <div className="vertical-divider vertical-divider--compact" />
           <button
             className={`btn metrics-btn${drcBoundaryViolations.length > 0 ? ' metrics-btn--warn' : ''}`}
@@ -663,28 +682,32 @@ export const Topbar: React.FC = () => {
 
       {showConfig && (
         <div className="modal-overlay" onClick={event => { if (event.target === event.currentTarget) setShowConfig(false); }}>
-          <div className="modal-content glass-panel config-modal">
+          <form className="modal-content glass-panel config-modal" onSubmit={handleSaveConfig}>
             <div className="modal-header">
               <h2 className="modal-title">{activeCellId ? `Configure ${topCellName}` : 'Configure Top ASIC'}</h2>
-              <button className="modal-close-btn" onClick={() => setShowConfig(false)}>
+              <button type="button" className="modal-close-btn" onClick={() => setShowConfig(false)}>
                 <FiX />
               </button>
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label className="label">Width (um)</label>
-                <input type="number" className="input-field" value={tempW} onChange={e => setTempW(e.target.value)} />
+                <label className="label">Width (µm)</label>
+                <input type="number" step="any" className="input-field" value={tempW} onChange={e => setTempW(e.target.value)} autoFocus />
               </div>
               <div className="form-group">
-                <label className="label">Height (um)</label>
-                <input type="number" className="input-field" value={tempH} onChange={e => setTempH(e.target.value)} />
+                <label className="label">Height (µm)</label>
+                <input type="number" step="any" className="input-field" value={tempH} onChange={e => setTempH(e.target.value)} />
               </div>
             </div>
-            <div className="modal-actions">
-              <button className="btn" onClick={() => setShowConfig(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleSaveConfig}>Save</button>
+            <div className="form-group">
+              <label className="label">Placement Grid (µm)</label>
+              <input type="number" step="any" min="0.0001" className="input-field" value={tempGrid} onChange={e => setTempGrid(e.target.value)} />
             </div>
-          </div>
+            <div className="modal-actions">
+              <button type="button" className="btn" onClick={() => setShowConfig(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Save</button>
+            </div>
+          </form>
         </div>
       )}
 
@@ -909,7 +932,6 @@ export const Topbar: React.FC = () => {
           </div>
         </div>
       )}
-      <ToastViewport messages={toasts} onDismiss={id => setToasts(current => current.filter(toast => toast.id !== id))} />
     </>
   );
 };

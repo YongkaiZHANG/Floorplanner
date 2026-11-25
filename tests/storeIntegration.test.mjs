@@ -1040,3 +1040,20 @@ test('snapToVisibleGrid toggles cleanly as a transient UI preference without mut
   assert.equal(useStore.getState().history.past.length, historyBefore);
   assert.equal(Object.hasOwn(getProjectSnapshot(useStore.getState()), 'snapToVisibleGrid'), false);
 });
+
+test('global pushToast and dismissToast manage transient notifications without mutating history or snapshots', () => {
+  useStore.getState().loadProject(emptyProject);
+  const historyBefore = useStore.getState().history.past.length;
+  useStore.getState().pushToast('Grid updated', 'success', 0);
+  useStore.getState().pushToast('Locked block cannot move', 'error', 0);
+  const toasts = useStore.getState().toasts;
+  assert.equal(toasts.length >= 2, true);
+  assert.equal(toasts[toasts.length - 1].kind, 'error');
+  assert.equal(toasts[toasts.length - 1].message, 'Locked block cannot move');
+  assert.equal(useStore.getState().history.past.length, historyBefore);
+  assert.equal(Object.hasOwn(getProjectSnapshot(useStore.getState()), 'toasts'), false);
+  for (const t of toasts) {
+    useStore.getState().dismissToast(t.id);
+  }
+  assert.equal(useStore.getState().toasts.length, 0);
+});

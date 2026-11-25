@@ -38,10 +38,24 @@ export const Sidebar: React.FC = () => {
     pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
-    setPlacement, leftSidebarPinned, setLeftSidebarPinned, gridSize,
+    setPlacement, leftSidebarPinned, setLeftSidebarPinned, gridSize, pushToast,
   } = useStore();
   const [isHovered, setIsHovered] = useState(false);
+  const [isFocusWithin, setIsFocusWithin] = useState(false);
   const hoverTimeout = useRef<number | null>(null);
+  const notifyError = (error: unknown, fallback: string) => {
+    pushToast(error instanceof Error ? error.message : fallback, 'error');
+  };
+  const [collapsedSections, setCollapsedSections] = useState<Record<'library' | 'tools' | 'instances' | 'shapes', boolean>>({
+    library: false,
+    tools: false,
+    instances: false,
+    shapes: false,
+  });
+  const toggleSection = (key: 'library' | 'tools' | 'instances' | 'shapes') => {
+    setCollapsedSections(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+  const [libraryQuery, setLibraryQuery] = useState('');
   
   const [collapsedLibs, setCollapsedLibs] = useState<Record<string, boolean>>({});
   const [showNewLibModal, setShowNewLibModal] = useState(false);
@@ -164,7 +178,7 @@ export const Sidebar: React.FC = () => {
     event.preventDefault();
     const trimmed = newLibraryDraft.trim();
     if (!trimmed) {
-      alert('Enter a valid library name.');
+      pushToast('Enter a valid library name.', 'error');
       return;
     }
     try {
@@ -175,7 +189,7 @@ export const Sidebar: React.FC = () => {
       setMoveAllIntoNewLib(false);
       setShowNewLibModal(false);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to create library.');
+      notifyError(error, 'Unable to create library.');
     }
   };
 
@@ -186,7 +200,7 @@ export const Sidebar: React.FC = () => {
       moveAllCellsToLibrary(targetLib);
       setCollapsedLibs(prev => ({ ...prev, [targetLib]: false }));
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to move cells into that library.');
+      notifyError(error, 'Unable to move cells into that library.');
     }
   };
 
@@ -200,7 +214,7 @@ export const Sidebar: React.FC = () => {
       moveCellToLibrary(payload === '__TOP__' ? null : payload, targetLib);
       setCollapsedLibs(prev => ({ ...prev, [targetLib]: false }));
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to move cell into that library.');
+      notifyError(error, 'Unable to move cell into that library.');
     }
   };
 
@@ -210,7 +224,7 @@ export const Sidebar: React.FC = () => {
     try {
       renameLibrary(lib, next.trim());
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to rename library.');
+      notifyError(error, 'Unable to rename library.');
     }
   };
 
@@ -219,7 +233,7 @@ export const Sidebar: React.FC = () => {
     try {
       deleteLibrary(lib);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to delete library.');
+      notifyError(error, 'Unable to delete library.');
     }
   };
 
@@ -227,7 +241,7 @@ export const Sidebar: React.FC = () => {
     e.preventDefault();
     const resolvedLib = newLibName.trim() || topLibName;
     if (!resolvedLib || !newCellName.trim()) {
-      alert('Enter a valid library name and cell name.');
+      pushToast('Enter a valid library name and cell name.', 'error');
       return;
     }
     try {
@@ -237,7 +251,7 @@ export const Sidebar: React.FC = () => {
         const width = isAutoCell ? (existingCell?.width ?? 0) : Number.parseFloat(newWidth);
         const height = isAutoCell ? (existingCell?.height ?? 0) : Number.parseFloat(newHeight);
         if (!isAutoCell && (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0)) {
-          alert('Enter valid positive width and height.');
+          pushToast('Enter valid positive width and height.', 'error');
           return;
         }
         updateMasterCell(editingCellId, resolvedLib, newCellName, width, height, newColor, Number(newOpacity) / 100, newOutlineStyle);
@@ -249,7 +263,7 @@ export const Sidebar: React.FC = () => {
       setShowCreateModal(false);
       setNewCellName('');
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to save the Cell View definition.');
+      notifyError(error, 'Unable to save the Cell View definition.');
     }
   };
 
@@ -292,7 +306,7 @@ export const Sidebar: React.FC = () => {
       });
       setShowPadModal(false);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to create the pad row.');
+      notifyError(error, 'Unable to create the pad row.');
     }
   };
 
@@ -308,7 +322,7 @@ export const Sidebar: React.FC = () => {
       startPixelArrayPlacement(Number(pixelArrayWidth), Number(pixelArrayHeight));
       setShowPixelArrayModal(false);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to configure the pixel array.');
+      notifyError(error, 'Unable to configure the pixel array.');
     }
   };
 
@@ -339,14 +353,14 @@ export const Sidebar: React.FC = () => {
     try {
       setPlacement(cellId, orientation, arrayConfig);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to instantiate this cell in the active view.');
+      notifyError(error, 'Unable to instantiate this cell in the active view.');
     }
   };
 
   const handleInstantiateAtOrigin = () => {
     const target = eligibleInstantiateCells.find(cell => cell.id === instantiateSelection) ?? eligibleInstantiateCells[0];
     if (!target) {
-      alert('No eligible cell is available to instantiate in the current cell view.');
+      pushToast('No eligible cell is available to instantiate in the current cell view.', 'error');
       return;
     }
     const rows = Math.max(1, Math.floor(Number(instRows) || 1));
@@ -356,7 +370,7 @@ export const Sidebar: React.FC = () => {
     try {
       if (rows > 1 || cols > 1) {
         if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
-          alert('Enter finite ΔX and ΔY pitch values for the mosaic array.');
+          pushToast('Enter finite ΔX and ΔY pitch values for the mosaic array.', 'error');
           return;
         }
         placeInstanceMosaic(target.id, 0, 0, instOrientation, {
@@ -372,7 +386,7 @@ export const Sidebar: React.FC = () => {
       }
       setShowInstantiateModal(false);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to instantiate cell at (0, 0).');
+      notifyError(error, 'Unable to instantiate cell at (0, 0).');
     }
   };
 
@@ -380,7 +394,7 @@ export const Sidebar: React.FC = () => {
     event.preventDefault();
     const target = eligibleInstantiateCells.find(cell => cell.id === instantiateSelection) ?? eligibleInstantiateCells[0];
     if (!target) {
-      alert('No eligible cell is available to instantiate in the current cell view.');
+      pushToast('No eligible cell is available to instantiate in the current cell view.', 'error');
       return;
     }
     const rows = Math.max(1, Math.floor(Number(instRows) || 1));
@@ -388,7 +402,7 @@ export const Sidebar: React.FC = () => {
     const deltaX = Number(instDeltaX);
     const deltaY = Number(instDeltaY);
     if ((rows > 1 || cols > 1) && (!Number.isFinite(deltaX) || !Number.isFinite(deltaY))) {
-      alert('Enter finite ΔX and ΔY pitch values for the mosaic array.');
+      pushToast('Enter finite ΔX and ΔY pitch values for the mosaic array.', 'error');
       return;
     }
     const hasCustomArray = rows > 1 || cols > 1 || instNamePrefix.trim().length > 0;
@@ -436,6 +450,7 @@ export const Sidebar: React.FC = () => {
 
   useEffect(() => {
     if (showCreateModal && !editingCellId) {
+      setNewCellName('');
       setNewLibName(prev => (prev.trim() ? prev : topLibName));
       setOpenCellAfterCreate(true);
     }
@@ -448,6 +463,10 @@ export const Sidebar: React.FC = () => {
     setInstNamePrefix('');
     setInstOrientation('R0');
     setInstAsMosaic(true);
+  }, [showInstantiateModal]);
+
+  useEffect(() => {
+    if (!showInstantiateModal) return;
     const first = eligibleInstantiateCells[0];
     if (first && !eligibleInstantiateCells.some(c => c.id === instantiateSelection)) {
       setInstantiateSelection(first.id);
@@ -484,7 +503,7 @@ export const Sidebar: React.FC = () => {
 
   const handleMouseEnter = () => {
     if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
-    hoverTimeout.current = setTimeout(() => setIsHovered(true), 300);
+    hoverTimeout.current = setTimeout(() => setIsHovered(true), 220);
   };
 
   const handleMouseLeave = () => {
@@ -492,20 +511,43 @@ export const Sidebar: React.FC = () => {
     hoverTimeout.current = setTimeout(() => setIsHovered(false), 300);
   };
 
-  const isOpen = leftSidebarPinned || isHovered;
+  const isOpen = leftSidebarPinned || isHovered || isFocusWithin;
+  const libQueryNorm = libraryQuery.trim().toLowerCase();
 
   return (
     <>
       <div 
-      className={`sidebar-wrapper ${!isOpen ? 'collapsed' : ''}`}
+      className={`sidebar-wrapper${leftSidebarPinned ? ' pinned' : ''}${!isOpen ? ' collapsed' : ''}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onFocus={() => setIsFocusWithin(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setIsFocusWithin(false);
+        }
+      }}
     >
       <div className="sidebar glass-panel">
         <div className="sidebar-section">
           <div className="section-header">
-            <h3 className="section-title"><FiFolder /> Library Manager</h3>
+            <button
+              type="button"
+              className="section-collapse-btn"
+              onClick={() => toggleSection('library')}
+              aria-expanded={!collapsedSections.library}
+            >
+              {collapsedSections.library ? <FiChevronRight className="section-collapse-chevron" /> : <FiChevronDown className="section-collapse-chevron" />}
+              <h3 className="section-title"><FiFolder /> Library</h3>
+            </button>
             <div className="section-actions">
+              <button
+                className="icon-btn"
+                type="button"
+                onClick={() => setShowInstantiateModal(true)}
+                title="Instantiate Cell / Mosaic (I)"
+              >
+                <FiCrosshair />
+              </button>
               <button
                 className="icon-btn"
                 type="button"
@@ -514,24 +556,54 @@ export const Sidebar: React.FC = () => {
                   setMoveAllIntoNewLib(false);
                   setShowNewLibModal(true);
                 }}
-                title="New Library (File → New → Library)"
+                title="New Library"
               >
                 <FiFolderPlus />
               </button>
               <button className="icon-btn" type="button" onClick={() => openCreateModal()} title="New Cell View (N)">
                 <FiPlus />
               </button>
+              <button
+                type="button"
+                className={`panel-pin-btn${leftSidebarPinned ? ' pinned' : ''}`}
+                onClick={() => setLeftSidebarPinned(!leftSidebarPinned)}
+                title={leftSidebarPinned ? 'Unpin Library (float on hover)' : 'Pin & dock Library sidebar'}
+                aria-label={leftSidebarPinned ? 'Unpin Library' : 'Pin Library'}
+                aria-pressed={leftSidebarPinned}
+              >
+                <FiPaperclip style={{ transform: leftSidebarPinned ? 'rotate(-45deg)' : 'none', transition: 'transform 0.2s' }} />
+              </button>
             </div>
           </div>
 
-          <div className="virtuoso-lib-tree" role="tree" aria-label="Virtuoso Libraries and Cells">
-            {availableLibraries.map(lib => {
-              const libCells = cellsByLibrary.get(lib) ?? [];
-              const hasTopCell = rootLibName === lib;
-              const totalCells = libCells.length + (hasTopCell ? 1 : 0);
-              const totalProjectCells = Object.keys(masterCells).length + 1;
-              const isCollapsed = Boolean(collapsedLibs[lib]);
-              const isDropTarget = dragOverLib === lib;
+          {!collapsedSections.library && (
+            <>
+              {Object.keys(masterCells).length >= 3 && (
+                <div className="instance-search-wrap sidebar-lib-search">
+                  <FiSearch className="instance-search-icon" />
+                  <input
+                    type="text"
+                    className="input-field instance-search-input"
+                    placeholder="Filter libraries or cells…"
+                    value={libraryQuery}
+                    onChange={event => setLibraryQuery(event.target.value)}
+                    aria-label="Filter library cells"
+                  />
+                </div>
+              )}
+              <div className="virtuoso-lib-tree" role="tree" aria-label="Virtuoso Libraries and Cells">
+                {availableLibraries.map(lib => {
+                  const allLibCells = cellsByLibrary.get(lib) ?? [];
+                  const libMatchesQuery = !libQueryNorm || lib.toLowerCase().includes(libQueryNorm);
+                  const libCells = libQueryNorm && !libMatchesQuery
+                    ? allLibCells.filter(cell => cell.cellName.toLowerCase().includes(libQueryNorm))
+                    : allLibCells;
+                  const hasTopCell = rootLibName === lib && (!libQueryNorm || libMatchesQuery || rootCellName.toLowerCase().includes(libQueryNorm));
+                  if (libQueryNorm && !libMatchesQuery && libCells.length === 0 && !hasTopCell) return null;
+                  const totalCells = libCells.length + (hasTopCell ? 1 : 0);
+                  const totalProjectCells = Object.keys(masterCells).length + 1;
+                  const isCollapsed = !libQueryNorm && Boolean(collapsedLibs[lib]);
+                  const isDropTarget = dragOverLib === lib;
               return (
                 <div
                   key={lib}
@@ -754,11 +826,21 @@ export const Sidebar: React.FC = () => {
               );
             })}
           </div>
+            </>
+          )}
         </div>
 
         <div className="sidebar-section">
           <div className="section-header">
-            <h3 className="section-title"><FiLayers /> Active View Tools</h3>
+            <button
+              type="button"
+              className="section-collapse-btn"
+              onClick={() => toggleSection('tools')}
+              aria-expanded={!collapsedSections.tools}
+            >
+              {collapsedSections.tools ? <FiChevronRight className="section-collapse-chevron" /> : <FiChevronDown className="section-collapse-chevron" />}
+              <h3 className="section-title"><FiLayers /> Active View</h3>
+            </button>
             {!activeCellId && (
               <div className="section-actions">
                 <button className="icon-btn" onClick={() => {
@@ -774,81 +856,97 @@ export const Sidebar: React.FC = () => {
               </div>
             )}
           </div>
-          <div className={`top-cell-card${activeCellId ? ' top-cell-card--subcell' : ''}`}>
-            <div className="top-cell-card__row">
-              <span className="cell-name">{topCellName}</span>
-              <span className="lib-badge">{topLibName}</span>
-            </div>
-            <div className="top-cell-card__row">
-              <div className="size-badge">
-                {activeCellId && (topWidth <= 0 || topHeight <= 0)
-                  ? 'empty cellview'
-                  : `${formatGridValue(topWidth, gridSize)} × ${formatGridValue(topHeight, gridSize)} µm`}
+          {!collapsedSections.tools && (
+            <>
+              <div className={`top-cell-card${activeCellId ? ' top-cell-card--subcell' : ''}`}>
+                <div className="top-cell-card__row">
+                  <span className="cell-name">{topCellName}</span>
+                  <span className="lib-badge">{topLibName}</span>
+                </div>
+                <div className="top-cell-card__row">
+                  <div className="size-badge">
+                    {activeCellId && (topWidth <= 0 || topHeight <= 0)
+                      ? 'empty cellview'
+                      : `${formatGridValue(topWidth, gridSize)} × ${formatGridValue(topHeight, gridSize)} µm`}
+                  </div>
+                  {!activeCellId && padInset > 0 && (
+                    <div className="lib-badge" title="Seal-ring / pad inset margin">
+                      Inset {formatGridValue(padInset, gridSize)} µm
+                    </div>
+                  )}
+                </div>
+                {activeCellId && (
+                  <button
+                    type="button"
+                    className="return-top-btn"
+                    onClick={() => openCellView(null)}
+                    title={`Return to Top Cell (${rootLibName}/${rootCellName})`}
+                  >
+                    <FiArrowUpLeft /> Back to {rootCellName}
+                  </button>
+                )}
               </div>
-              {!activeCellId && padInset > 0 && (
-                <div className="lib-badge" title="Seal-ring / pad inset margin">
-                  Inset {formatGridValue(padInset, gridSize)} µm
+              <button className="edge-pad-action" type="button" onClick={() => setAppMode('rect')}>
+                <FiSquare />
+                <span><strong>Draw Rectangle</strong><small>Layer/purpose rectangle (R / D)</small></span>
+              </button>
+              <button className="edge-pad-action" type="button" onClick={() => setAppMode('text')}>
+                <FiType />
+                <span><strong>Create Text Label</strong><small>Styled text on any layer (L)</small></span>
+              </button>
+              {!activeCellId && (
+                <button className="edge-pad-action" type="button" onClick={() => {
+                  setPadLibName(topLibName);
+                  setPadInsetDraft(padInset.toString());
+                  setShowPadModal(true);
+                }}>
+                  <FiGrid />
+                  <span><strong>Place Edge Pads</strong><small>Rows or flexible groups with rotation</small></span>
+                </button>
+              )}
+              {!activeCellId && (
+                <div className={`pixel-array-card${pixelArray?.visible ? ' active' : ''}`}>
+                  <button
+                    className="pixel-array-toggle"
+                    type="button"
+                    onClick={() => pixelArray ? setPixelArrayVisible(!pixelArray.visible) : openPixelArrayModal()}
+                  >
+                    {pixelArray?.visible ? <FiEyeOff /> : <FiEye />}
+                    <span>
+                      <strong>{pixelArray?.visible ? 'Disable Pixel Array' : 'Enable Pixel Array'}</strong>
+                      <small>{pixelArray ? `${formatGridValue(pixelArray.width, gridSize)} × ${formatGridValue(pixelArray.height, gridSize)} µm · optical sensor overlay` : 'Optical sensor region overlay'}</small>
+                    </span>
+                  </button>
+                  {pixelArray && (
+                    <div className="pixel-array-actions">
+                      <button type="button" onClick={() => {
+                        startPixelArrayPlacement(pixelArray.width, pixelArray.height);
+                      }} title="Move Pixel Array"><FiMove /></button>
+                      <button type="button" onClick={openPixelArrayModal} title="Edit Pixel Array"><FiSettings /></button>
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-            {activeCellId && (
-              <button
-                type="button"
-                className="return-top-btn"
-                onClick={() => openCellView(null)}
-                title={`Return to Top Cell (${rootLibName}/${rootCellName})`}
-              >
-                <FiArrowUpLeft /> Back to {rootCellName}
-              </button>
-            )}
-          </div>
-          <button className="edge-pad-action" type="button" onClick={() => setAppMode('rect')}>
-            <FiSquare />
-            <span><strong>Draw Rectangle (LPP)</strong><small>Draw on text/drawing, M1, prBoundary… (R/D)</small></span>
-          </button>
-          <button className="edge-pad-action" type="button" onClick={() => setAppMode('text')}>
-            <FiType />
-            <span><strong>Create Text Label (L)</strong><small>Place styled text on text/drawing or custom layer</small></span>
-          </button>
-          {!activeCellId && (
-            <button className="edge-pad-action" type="button" onClick={() => {
-              setPadLibName(topLibName);
-              setPadInsetDraft(padInset.toString());
-              setShowPadModal(true);
-            }}>
-              <FiGrid />
-              <span><strong>Place edge pads</strong><small>Rows or flexible groups with rotation</small></span>
-            </button>
+            </>
           )}
-          <div className={`pixel-array-card${pixelArray?.visible ? ' active' : ''}`}>
-            <button
-              className="pixel-array-toggle"
-              type="button"
-              onClick={() => pixelArray ? setPixelArrayVisible(!pixelArray.visible) : openPixelArrayModal()}
-            >
-              {pixelArray?.visible ? <FiEyeOff /> : <FiEye />}
-              <span>
-                <strong>{pixelArray?.visible ? 'Disable Pixel Array' : 'Enable Pixel Array'}</strong>
-                <small>{pixelArray ? `${formatGridValue(pixelArray.width, gridSize)} × ${formatGridValue(pixelArray.height, gridSize)} µm · optical sensor overlay` : 'Optical sensor region overlay'}</small>
-              </span>
-            </button>
-            {pixelArray && (
-              <div className="pixel-array-actions">
-                <button type="button" onClick={() => {
-                  startPixelArrayPlacement(pixelArray.width, pixelArray.height);
-                }} title="Move Pixel Array"><FiMove /></button>
-                <button type="button" onClick={openPixelArrayModal} title="Edit Pixel Array"><FiSettings /></button>
-              </div>
-            )}
-          </div>
         </div>
 
         <div className="sidebar-section">
           <div className="section-header">
-            <h3 className="section-title"><FiBox /> {topCellName} Instances</h3>
+            <button
+              type="button"
+              className="section-collapse-btn"
+              onClick={() => toggleSection('instances')}
+              aria-expanded={!collapsedSections.instances}
+            >
+              {collapsedSections.instances ? <FiChevronRight className="section-collapse-chevron" /> : <FiChevronDown className="section-collapse-chevron" />}
+              <h3 className="section-title"><FiBox /> Instances</h3>
+            </button>
             <span className="lib-badge">{instances.length}</span>
           </div>
-          {instances.length > 0 && (
+          {!collapsedSections.instances && (
+            <>
+              {instances.length > 0 && (
             <div className="instance-filter-bar">
               <div className="instance-search-wrap">
                 <FiSearch className="instance-search-icon" />
@@ -944,80 +1042,95 @@ export const Sidebar: React.FC = () => {
               });
             })()}
           </ul>
+            </>
+          )}
         </div>
 
         {shapes.length > 0 && (
           <div className="sidebar-section">
             <div className="section-header">
-              <h3 className="section-title"><FiSquare /> {topCellName} Shapes &amp; Text</h3>
+              <button
+                type="button"
+                className="section-collapse-btn"
+                onClick={() => toggleSection('shapes')}
+                aria-expanded={!collapsedSections.shapes}
+              >
+                {collapsedSections.shapes ? <FiChevronRight className="section-collapse-chevron" /> : <FiChevronDown className="section-collapse-chevron" />}
+                <h3 className="section-title"><FiSquare /> Shapes &amp; Text</h3>
+              </button>
               <span className="lib-badge">{shapes.length}</span>
             </div>
-            <ul className="instance-list">
-              {shapes.map(shape => {
-                const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
-                const isText = shape.kind === 'text';
-                return (
-                  <li
-                    key={shape.id}
-                    className={`instance-item${selectedShapeId === shape.id ? ' active' : ''}`}
-                    onClick={() => setSelectedShape(shape.id)}
-                    title={isText ? 'Click to select text label and inspect/edit in Properties' : 'Click to select rectangle and inspect/edit in Properties'}
-                  >
-                    <div className="inst-header">
-                      {isText ? (
-                        <span
-                          className="shape-text-glyph"
-                          style={{ backgroundColor: style.color }}
-                          aria-hidden="true"
-                        >
-                          T
+            {!collapsedSections.shapes && (
+              <ul className="instance-list">
+                {shapes.map(shape => {
+                  const style = resolveLayerStyle(shape.layer, shape.purpose, shape.color);
+                  const isText = shape.kind === 'text';
+                  return (
+                    <li
+                      key={shape.id}
+                      className={`instance-item${selectedShapeId === shape.id ? ' active' : ''}`}
+                      onClick={() => setSelectedShape(shape.id)}
+                      title={isText ? 'Click to select text label and inspect/edit in Properties' : 'Click to select rectangle and inspect/edit in Properties'}
+                    >
+                      <div className="inst-header">
+                        {isText ? (
+                          <span
+                            className="shape-text-glyph"
+                            style={{ backgroundColor: style.color }}
+                            aria-hidden="true"
+                          >
+                            T
+                          </span>
+                        ) : (
+                          <span
+                            className="inst-icon"
+                            style={{
+                              display: 'inline-block',
+                              width: 10,
+                              height: 10,
+                              borderRadius: 2,
+                              backgroundColor: style.color,
+                              flexShrink: 0,
+                            }}
+                          />
+                        )}
+                        <span className="inst-name">
+                          {isText ? (shape.label?.trim() || 'Text') : formatLppLabel(shape.layer, shape.purpose)}
                         </span>
-                      ) : (
-                        <span
-                          className="inst-icon"
-                          style={{
-                            display: 'inline-block',
-                            width: 10,
-                            height: 10,
-                            borderRadius: 2,
-                            backgroundColor: style.color,
-                            flexShrink: 0,
-                          }}
-                        />
-                      )}
-                      <span className="inst-name">
-                        {isText ? (shape.label?.trim() || 'Text') : formatLppLabel(shape.layer, shape.purpose)}
-                      </span>
-                      {isText ? (
-                        <span className="inst-master">({formatLppLabel(shape.layer, shape.purpose)})</span>
-                      ) : (
-                        shape.label?.trim() && <span className="inst-master">({shape.label.trim()})</span>
-                      )}
-                      {shape.locked && (
-                        <span className="inst-lock-badge" title="Locked">
-                          <FiLock />
-                        </span>
-                      )}
-                    </div>
-                    <div className="inst-pos">
-                      {isText
-                        ? `(${formatGridValue(shape.x, gridSize)}, ${formatGridValue(shape.y, gridSize)}) · ${formatGridValue(shape.fontSize ?? shape.height, gridSize)} µm [${shape.orientation ?? 'R0'}]`
-                        : `(${formatGridValue(shape.x, gridSize)}, ${formatGridValue(shape.y, gridSize)}) · ${formatGridValue(shape.width, gridSize)}×${formatGridValue(shape.height, gridSize)} µm`}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                        {isText ? (
+                          <span className="inst-master">({formatLppLabel(shape.layer, shape.purpose)})</span>
+                        ) : (
+                          shape.label?.trim() && <span className="inst-master">({shape.label.trim()})</span>
+                        )}
+                        {shape.locked && (
+                          <span className="inst-lock-badge" title="Locked">
+                            <FiLock />
+                          </span>
+                        )}
+                      </div>
+                      <div className="inst-pos">
+                        {isText
+                          ? `(${formatGridValue(shape.x, gridSize)}, ${formatGridValue(shape.y, gridSize)}) · ${formatGridValue(shape.fontSize ?? shape.height, gridSize)} µm [${shape.orientation ?? 'R0'}]`
+                          : `(${formatGridValue(shape.x, gridSize)}, ${formatGridValue(shape.y, gridSize)}) · ${formatGridValue(shape.width, gridSize)}×${formatGridValue(shape.height, gridSize)} µm`}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         )}
       </div>
       
       <button 
+        type="button"
         className={`collapse-toggle left-toggle ${leftSidebarPinned ? 'pinned' : ''}`} 
         onClick={() => setLeftSidebarPinned(!leftSidebarPinned)}
-        title={leftSidebarPinned ? "Unpin Sidebar" : "Pin Sidebar"}
+        title={leftSidebarPinned ? 'Unpin Library sidebar' : 'Click to pin & dock Library · hover to peek'}
+        aria-label="Toggle Library sidebar"
       >
-        <FiPaperclip style={{ transform: leftSidebarPinned ? 'rotate(-45deg)' : 'none', transition: 'all 0.2s' }} />
+        <FiLayers />
+        <span className="collapse-toggle__label">Library</span>
       </button>
     </div>
 
@@ -1102,7 +1215,7 @@ export const Sidebar: React.FC = () => {
                           createLibrary(created.trim());
                           setNewLibName(created.trim());
                         } catch (error) {
-                          alert(error instanceof Error ? error.message : 'Unable to create library.');
+                          notifyError(error, 'Unable to create library.');
                         }
                       }}
                     >
@@ -1429,7 +1542,7 @@ export const Sidebar: React.FC = () => {
               );
               setShowEditTopModal(false);
             } catch (error) {
-              alert(error instanceof Error ? error.message : 'Unable to update the top cell.');
+              notifyError(error, 'Unable to update the top cell.');
             }
           }}>
             <div className="form-group">

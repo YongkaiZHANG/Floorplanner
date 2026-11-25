@@ -1,6 +1,6 @@
 import React from 'react';
 import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
-import { FiInfo, FiTrash2, FiPaperclip, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiExternalLink, FiCrosshair, FiGrid } from 'react-icons/fi';
+import { FiInfo, FiTrash2, FiPaperclip, FiSliders, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiExternalLink, FiCrosshair, FiGrid } from 'react-icons/fi';
 import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
 import { findBoundaryViolations, findOverlapViolations } from '../utils/floorplanMetrics';
@@ -50,9 +50,14 @@ export const PropertiesPanel: React.FC = () => {
     deletePixelArray,
     rightSidebarPinned,
     setRightSidebarPinned,
+    pushToast,
   } = useStore();
   const [isHovered, setIsHovered] = React.useState(false);
+  const [isFocusWithin, setIsFocusWithin] = React.useState(false);
   const hoverTimeout = React.useRef<number | null>(null);
+  const notifyError = (error: unknown, fallback: string) => {
+    pushToast(error instanceof Error ? error.message : fallback, 'error');
+  };
   
   const selectedInstance = instances.find(inst => inst.id === selectedInstanceId);
   const selectedShape = shapes.find(shape => shape.id === selectedShapeId) ?? null;
@@ -130,6 +135,10 @@ export const PropertiesPanel: React.FC = () => {
   const skipNextBlurCommitRef = React.useRef(false);
 
   const commitInstanceName = () => {
+    if (skipNextBlurCommitRef.current) {
+      skipNextBlurCommitRef.current = false;
+      return;
+    }
     if (!selectedInstance) return;
     const trimmed = draftName.trim();
     if (!trimmed || trimmed === selectedInstance.name) {
@@ -140,7 +149,7 @@ export const PropertiesPanel: React.FC = () => {
       renameInstance(selectedInstance.id, trimmed);
     } catch (error) {
       setDraftName(selectedInstance.name);
-      alert(error instanceof Error ? error.message : 'Unable to rename the selected instance.');
+      notifyError(error, 'Unable to rename the selected instance.');
     }
   };
 
@@ -165,7 +174,7 @@ export const PropertiesPanel: React.FC = () => {
     } catch (error) {
       setDraftX(formatGridValue(selectedInstance.x, gridSize));
       setDraftY(formatGridValue(selectedInstance.y, gridSize));
-      alert(error instanceof Error ? error.message : 'Unable to move the selected instance.');
+      notifyError(error, 'Unable to move the selected instance.');
     }
   };
 
@@ -196,7 +205,7 @@ export const PropertiesPanel: React.FC = () => {
       setDraftArrayY(formatGridValue(pixelArray.y, gridSize));
       setDraftArrayW(formatGridValue(pixelArray.width, gridSize));
       setDraftArrayH(formatGridValue(pixelArray.height, gridSize));
-      alert(error instanceof Error ? error.message : 'Unable to update the pixel array.');
+      notifyError(error, 'Unable to update the pixel array.');
     }
   };
 
@@ -239,7 +248,7 @@ export const PropertiesPanel: React.FC = () => {
       );
     } catch (error) {
       resetDrafts();
-      alert(error instanceof Error ? error.message : 'Unable to update mosaic array.');
+      notifyError(error, 'Unable to update mosaic array.');
     }
   };
 
@@ -261,7 +270,7 @@ export const PropertiesPanel: React.FC = () => {
     try {
       updateInstanceOrientation(selectedInstance.id, orientation);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to orient the selected instance.');
+      notifyError(error, 'Unable to orient the selected instance.');
     }
   };
 
@@ -317,7 +326,7 @@ export const PropertiesPanel: React.FC = () => {
       });
     } catch (error) {
       setDraftShapeLabel(selectedShape.label ?? '');
-      alert(error instanceof Error ? error.message : 'Unable to update shape layer/purpose.');
+      notifyError(error, 'Unable to update shape layer/purpose.');
     }
   };
 
@@ -346,7 +355,7 @@ export const PropertiesPanel: React.FC = () => {
       setDraftShapeX1(formatGridValue(selectedShape.x, gridSize));
       setDraftShapeY1(formatGridValue(selectedShape.y, gridSize));
       setDraftShapeFontSize(formatGridValue(selectedShape.fontSize ?? selectedShape.height, gridSize));
-      alert(error instanceof Error ? error.message : 'Unable to update text label.');
+      notifyError(error, 'Unable to update text label.');
     }
   };
 
@@ -383,7 +392,7 @@ export const PropertiesPanel: React.FC = () => {
       setDraftShapeY1(formatGridValue(selectedShape.y, gridSize));
       setDraftShapeX2(formatGridValue(selectedShape.x + selectedShape.width, gridSize));
       setDraftShapeY2(formatGridValue(selectedShape.y + selectedShape.height, gridSize));
-      alert(error instanceof Error ? error.message : 'Unable to update shape coordinates.');
+      notifyError(error, 'Unable to update shape coordinates.');
     }
   };
 
@@ -410,29 +419,54 @@ export const PropertiesPanel: React.FC = () => {
     }
   };
 
-  const isOpen = rightSidebarPinned || isHovered;
+  const isOpen = rightSidebarPinned || isHovered || isFocusWithin;
   const showingPixelArray = !selectedInstance && !selectedShape && pixelArraySelected && Boolean(pixelArray);
   const showingShape = !selectedInstance && Boolean(selectedShape);
 
+  const renderPinButton = () => (
+    <button
+      type="button"
+      className={`panel-pin-btn${rightSidebarPinned ? ' pinned' : ''}`}
+      onClick={() => setRightSidebarPinned(!rightSidebarPinned)}
+      title={rightSidebarPinned ? 'Unpin Properties (float on hover)' : 'Pin & dock Properties panel (Q)'}
+      aria-label={rightSidebarPinned ? 'Unpin Properties' : 'Pin Properties'}
+      aria-pressed={rightSidebarPinned}
+    >
+      <FiPaperclip style={{ transform: rightSidebarPinned ? 'rotate(45deg)' : 'none', transition: 'transform 0.2s' }} />
+    </button>
+  );
+
   return (
     <div 
-      className={`properties-wrapper ${!isOpen ? 'collapsed' : ''}`}
+      className={`properties-wrapper${rightSidebarPinned ? ' pinned' : ''}${!isOpen ? ' collapsed' : ''}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onFocus={() => setIsFocusWithin(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setIsFocusWithin(false);
+        }
+      }}
     >
       <button 
+        type="button"
         className={`collapse-toggle right-toggle ${rightSidebarPinned ? 'pinned' : ''}`} 
         onClick={() => setRightSidebarPinned(!rightSidebarPinned)}
-        title={rightSidebarPinned ? 'Unpin Properties' : 'Pin Properties'}
+        title={rightSidebarPinned ? 'Unpin Properties' : 'Click to pin & dock Properties (Q) · hover to peek'}
+        aria-label="Toggle Properties panel"
       >
-        <FiPaperclip style={{ transform: rightSidebarPinned ? 'rotate(45deg)' : 'none', transition: 'all 0.2s' }} />
+        <FiSliders />
+        <span className="collapse-toggle__label">Properties</span>
       </button>
 
       <div className="properties-panel glass-panel">
         {showingShape && selectedShape ? (
           <>
             <div className="panel-header">
-              <h3 className="section-title">{selectedShape.kind === 'text' ? 'Text Label' : 'Rectangle Shape'}</h3>
+              <div className="panel-header__top">
+                <h3 className="section-title">{selectedShape.kind === 'text' ? 'Text Label' : 'Rectangle Shape'}</h3>
+                {renderPinButton()}
+              </div>
               <span className="selection-count">{formatLppLabel(selectedShape.layer, selectedShape.purpose)}</span>
             </div>
 
@@ -477,7 +511,7 @@ export const PropertiesPanel: React.FC = () => {
                     try {
                       updateShape(selectedShape.id, { layer, purpose, color: '' });
                     } catch (error) {
-                      alert(error instanceof Error ? error.message : 'Unable to change layer.');
+                      notifyError(error, 'Unable to change layer.');
                     }
                   }}
                 >
@@ -774,7 +808,7 @@ export const PropertiesPanel: React.FC = () => {
               </div>
             )}
 
-            <div className="prop-section prop-actions-stack">
+            <div className="prop-section footer-actions-row">
               <button
                 className={`btn lock-toggle-btn${selectedShape.locked ? ' is-locked' : ''}`}
                 type="button"
@@ -782,8 +816,8 @@ export const PropertiesPanel: React.FC = () => {
                 title="Lock or unlock shape (Shift+L)"
               >
                 {selectedShape.locked
-                  ? <><FiUnlock /> Unlock {selectedShape.kind === 'text' ? 'Text' : 'Shape'}</>
-                  : <><FiLock /> Lock {selectedShape.kind === 'text' ? 'Text' : 'Shape'}</>}
+                  ? <><FiUnlock /> Unlock</>
+                  : <><FiLock /> Lock</>}
               </button>
               <button
                 className="btn btn-danger"
@@ -793,18 +827,21 @@ export const PropertiesPanel: React.FC = () => {
                   try {
                     deleteShape(selectedShape.id);
                   } catch (error) {
-                    alert(error instanceof Error ? error.message : 'Unable to delete shape.');
+                    notifyError(error, 'Unable to delete shape.');
                   }
                 }}
               >
-                <FiTrash2 /> Delete {selectedShape.kind === 'text' ? 'Text Label' : 'Rectangle'}
+                <FiTrash2 /> Delete
               </button>
             </div>
           </>
         ) : showingPixelArray && pixelArray ? (
           <>
             <div className="panel-header">
-              <h3 className="section-title">Pixel Array</h3>
+              <div className="panel-header__top">
+                <h3 className="section-title">Pixel Array</h3>
+                {renderPinButton()}
+              </div>
               <span className="selection-count">Active-array overlay</span>
             </div>
 
@@ -901,21 +938,32 @@ export const PropertiesPanel: React.FC = () => {
             </div>
           </>
         ) : !selectedInstance || !masterCell ? (
-          <div className="empty-state">
-            <FiInfo size={24} className="empty-icon" />
-            <p>Select an instance, drawn rectangle, or the pixel array to view its properties.</p>
-          </div>
+          <>
+            <div className="panel-header">
+              <div className="panel-header__top">
+                <h3 className="section-title">Properties</h3>
+                {renderPinButton()}
+              </div>
+            </div>
+            <div className="empty-state">
+              <FiInfo size={24} className="empty-icon" />
+              <p>Select an instance, rectangle, text label, or pixel array to inspect its properties.</p>
+            </div>
+          </>
         ) : (
           <>
             <div className="panel-header">
-              <h3 className="section-title">Properties</h3>
+              <div className="panel-header__top">
+                <h3 className="section-title">Properties</h3>
+                {renderPinButton()}
+              </div>
               {selectedInstanceIds.length > 1 && (
                 <span className="selection-count">{selectedInstanceIds.length} blocks selected</span>
               )}
             </div>
             
             <div className="prop-section">
-              <div className="form-group" style={{ marginBottom: '12px' }}>
+              <div className="form-group" style={{ marginBottom: '10px' }}>
                 <label className="label">{selectedInstanceIds.length > 1 ? 'Primary Instance Name' : 'Instance Name'}</label>
                 <input
                   type="text"
@@ -926,6 +974,7 @@ export const PropertiesPanel: React.FC = () => {
                   onKeyDown={event => {
                     if (event.key === 'Enter') event.currentTarget.blur();
                     if (event.key === 'Escape') {
+                      skipNextBlurCommitRef.current = true;
                       setDraftName(selectedInstance.name);
                       event.currentTarget.blur();
                     }
@@ -935,30 +984,40 @@ export const PropertiesPanel: React.FC = () => {
               </div>
               <div className="prop-row">
                 <span className="prop-label">Master Cell</span>
-                <span className="prop-value">{masterCell.cellName}</span>
+                <span className="prop-value">{masterCell.libName}/{masterCell.cellName}</span>
               </div>
-              <div className="prop-row">
-                <span className="prop-label">Library</span>
-                <span className="prop-value">{masterCell.libName}</span>
-              </div>
-              <div className="prop-row">
-                <span className="prop-label">Size (um)</span>
-                <span className="prop-value">
-                  {(() => {
-                    if (isActiveMosaic(selectedInstance.mosaic) && masterCell.width > 0 && masterCell.height > 0) {
-                      const b = getPhysicalBounds({
-                        ...selectedInstance,
-                        width: masterCell.width,
-                        height: masterCell.height,
-                        originX: masterCell.originX,
-                        originY: masterCell.originY,
-                      });
-                      return `${formatGridValue(b.width, gridSize)} × ${formatGridValue(b.height, gridSize)} (${selectedInstance.mosaic.rows}×${selectedInstance.mosaic.cols})`;
-                    }
-                    return `${formatGridValue(masterCell.width, gridSize)} × ${formatGridValue(masterCell.height, gridSize)}`;
-                  })()}
-                </span>
-              </div>
+              {(() => {
+                const hasSize = masterCell.width > 0 && masterCell.height > 0;
+                const b = hasSize
+                  ? getPhysicalBounds({
+                      ...selectedInstance,
+                      width: masterCell.width,
+                      height: masterCell.height,
+                      originX: masterCell.originX,
+                      originY: masterCell.originY,
+                    })
+                  : null;
+                return (
+                  <>
+                    <div className="prop-row">
+                      <span className="prop-label">Size (µm)</span>
+                      <span className="prop-value prop-value--mono">
+                        {b && isActiveMosaic(selectedInstance.mosaic)
+                          ? `${formatGridValue(b.width, gridSize)} × ${formatGridValue(b.height, gridSize)} (${selectedInstance.mosaic.rows}×${selectedInstance.mosaic.cols})`
+                          : `${formatGridValue(masterCell.width, gridSize)} × ${formatGridValue(masterCell.height, gridSize)}`}
+                      </span>
+                    </div>
+                    {b && (
+                      <div className="prop-row" title="Physical bounding box [Left..Right] × [Bottom..Top]">
+                        <span className="prop-label">Bounds</span>
+                        <span className="prop-value prop-value--mono">
+                          {formatGridValue(b.left, gridSize)}..{formatGridValue(b.right, gridSize)}, {formatGridValue(b.bottom, gridSize)}..{formatGridValue(b.top, gridSize)}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               {masterCell.kind === 'pad' && (
                 <div className="prop-row">
                   <span className="prop-label">Behavior</span>
@@ -970,11 +1029,11 @@ export const PropertiesPanel: React.FC = () => {
                   type="button"
                   className="btn descend-cell-btn"
                   onClick={() => descendIntoInstance(selectedInstance.id)}
-                  title={`Descend Edit into ${masterCell.libName}/${masterCell.cellName}/layout (X)`}
+                  title={`Descend Edit-in-Place into ${masterCell.libName}/${masterCell.cellName}/layout (X)`}
                 >
                   <FiCornerDownRight />
                   <span>
-                    Descend Edit (X)
+                    Descend (X)
                     {(cellViews[masterCell.id]?.instances.length ?? 0) > 0
                       ? ` · ${cellViews[masterCell.id].instances.length}`
                       : ''}
@@ -984,10 +1043,10 @@ export const PropertiesPanel: React.FC = () => {
                   type="button"
                   className="btn new-window-btn"
                   onClick={() => openCellView(masterCell.id)}
-                  title={`Open ${masterCell.libName}/${masterCell.cellName}/layout tab in the top cellview bar`}
+                  title={`Open ${masterCell.libName}/${masterCell.cellName}/layout tab`}
                 >
                   <FiExternalLink />
-                  <span>Open Cellview Tab</span>
+                  <span>Open Tab</span>
                 </button>
               </div>
             </div>
@@ -1031,13 +1090,13 @@ export const PropertiesPanel: React.FC = () => {
                 <button
                   type="button"
                   className="btn"
-                  style={{ width: '100%', marginTop: '8px' }}
+                  style={{ width: '100%', marginTop: '8px', justifyContent: 'center' }}
                   disabled={Boolean(selectedInstance.locked)}
                   onClick={() => {
                     try {
                       updateInstancePosition(selectedInstance.id, 0, 0);
                     } catch (error) {
-                      alert(error instanceof Error ? error.message : 'Unable to move this instance to (0, 0).');
+                      notifyError(error, 'Unable to move this instance to (0, 0).');
                     }
                   }}
                   title="Align instance origin directly to (0, 0)"
@@ -1182,15 +1241,19 @@ export const PropertiesPanel: React.FC = () => {
                     <button
                       type="button"
                       className="btn"
-                      disabled={Boolean(selectedInstance.locked)}
+                      disabled={Boolean(selectedInstance.locked || selectedInstance.mosaic.rows * selectedInstance.mosaic.cols > 500)}
                       onClick={() => {
                         try {
                           flattenMosaicInstance(selectedInstance.id);
                         } catch (error) {
-                          alert(error instanceof Error ? error.message : 'Unable to flatten mosaic.');
+                          notifyError(error, 'Unable to flatten mosaic.');
                         }
                       }}
-                      title="Explode mosaic into individual editable instances"
+                      title={
+                        selectedInstance.mosaic.rows * selectedInstance.mosaic.cols > 500
+                          ? 'Flatten supports up to 500 instances'
+                          : 'Explode mosaic into individual editable instances'
+                      }
                     >
                       <FiGrid /> Flatten ({selectedInstance.mosaic.rows * selectedInstance.mosaic.cols})
                     </button>
@@ -1202,7 +1265,7 @@ export const PropertiesPanel: React.FC = () => {
                         try {
                           updateInstanceMosaic(selectedInstance.id, null);
                         } catch (error) {
-                          alert(error instanceof Error ? error.message : 'Unable to reset mosaic.');
+                          notifyError(error, 'Unable to reset mosaic.');
                         }
                       }}
                       title="Reset back to a single 1×1 instance"
@@ -1214,19 +1277,36 @@ export const PropertiesPanel: React.FC = () => {
               </div>
             )}
 
-            <div className="prop-section">
-              <button
-                className={`btn lock-toggle-btn${selectedInstance.locked ? ' is-locked' : ''}`}
-                type="button"
-                onClick={() => toggleInstanceLock(selectedInstanceIds.length > 0 ? selectedInstanceIds : [selectedInstance.id])}
-                title="Lock or unlock selection (Shift+L)"
-              >
-                {selectedInstance.locked ? <><FiUnlock /> Unlock {selectedInstanceIds.length > 1 ? 'Selection' : 'Instance'}</> : <><FiLock /> Lock {selectedInstanceIds.length > 1 ? 'Selection' : 'Instance'}</>}
-              </button>
-              <button className="btn btn-danger" disabled={Boolean(selectedInstance.locked && selectedInstanceIds.length === 1)} onClick={deleteSelectedInstances}>
-                <FiTrash2 /> Delete {selectedInstanceIds.length > 1 ? `${selectedInstanceIds.length} Instances` : 'Instance'}
-              </button>
-            </div>
+            {(() => {
+              const targetIds = selectedInstanceIds.length > 0 ? selectedInstanceIds : [selectedInstance.id];
+              const targetSet = new Set(targetIds);
+              const targetInstances = instances.filter(inst => targetSet.has(inst.id));
+              const unlockedCount = targetInstances.filter(inst => !inst.locked).length;
+              const willLock = unlockedCount > 0;
+              return (
+                <div className="prop-section footer-actions-row">
+                  <button
+                    className={`btn lock-toggle-btn${!willLock ? ' is-locked' : ''}`}
+                    type="button"
+                    onClick={() => toggleInstanceLock(targetIds)}
+                    title="Lock or unlock selection (Shift+L)"
+                  >
+                    {willLock
+                      ? <><FiLock /> Lock{targetIds.length > 1 ? ` (${unlockedCount})` : ''}</>
+                      : <><FiUnlock /> Unlock{targetIds.length > 1 ? ` (${targetIds.length})` : ''}</>}
+                  </button>
+                  <button
+                    className="btn btn-danger"
+                    type="button"
+                    disabled={unlockedCount === 0}
+                    onClick={deleteSelectedInstances}
+                    title={unlockedCount === 0 ? 'Unlock before deleting' : 'Delete unlocked selected instance(s) (Del)'}
+                  >
+                    <FiTrash2 /> Delete{targetIds.length > 1 ? ` (${unlockedCount})` : ''}
+                  </button>
+                </div>
+              );
+            })()}
           </>
         )}
       </div>

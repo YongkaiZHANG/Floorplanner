@@ -13,8 +13,8 @@
   --accent-hover: #0077ed;
   
   --text-primary: #f5f5f7;
-  --text-secondary: #86868b;
-  --text-tertiary: #a1a1a6;
+  --text-secondary: #9e9ea6;
+  --text-tertiary: #b4b4bc;
   
   --border-color: rgba(255, 255, 255, 0.11);
   --border-strong: rgba(255, 255, 255, 0.18);
@@ -296,4 +296,20 @@ select.lpp-select option {
 .icon-btn:hover {
   background: var(--bg-panel-hover);
   color: var(--accent-light);
+}
+
+/* Crisp Shortcut Key Badge */
+.kbd-hint {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
 }

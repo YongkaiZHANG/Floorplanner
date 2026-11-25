@@ -25,6 +25,8 @@ export type AlignmentAction =
 type EditingToolbarProps = {
   canUndo: boolean;
   canRedo: boolean;
+  undoLabel?: string;
+  redoLabel?: string;
   selectionCount: number;
   anchorName?: string;
   boundaryLabel?: string;
@@ -68,6 +70,8 @@ const alignmentItems: Array<{
 export const EditingToolbar: React.FC<EditingToolbarProps> = ({
   canUndo,
   canRedo,
+  undoLabel,
+  redoLabel,
   selectionCount,
   anchorName,
   boundaryLabel = 'Boundary',
@@ -106,7 +110,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
         type="button"
         disabled={!canUndo}
         onClick={onUndo}
-        title="Undo (Ctrl/Cmd+Z)"
+        title={canUndo && undoLabel ? `Undo: ${undoLabel} (Ctrl/Cmd+Z)` : 'Undo (Ctrl/Cmd+Z)'}
         aria-label="Undo"
       >
         <FiCornerDownLeft />
@@ -116,7 +120,7 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
         type="button"
         disabled={!canRedo}
         onClick={onRedo}
-        title="Redo (Ctrl/Cmd+Shift+Z)"
+        title={canRedo && redoLabel ? `Redo: ${redoLabel} (Ctrl/Cmd+Shift+Z)` : 'Redo (Ctrl/Cmd+Shift+Z)'}
         aria-label="Redo"
       >
         <FiCornerDownRight />
@@ -132,11 +136,11 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
         aria-expanded={isAlignOpen}
         aria-haspopup="menu"
         title={canAlign
-          ? `Open alignment choices for ${selectionCount === 1 ? (anchorName ?? 'the selected block') : `${selectionCount} selected blocks`} (or press A for two-edge align)`
-          : 'Select a source block to align'}
+          ? `Align ${selectionCount === 1 ? (anchorName ?? 'selected block') : `${selectionCount} selected blocks`} (A)`
+          : 'Select a block or rectangle to align'}
       >
         <FiAlignLeft />
-        <span>Align</span>
+        <span className="topbar-label-md">Align</span>
         <FiChevronDown />
       </button>
 
@@ -155,7 +159,8 @@ export const EditingToolbar: React.FC<EditingToolbarProps> = ({
             }}
           >
             <FiAlignCenter />
-            <span><strong>Align by two edges… (A)</strong><small>Click any edge, then an IP, sub-cell, parent cell, {boundaryLabel} boundary, or ruler</small></span>
+            <span><strong>Align by two edges…</strong><small>Pick any edge, then IP, sub-cell, parent, {boundaryLabel}, or ruler</small></span>
+            <kbd className="kbd-hint">A</kbd>
           </button>
           <div className="editing-toolbar__menu-section">Align to {boundaryLabel} boundary</div>
           <div className="editing-toolbar__boundary-grid">

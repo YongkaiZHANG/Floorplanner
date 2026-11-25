@@ -20,6 +20,18 @@ import type { LayoutShape, LayoutTextFontFamily, LayoutTextFontStyle } from '../
 export type { InstanceMosaic, MoveConstraintMode } from '../utils/alignment.ts';
 export type { LayoutShape, LayoutTextFontFamily, LayoutTextFontStyle } from '../utils/layoutLayers.ts';
 
+export type ToastKind = 'success' | 'info' | 'warning' | 'error';
+
+export type ToastItem = {
+  id: string;
+  kind: ToastKind;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+};
+
+const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 export type Instance = {
   id: string;
   cellId: string;
@@ -264,6 +276,7 @@ export type ProjectState = {
   clipboard: Instance[];
   shapeClipboard: LayoutShape[];
   clipboardWasCut: boolean;
+  toasts: ToastItem[];
   
   setGridSize: (size: number) => void;
   setAppMode: (mode: AppMode) => void;
@@ -378,6 +391,8 @@ export type ProjectState = {
   toggleSnapToVisibleGrid: () => void;
   toggleEditInPlaceContext: () => void;
   togglePartialSelectMode: () => void;
+  pushToast: (message: string, kind?: ToastKind, durationMs?: number) => void;
+  dismissToast: (id: string) => void;
   loadProject: (data: ProjectSnapshot) => void;
 };
 
@@ -1759,6 +1774,7 @@ export const useStore = create<ProjectState>((set) => ({
   clipboard: [],
   shapeClipboard: [],
   clipboardWasCut: false,
+  toasts: [],
 
   setGridSize: (size) => set((state) => {
     if (!Number.isFinite(size) || size <= 0) return state;
@@ -4781,6 +4797,29 @@ export const useStore = create<ProjectState>((set) => ({
       } : {}),
     };
   }),
+  pushToast: (message, kind = 'info', durationMs = 3600) => {
+    const clean = message.trim();
+    if (!clean) return;
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    set((state) => ({
+      toasts: [...state.toasts, { id, kind, message: clean }].slice(-4),
+    }));
+    if (typeof window !== 'undefined' && durationMs > 0) {
+      const timer = setTimeout(() => {
+        toastTimers.delete(id);
+        set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
+      }, durationMs);
+      toastTimers.set(id, timer);
+    }
+  },
+  dismissToast: (id) => {
+    const existingTimer = toastTimers.get(id);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      toastTimers.delete(id);
+    }
+    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
+  },
 
   loadProject: (data) => set((state) => {
     const gridSize = data.gridSize ?? state.gridSize;

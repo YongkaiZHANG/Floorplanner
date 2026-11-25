@@ -46,7 +46,7 @@ import { computeRegionZoomViewport, panViewportByArrow } from '../utils/viewport
 import type { ArrowPanKey } from '../utils/viewport';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
-import { FiArrowUp, FiCrosshair, FiEye, FiEyeOff, FiGrid, FiMaximize2, FiMinus, FiMove, FiPlus, FiX } from 'react-icons/fi';
+import { FiArrowUp, FiCrosshair, FiEye, FiEyeOff, FiGrid, FiMaximize2, FiMinus, FiMove, FiPlus, FiTrash2, FiX } from 'react-icons/fi';
 import './FloorplanCanvas.css';
 
 const ZOOM_SPEED = 1.1;
@@ -209,14 +209,13 @@ export const FloorplanCanvas: React.FC = () => {
     rightSidebarPinned,
     setRightSidebarPinned,
     orthogonalRuler,
+    toggleOrthogonalRuler,
     moveConstraint,
     cycleMoveConstraint,
     showAutoDim,
     showOverlapDrc,
     showGrid,
     toggleGrid,
-    snapToVisibleGrid,
-    toggleSnapToVisibleGrid,
     edgeAlignmentSession,
     setEdgeAlignmentEdge,
     completeEdgeAlignment,
@@ -367,11 +366,14 @@ export const FloorplanCanvas: React.FC = () => {
     () => computeDisplayGridStep(gridSize, stageScale, SCALE_FACTOR),
     [gridSize, stageScale],
   );
-  const activeSnapStep = resolveActiveSnapStep(gridSize, displayGrid.minorStep, snapToVisibleGrid);
+  const activeSnapStep = resolveActiveSnapStep(gridSize, displayGrid.minorStep, false);
   const activeSnapStepRef = useRef(activeSnapStep);
   useEffect(() => {
     activeSnapStepRef.current = activeSnapStep;
   }, [activeSnapStep]);
+  const showErrorToast = (message: string) => {
+    useStore.getState().pushToast(message, 'error');
+  };
 
   const updatePartialSelection = useCallback((next: PartialShapeSelection) => {
     partialSelectionRef.current = next;
@@ -731,7 +733,9 @@ export const FloorplanCanvas: React.FC = () => {
           state.ascendToParent();
           return;
         }
+        return;
       }
+      if (e.altKey) return;
       
       switch (key) {
         case 'e':
@@ -769,7 +773,7 @@ export const FloorplanCanvas: React.FC = () => {
           break;
         case 'q':
           e.preventDefault();
-          if (state.selectedInstanceId || state.selectedShapeId || state.pixelArraySelected) {
+          if (state.rightSidebarPinned || state.selectedInstanceId || state.selectedShapeId || state.pixelArraySelected) {
             state.setRightSidebarPinned(!state.rightSidebarPinned);
           }
           break;
@@ -809,7 +813,7 @@ export const FloorplanCanvas: React.FC = () => {
             try {
               state.deleteShape(state.selectedShapeId);
             } catch (error) {
-              alert(error instanceof Error ? error.message : 'Unable to delete the selected shape.');
+              showErrorToast(error instanceof Error ? error.message : 'Unable to delete the selected shape.');
             }
           } else if (state.selectedInstanceIds.length > 0) {
             state.deleteSelectedInstances();
@@ -878,7 +882,7 @@ export const FloorplanCanvas: React.FC = () => {
                   ) as CadenceOrientation,
                 });
               } catch (error) {
-                alert(error instanceof Error ? error.message : 'Unable to rotate the selected text label.');
+                showErrorToast(error instanceof Error ? error.message : 'Unable to rotate the selected text label.');
               }
               break;
             }
@@ -892,7 +896,7 @@ export const FloorplanCanvas: React.FC = () => {
                   rotateOrientationByQuarterTurns(instance.orientation, e.shiftKey ? -1 : 1),
                 );
               } catch (error) {
-                alert(error instanceof Error ? error.message : 'Unable to rotate the selected block.');
+                showErrorToast(error instanceof Error ? error.message : 'Unable to rotate the selected block.');
               }
             }
           } else {
@@ -1202,7 +1206,7 @@ export const FloorplanCanvas: React.FC = () => {
       });
       return true;
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Unable to create rectangle.');
+      showErrorToast(error instanceof Error ? error.message : 'Unable to create rectangle.');
       return false;
     }
   };
@@ -1339,7 +1343,7 @@ export const FloorplanCanvas: React.FC = () => {
           try {
             batchUpdateShapes(updates);
           } catch (error) {
-            alert(error instanceof Error ? error.message : 'Unable to stretch selected edges.');
+            showErrorToast(error instanceof Error ? error.message : 'Unable to stretch selected edges.');
           }
           updatePartialSelection({});
           ignoreBackgroundClickUntilRef.current = performance.now() + 100;
@@ -1684,7 +1688,7 @@ export const FloorplanCanvas: React.FC = () => {
         try {
           batchUpdateShapes(updates);
         } catch (error) {
-          alert(error instanceof Error ? error.message : 'Unable to stretch selected edges.');
+          showErrorToast(error instanceof Error ? error.message : 'Unable to stretch selected edges.');
         }
         updatePartialSelection({});
         ignoreBackgroundClickUntilRef.current = performance.now() + 100;
@@ -1966,7 +1970,7 @@ export const FloorplanCanvas: React.FC = () => {
       } catch (error) {
         node.x(groupDrag.startX * SCALE_FACTOR);
         node.y(groupDrag.startY * SCALE_FACTOR);
-        alert(error instanceof Error ? error.message : 'Unable to move the selected blocks.');
+        showErrorToast(error instanceof Error ? error.message : 'Unable to move the selected blocks.');
       }
       return;
     }
@@ -1980,7 +1984,7 @@ export const FloorplanCanvas: React.FC = () => {
         node.x(original.x * SCALE_FACTOR);
         node.y(original.y * SCALE_FACTOR);
       }
-      alert(error instanceof Error ? error.message : 'Unable to move the selected block.');
+      showErrorToast(error instanceof Error ? error.message : 'Unable to move the selected block.');
     }
   };
 
@@ -3174,8 +3178,8 @@ export const FloorplanCanvas: React.FC = () => {
         }
       }}
       style={{
-        '--canvas-safe-left': `${leftSidebarPinned && windowLayoutMode !== 'split' ? 280 : 16}px`,
-        '--canvas-safe-right': `${rightSidebarPinned && windowLayoutMode !== 'split' ? 280 : 16}px`,
+        '--canvas-safe-left': `${leftSidebarPinned ? 16 : 40}px`,
+        '--canvas-safe-right': `${rightSidebarPinned || windowLayoutMode === 'split' ? 16 : 40}px`,
       } as React.CSSProperties}
     >
       <Stage
@@ -3263,7 +3267,7 @@ export const FloorplanCanvas: React.FC = () => {
               const targetPos = snapPointToGrid(constrained.x, constrained.y, activeSnapStep);
               placeCopyGroupAt(targetPos.x, targetPos.y);
             } catch (error) {
-              alert(error instanceof Error ? error.message : 'Unable to copy the selected objects here.');
+              showErrorToast(error instanceof Error ? error.message : 'Unable to copy the selected objects here.');
             }
           } else if (appMode === 'place' && placementMasterId && editMapped) {
             try {
@@ -3281,7 +3285,7 @@ export const FloorplanCanvas: React.FC = () => {
                 }
               }
             } catch (error) {
-              alert(error instanceof Error ? error.message : 'Unable to place the selected cell.');
+              showErrorToast(error instanceof Error ? error.message : 'Unable to place the selected cell.');
             }
           } else if (appMode === 'text' && editMapped) {
             const textStr = activeTextContent.trim();
@@ -3314,7 +3318,7 @@ export const FloorplanCanvas: React.FC = () => {
                 ...(activeTextColor ? { color: activeTextColor } : {}),
               });
             } catch (error) {
-              alert(error instanceof Error ? error.message : 'Unable to place text label.');
+              showErrorToast(error instanceof Error ? error.message : 'Unable to place text label.');
             }
           } else if (appMode === 'pixel-array' && pendingPixelArraySize && editMapped) {
             placePixelArray(editMapped.x, editMapped.y);
@@ -3748,7 +3752,7 @@ export const FloorplanCanvas: React.FC = () => {
                       event.target.y() / SCALE_FACTOR,
                     );
                   } catch (error) {
-                    alert(error instanceof Error ? error.message : 'Unable to move the pixel array.');
+                    showErrorToast(error instanceof Error ? error.message : 'Unable to move the pixel array.');
                   }
                 }}
               >
@@ -4013,7 +4017,7 @@ export const FloorplanCanvas: React.FC = () => {
                       rotateOrientationByQuarterTurns(inst.orientation, e.evt.shiftKey ? 1 : -1),
                     );
                   } catch (error) {
-                    alert(error instanceof Error ? error.message : 'Unable to rotate the selected block.');
+                    showErrorToast(error instanceof Error ? error.message : 'Unable to rotate the selected block.');
                   }
                 }}
               >
@@ -4172,7 +4176,7 @@ export const FloorplanCanvas: React.FC = () => {
                         ) as CadenceOrientation,
                       });
                     } catch (error) {
-                      alert(error instanceof Error ? error.message : 'Unable to rotate text label.');
+                      showErrorToast(error instanceof Error ? error.message : 'Unable to rotate text label.');
                     }
                   }}
                   onDragEnd={event => {
@@ -4185,7 +4189,7 @@ export const FloorplanCanvas: React.FC = () => {
                     } catch (error) {
                       event.target.x(shape.x * SCALE_FACTOR);
                       event.target.y(shape.y * SCALE_FACTOR);
-                      alert(error instanceof Error ? error.message : 'Unable to move text label.');
+                      showErrorToast(error instanceof Error ? error.message : 'Unable to move text label.');
                     }
                   }}
                 >
@@ -4289,7 +4293,7 @@ export const FloorplanCanvas: React.FC = () => {
                       try {
                         updateShape(shape.id, nextRect);
                       } catch (error) {
-                        alert(error instanceof Error ? error.message : 'Unable to resize rectangle.');
+                        showErrorToast(error instanceof Error ? error.message : 'Unable to resize rectangle.');
                       }
                     }
                   }}
@@ -4328,7 +4332,7 @@ export const FloorplanCanvas: React.FC = () => {
                     } catch (error) {
                       event.target.x(shape.x * SCALE_FACTOR);
                       event.target.y(shape.y * SCALE_FACTOR);
-                      alert(error instanceof Error ? error.message : 'Unable to move rectangle.');
+                      showErrorToast(error instanceof Error ? error.message : 'Unable to move rectangle.');
                     }
                   }}
                 >
@@ -4630,7 +4634,7 @@ export const FloorplanCanvas: React.FC = () => {
                         try {
                           completeEdgeAlignment(instance.id, edge);
                         } catch (error) {
-                          alert(error instanceof Error ? error.message : 'Unable to align edges.');
+                          showErrorToast(error instanceof Error ? error.message : 'Unable to align edges.');
                         }
                       }
                     }}
@@ -4689,7 +4693,7 @@ export const FloorplanCanvas: React.FC = () => {
                           try {
                             completeEdgeAlignmentToCoordinate(coord, `${shapeName}.${edge}`);
                           } catch (error) {
-                            alert(error instanceof Error ? error.message : 'Unable to align to the shape edge.');
+                            showErrorToast(error instanceof Error ? error.message : 'Unable to align to the shape edge.');
                           }
                         }
                       }}
@@ -4745,7 +4749,7 @@ export const FloorplanCanvas: React.FC = () => {
                         try {
                           completeEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID, edge);
                         } catch (error) {
-                          alert(error instanceof Error ? error.message : 'Unable to align to the pixel array.');
+                          showErrorToast(error instanceof Error ? error.message : 'Unable to align to the pixel array.');
                         }
                       }
                     }}
@@ -4795,7 +4799,7 @@ export const FloorplanCanvas: React.FC = () => {
                         try {
                           completeEdgeAlignmentToCoordinate(coord, `${ref.label}.${edge}`);
                         } catch (error) {
-                          alert(error instanceof Error ? error.message : 'Unable to align to the cross-hierarchy cell edge.');
+                          showErrorToast(error instanceof Error ? error.message : 'Unable to align to the cross-hierarchy cell edge.');
                         }
                       }}
                     />
@@ -4858,7 +4862,7 @@ export const FloorplanCanvas: React.FC = () => {
                         completeEdgeAlignmentToBoundary(edge as 'left' | 'right' | 'bottom' | 'top');
                       }
                     } catch (error) {
-                      alert(error instanceof Error ? error.message : 'Unable to align to the boundary.');
+                      showErrorToast(error instanceof Error ? error.message : 'Unable to align to the boundary.');
                     }
                   }}
                 />
@@ -4910,7 +4914,7 @@ export const FloorplanCanvas: React.FC = () => {
                     try {
                       completeEdgeAlignmentToRuler(ruler.id);
                     } catch (error) {
-                      alert(error instanceof Error ? error.message : 'Unable to align to the ruler.');
+                      showErrorToast(error instanceof Error ? error.message : 'Unable to align to the ruler.');
                     }
                   }}
                 />
@@ -5448,12 +5452,32 @@ export const FloorplanCanvas: React.FC = () => {
             const visW = Math.abs(p2.x - p1.x);
             const visH = Math.abs(p2.y - p1.y);
             const dimLabel = `${formatLppLabel(activeDrawLayer, activeDrawPurpose)} · ${formatGridValue(visW, gridSize)} × ${formatGridValue(visH, gridSize)} µm`;
+            const fs = 10.5 / stageScale;
+            const padX = 7 / stageScale;
+            const pillW = Math.max(72 / stageScale, dimLabel.length * fs * 0.61 + padX * 2);
+            const pillH = 19 / stageScale;
             return (
-              <Group x={bMinX} y={bMaxY + 16 / stageScale} scaleY={-1} listening={false}>
+              <Group x={bMinX} y={bMaxY + 14 / stageScale} scaleY={-1} listening={false}>
+                <Rect
+                  x={0}
+                  y={-pillH / 2}
+                  width={pillW}
+                  height={pillH}
+                  cornerRadius={pillH / 2}
+                  fill="rgba(15, 23, 42, 0.9)"
+                  stroke={activeStyle.color}
+                  strokeWidth={1.1 / stageScale}
+                />
                 <Text
+                  x={0}
+                  y={-pillH / 2}
+                  width={pillW}
+                  height={pillH}
+                  align="center"
+                  verticalAlign="middle"
                   text={dimLabel}
-                  fill={activeStyle.color}
-                  fontSize={11.5 / stageScale}
+                  fill="#f8fafc"
+                  fontSize={fs}
                   fontFamily={CANVAS_FONT_MONO}
                   fontStyle="bold"
                 />
@@ -5468,6 +5492,10 @@ export const FloorplanCanvas: React.FC = () => {
             const visDx = snapToGrid(baseCurrent.x - baseAnchor.x, gridSize);
             const visDy = snapToGrid(baseCurrent.y - baseAnchor.y, gridSize);
             const deltaText = `dX ${visDx >= 0 ? '+' : ''}${formatGridValue(visDx, gridSize)} · dY ${visDy >= 0 ? '+' : ''}${formatGridValue(visDy, gridSize)} µm`;
+            const fs = 10.5 / stageScale;
+            const padX = 7 / stageScale;
+            const pillW = Math.max(84 / stageScale, deltaText.length * fs * 0.61 + padX * 2);
+            const pillH = 19 / stageScale;
             return (
               <Group
                 x={baseCurrent.x * SCALE_FACTOR + 10 / stageScale}
@@ -5475,10 +5503,26 @@ export const FloorplanCanvas: React.FC = () => {
                 scaleY={-1}
                 listening={false}
               >
+                <Rect
+                  x={0}
+                  y={-pillH / 2}
+                  width={pillW}
+                  height={pillH}
+                  cornerRadius={pillH / 2}
+                  fill="rgba(56, 16, 40, 0.92)"
+                  stroke="#ec4899"
+                  strokeWidth={1.1 / stageScale}
+                />
                 <Text
+                  x={0}
+                  y={-pillH / 2}
+                  width={pillW}
+                  height={pillH}
+                  align="center"
+                  verticalAlign="middle"
                   text={deltaText}
-                  fill="#be185d"
-                  fontSize={11.5 / stageScale}
+                  fill="#fce7f3"
+                  fontSize={fs}
                   fontFamily={CANVAS_FONT_MONO}
                   fontStyle="bold"
                 />
@@ -5993,9 +6037,40 @@ export const FloorplanCanvas: React.FC = () => {
         </div>
       )}
       {appMode === 'measure' && (
-        <div className="coordinate-overlay measure-mode-hint">
-          Ruler (K) · Click two points · O Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc exits
-        </div>
+        <>
+          <div className={`lpp-palette-bar${isEditInPlace ? ' lpp-palette-bar--below-eip' : ''}`} role="toolbar" aria-label="Ruler controls">
+            <button
+              type="button"
+              className={`lpp-chip${orthogonalRuler ? ' active' : ''}`}
+              onClick={toggleOrthogonalRuler}
+              title={`Toggle Orthogonal ruler lock (O): currently ${orthogonalRuler ? 'ON' : 'OFF'}`}
+              aria-pressed={orthogonalRuler}
+            >
+              <FiGrid /> Ortho {orthogonalRuler ? 'ON' : 'OFF'}
+            </button>
+            <button
+              type="button"
+              className="lpp-chip lpp-chip--danger"
+              disabled={rulers.length === 0}
+              onClick={() => clearRulers()}
+              title="Clear all rulers (Shift+K)"
+            >
+              <FiTrash2 /> Clear{rulers.length > 0 ? ` (${rulers.length})` : ''}
+            </button>
+            <button
+              type="button"
+              className="lpp-close-btn"
+              onClick={() => setAppMode('select')}
+              title="Exit Ruler mode (Esc)"
+              aria-label="Exit ruler mode"
+            >
+              <FiX />
+            </button>
+          </div>
+          <div className="coordinate-overlay measure-mode-hint">
+            Ruler (K) · Click two points · O Ortho [{orthogonalRuler ? 'ON' : 'OFF'}] · Esc exits
+          </div>
+        </>
       )}
       {appMode === 'pixel-array' && pendingPixelArraySize && (
         <div className="coordinate-overlay pixel-array-placement-hint">
@@ -6099,15 +6174,12 @@ export const FloorplanCanvas: React.FC = () => {
             : `Place ${masterCells[placementMasterId].cellName}${pendingInstanceArray && (pendingInstanceArray.rows > 1 || pendingInstanceArray.cols > 1) ? ` (${pendingInstanceArray.rows}×${pendingInstanceArray.cols}${pendingInstanceArray.asMosaic ? ' mosaic' : ''})` : ''} [${placementOrientation}] · R rotates · Esc finishes`}
         </div>
       )}
+      {snappedMousePos && (
+        <div className="viewport-coords-pill" aria-label="Cursor coordinates">
+          X {formatGridValue(snappedMousePos.x, gridSize)} · Y {formatGridValue(snappedMousePos.y, gridSize)} µm
+        </div>
+      )}
       <div className="viewport-hud" aria-label="Viewport controls">
-        {snappedMousePos && (
-          <>
-            <span className="viewport-hud__coords">
-              X {formatGridValue(snappedMousePos.x, gridSize)} · Y {formatGridValue(snappedMousePos.y, gridSize)}
-            </span>
-            <span className="viewport-hud__divider" aria-hidden="true" />
-          </>
-        )}
         <button
           type="button"
           className="viewport-hud__btn"
@@ -6169,24 +6241,17 @@ export const FloorplanCanvas: React.FC = () => {
         >
           <FiGrid /> Grid
         </button>
-        <button
-          type="button"
-          className={`viewport-hud__btn${snapToVisibleGrid ? ' active' : ''}`}
-          onClick={toggleSnapToVisibleGrid}
-          title={
-            snapToVisibleGrid
-              ? `Visible grid & snap locked to defined grid (${formatGridValue(activeSnapStep, gridSize)} µm, fixed across zoom levels) · Click or press Shift+G for Snap label`
-              : `Anchor & placement locked to defined grid (${formatGridValue(gridSize, gridSize)} µm, fixed across zoom levels) · Click or press Shift+G for Vis label`
-          }
-          aria-pressed={snapToVisibleGrid}
+        <span
+          className="viewport-hud__snap"
+          title={`Snap & visual grid fixed to ${formatGridValue(activeSnapStep, gridSize)} µm (edit Grid in Topbar)`}
         >
-          <FiCrosshair /> {snapToVisibleGrid ? `Vis ${formatGridValue(activeSnapStep, gridSize)}` : `Snap ${formatGridValue(gridSize, gridSize)}`}
-        </button>
+          <FiCrosshair /> {formatGridValue(activeSnapStep, gridSize)} µm
+        </span>
       </div>
       {showAutoDim && appMode !== 'measure' && !pixelArraySelected && (
         <div className="autodim-legend">
           <span className="autodim-legend__swatch" />
-          Nearest visible gaps · select a block to focus its local dimensions
+          Auto-Dim · Select block to focus
         </div>
       )}
     </div>
