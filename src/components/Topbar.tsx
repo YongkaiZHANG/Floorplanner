@@ -17,7 +17,7 @@ import type { ToastKind } from '../store/useStore';
 import './Topbar.css';
 
 export const Topbar: React.FC = () => {
-  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, descendStack, rootView, openCellView, gridSize, setGridSize, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, selectedShapeId, setSelection, undo, redo, alignSelectedInstances, alignSelectedInstancesToBoundary, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment, pushToast } = useStore();
+  const { appMode, setAppMode, partialSelectMode, togglePartialSelectMode, topWidth, topHeight, topLibName, topCellName, padInset, libraries, setTopDimensions, masterCells, instances, rulers, shapes, activeCoordinateMode, pixelArray, pixelArraySelected, cellViews, activeCellId, descendStack, rootView, openCellView, gridSize, setGridSize, showAutoDim, toggleAutoDim, showOverlapDrc, toggleOverlapDrc, history, selectedInstanceId, selectedInstanceIds, selectedShapeId, setSelection, undo, redo, alignSelectedInstances, spaceSelectedInstances, alignSelectedInstancesToBoundary, distributeSelectedInstances, startEdgeAlignment, edgeAlignmentSession, setEdgeAlignmentOffset, cancelEdgeAlignment, pushToast } = useStore();
   const [showConfig, setShowConfig] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
@@ -304,21 +304,35 @@ export const Topbar: React.FC = () => {
     e.target.value = '';
   };
 
-  const handleAlignment = (action: AlignmentAction) => {
+  const handleAlignment = (action: AlignmentAction, distance = 0) => {
     try {
-      if (action === 'distribute-horizontal') distributeSelectedInstances('horizontal');
-      else if (action === 'distribute-vertical') distributeSelectedInstances('vertical');
-      else alignSelectedInstances(action);
-      showToast(`Applied ${action.replaceAll('-', ' ')}`, 'info');
+      const distSuffix = Math.abs(distance) > 1e-9 ? ` (${distance} µm)` : '';
+      if (action === 'distribute-horizontal') {
+        distributeSelectedInstances('horizontal');
+        showToast('Distributed horizontally', 'info');
+      } else if (action === 'distribute-vertical') {
+        distributeSelectedInstances('vertical');
+        showToast('Distributed vertically', 'info');
+      } else if (action === 'space-horizontal') {
+        spaceSelectedInstances('horizontal', distance);
+        showToast(Math.abs(distance) <= 1e-9 ? 'Abutted horizontally (0 µm)' : `Spaced horizontally (${distance} µm)`, 'info');
+      } else if (action === 'space-vertical') {
+        spaceSelectedInstances('vertical', distance);
+        showToast(Math.abs(distance) <= 1e-9 ? 'Abutted vertically (0 µm)' : `Spaced vertically (${distance} µm)`, 'info');
+      } else {
+        alignSelectedInstances(action, distance);
+        showToast(`Aligned ${action.replaceAll('-', ' ')}${distSuffix}`, 'info');
+      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Unable to arrange the selected blocks.', 'error');
     }
   };
 
-  const handleAlignToBoundary = (edge: AlignmentEdge) => {
+  const handleAlignToBoundary = (edge: AlignmentEdge, distance = 0) => {
     try {
-      alignSelectedInstancesToBoundary(edge);
-      showToast(`Aligned to ${boundaryLabel} ${edge.replaceAll('-', ' ')}`, 'info');
+      alignSelectedInstancesToBoundary(edge, distance);
+      const distSuffix = Math.abs(distance) > 1e-9 ? ` (${distance} µm)` : '';
+      showToast(`Aligned to ${boundaryLabel} ${edge.replaceAll('-', ' ')}${distSuffix}`, 'info');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Unable to align to boundary.', 'error');
     }
@@ -445,21 +459,32 @@ export const Topbar: React.FC = () => {
               </div>
             </div>
             <label className="topbar-align__offset">
-              Spacing
+              Distance
               <input
                 type="text"
                 inputMode="decimal"
                 value={edgeAlignmentSession.offset}
                 onChange={event => setEdgeAlignmentOffset(event.target.value)}
+                onFocus={event => event.currentTarget.select()}
                 onKeyDown={event => {
                   if (event.key === 'Escape') cancelEdgeAlignment();
                   else if (event.key === 'Enter') event.currentTarget.blur();
                 }}
-                aria-label="Alignment spacing in micrometers"
+                aria-label="Alignment distance in micrometers (default 0)"
               />
               <span>µm</span>
             </label>
-            <span className="topbar-align__hint">Directional edge distance · the entire selection shifts together</span>
+            {edgeAlignmentSession.offset.trim() !== '0' && (
+              <button
+                type="button"
+                className="editing-toolbar__distance-chip"
+                onClick={() => setEdgeAlignmentOffset('0')}
+                title="Reset distance to 0 µm"
+              >
+                0
+              </button>
+            )}
+            <span className="topbar-align__hint">Directional edge distance · default 0</span>
             <button className="topbar-align__cancel" type="button" onClick={cancelEdgeAlignment} aria-label="Cancel edge alignment" title="Cancel alignment (Esc)">
               <FiX />
             </button>
@@ -483,11 +508,11 @@ export const Topbar: React.FC = () => {
             onRedo={redo}
             onAlign={handleAlignment}
             onAlignToBoundary={handleAlignToBoundary}
-            onStartEdgeAlign={() => {
+            onStartEdgeAlign={(initialDistance) => {
               setAppMode('select');
-              if (pixelArraySelected) startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
-              else if (selectedRectShape) startEdgeAlignment(makeShapeAlignmentId(selectedRectShape.id));
-              else if (selectedInstanceId) startEdgeAlignment(selectedInstanceId);
+              if (pixelArraySelected) startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID, initialDistance);
+              else if (selectedRectShape) startEdgeAlignment(makeShapeAlignmentId(selectedRectShape.id), initialDistance);
+              else if (selectedInstanceId) startEdgeAlignment(selectedInstanceId, initialDistance);
             }}
           />
 

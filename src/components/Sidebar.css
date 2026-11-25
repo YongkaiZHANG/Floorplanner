@@ -839,6 +839,12 @@
   background: rgba(191, 90, 242, 0.1);
 }
 
+.pixel-array-card.selected {
+  border-color: rgba(245, 158, 11, 0.72);
+  background: rgba(245, 158, 11, 0.12);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.28);
+}
+
 .pixel-array-toggle {
   min-width: 0;
   flex: 1;

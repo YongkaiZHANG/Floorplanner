@@ -89,6 +89,35 @@
   font-weight: 500;
 }
 
+.selection-count--violet {
+  border-color: rgba(167, 139, 250, 0.42);
+  background: rgba(139, 92, 246, 0.14);
+  color: #d8b4fe;
+}
+
+.pixel-quick-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.pixel-quick-btn {
+  padding: 6px 8px;
+  font-size: 11.5px;
+  justify-content: center;
+}
+
+.pixel-quick-btn--primary {
+  border-color: rgba(167, 139, 250, 0.45);
+  background: rgba(139, 92, 246, 0.18);
+  color: #e9d5ff;
+}
+
+.pixel-quick-btn--primary:hover {
+  background: rgba(139, 92, 246, 0.3);
+  color: #ffffff;
+}
+
 .prop-section {
   margin-bottom: 14px;
 }

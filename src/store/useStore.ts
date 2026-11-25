@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { alignInstanceToCoordinate, alignInstanceToTarget, alignInstances, distributeInstances, getAlignmentEdgeAxis, getEdgeCoordinate, getPhysicalBounds, isActiveMosaic } from '../utils/alignment.ts';
+import { alignInstanceToCoordinate, alignInstanceToTarget, alignInstances, distributeInstances, getAlignmentEdgeAxis, getEdgeCoordinate, getPhysicalBounds, isActiveMosaic, spaceInstances } from '../utils/alignment.ts';
 import type { AlignmentEdge, AlignmentOperation, CadenceOrientation, DistributionAxis, InstanceMosaic, MoveConstraintMode } from '../utils/alignment.ts';
 import type { ProjectSnapshot } from './projectDocument.ts';
 import { recordHistory, redoHistory, undoHistory } from './projectHistory.ts';
@@ -334,9 +334,12 @@ export type ProjectState = {
   prepareManualPadPlacement: (config: PadMasterConfig) => void;
   placeManualPadGroup: (x: number, y: number) => void;
   startPixelArrayPlacement: (width: number, height: number) => void;
+  createPixelArray: (width: number, height: number, centerX?: number, centerY?: number) => void;
   placePixelArray: (centerX: number, centerY: number) => void;
   updatePixelArrayPosition: (x: number, y: number) => void;
   updatePixelArrayGeometry: (x: number, y: number, width: number, height: number) => void;
+  centerPixelArray: (axis?: 'both' | 'x' | 'y') => void;
+  nudgePixelArray: (dx: number, dy: number) => void;
   setPixelArrayVisible: (visible: boolean) => void;
   setPixelArraySelected: (selected: boolean) => void;
   deletePixelArray: () => void;
@@ -371,10 +374,11 @@ export type ProjectState = {
   
   undo: () => void;
   redo: () => void;
-  alignSelectedInstances: (operation: AlignmentOperation) => void;
-  alignSelectedInstancesToBoundary: (edge: AlignmentEdge) => void;
+  alignSelectedInstances: (operation: AlignmentOperation, distance?: number) => void;
+  spaceSelectedInstances: (axis: DistributionAxis, distance?: number) => void;
+  alignSelectedInstancesToBoundary: (edge: AlignmentEdge, distance?: number) => void;
   alignInstanceEdges: (sourceId: string, targetId: string, sourceEdge: AlignmentEdge, targetEdge: AlignmentEdge, offset?: number) => void;
-  startEdgeAlignment: (sourceId: string) => void;
+  startEdgeAlignment: (sourceId: string, initialDistance?: string) => void;
   setEdgeAlignmentEdge: (instanceId: string, edge: AlignmentEdge) => void;
   setEdgeAlignmentOffset: (value: string) => void;
   completeEdgeAlignment: (targetId: string, targetEdge: AlignmentEdge) => void;
@@ -1687,28 +1691,6 @@ const directionalSpacingOffset = (
   return spacing * (sourceComesFirst ? -1 : 1);
 };
 
-const ALIGNMENT_SPACING_STORAGE_KEY = 'ic-floorplanner:alignment-spacing:v1';
-
-const readStoredAlignmentSpacing = () => {
-  if (typeof window === 'undefined') return '0';
-  try {
-    const value = window.localStorage.getItem(ALIGNMENT_SPACING_STORAGE_KEY)?.trim();
-    if (value && Number.isFinite(Number(value)) && Number(value) >= 0) return value;
-  } catch {
-    // Browser storage is optional; the in-memory preference still works.
-  }
-  return '0';
-};
-
-const storeAlignmentSpacing = (value: string) => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(ALIGNMENT_SPACING_STORAGE_KEY, value);
-  } catch {
-    // Keep alignment usable when storage is blocked or unavailable.
-  }
-};
-
 export const useStore = create<ProjectState>((set) => ({
   gridSize: 0.005,
   appMode: 'select',
@@ -1764,7 +1746,7 @@ export const useStore = create<ProjectState>((set) => ({
   pendingCopyGroup: null,
   history: { past: [], future: [] },
   edgeAlignmentSession: null,
-  lastAlignmentSpacing: readStoredAlignmentSpacing(),
+  lastAlignmentSpacing: '0',
   orthogonalRuler: false,
   moveConstraint: 'orthogonal',
   showAutoDim: false,
@@ -3283,6 +3265,46 @@ export const useStore = create<ProjectState>((set) => ({
     };
   }),
 
+  createPixelArray: (width, height, centerX, centerY) => set((state) => {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      throw new RangeError('Pixel array width and height must be positive finite numbers');
+    }
+    const snappedWidth = snapToGrid(width, state.gridSize);
+    const snappedHeight = snapToGrid(height, state.gridSize);
+    if (snappedWidth <= 0 || snappedHeight <= 0) {
+      throw new RangeError('Pixel array dimensions must be at least one placement-grid step');
+    }
+    if (snappedWidth >= state.topWidth || snappedHeight >= state.topHeight) {
+      throw new RangeError('Pixel array must be smaller than the top cell in both dimensions');
+    }
+    const { originX, originY } = getActiveContainerOrigin(state);
+    const targetCx = centerX !== undefined && Number.isFinite(centerX) ? centerX : originX + state.topWidth / 2;
+    const targetCy = centerY !== undefined && Number.isFinite(centerY) ? centerY : originY + state.topHeight / 2;
+    const pixelArray = normalizePixelArray(
+      {
+        x: targetCx - snappedWidth / 2,
+        y: targetCy - snappedHeight / 2,
+        width: snappedWidth,
+        height: snappedHeight,
+        visible: true,
+      },
+      state.topWidth,
+      state.topHeight,
+      state.gridSize,
+      originX,
+      originY,
+    );
+    return {
+      ...commitProjectPatch(state, state.pixelArray ? 'Edit pixel array' : 'Place pixel array', { pixelArray }),
+      pendingPixelArraySize: null,
+      appMode: 'select',
+      selectedInstanceId: null,
+      selectedInstanceIds: [],
+      selectedShapeId: null,
+      pixelArraySelected: true,
+    };
+  }),
+
   placePixelArray: (centerX, centerY) => set((state) => {
     const size = state.pendingPixelArraySize;
     if (!size) return state;
@@ -3299,6 +3321,9 @@ export const useStore = create<ProjectState>((set) => ({
       ...commitProjectPatch(state, state.pixelArray ? 'Move pixel array' : 'Place pixel array', { pixelArray }),
       pendingPixelArraySize: null,
       appMode: 'select',
+      selectedInstanceId: null,
+      selectedInstanceIds: [],
+      selectedShapeId: null,
       pixelArraySelected: true,
     };
   }),
@@ -3314,6 +3339,12 @@ export const useStore = create<ProjectState>((set) => ({
       originX,
       originY,
     );
+    if (
+      Math.abs(pixelArray.x - state.pixelArray.x) <= 1e-9
+      && Math.abs(pixelArray.y - state.pixelArray.y) <= 1e-9
+    ) {
+      return state;
+    }
     return commitProjectPatch(state, 'Move pixel array', { pixelArray });
   }),
 
@@ -3342,7 +3373,65 @@ export const useStore = create<ProjectState>((set) => ({
       originX,
       originY,
     );
+    if (
+      Math.abs(pixelArray.x - state.pixelArray.x) <= 1e-9
+      && Math.abs(pixelArray.y - state.pixelArray.y) <= 1e-9
+      && Math.abs(pixelArray.width - state.pixelArray.width) <= 1e-9
+      && Math.abs(pixelArray.height - state.pixelArray.height) <= 1e-9
+    ) {
+      return state;
+    }
     return commitProjectPatch(state, 'Edit pixel array', { pixelArray });
+  }),
+
+  centerPixelArray: (axis = 'both') => set((state) => {
+    if (!state.pixelArray) return state;
+    const { originX, originY } = getActiveContainerOrigin(state);
+    const centerLeft = originX + (state.topWidth - state.pixelArray.width) / 2;
+    const centerBottom = originY + (state.topHeight - state.pixelArray.height) / 2;
+    const nextX = axis === 'y' ? state.pixelArray.x : centerLeft;
+    const nextY = axis === 'x' ? state.pixelArray.y : centerBottom;
+    const pixelArray = normalizePixelArray(
+      { ...state.pixelArray, x: nextX, y: nextY },
+      state.topWidth,
+      state.topHeight,
+      state.gridSize,
+      originX,
+      originY,
+    );
+    if (
+      Math.abs(pixelArray.x - state.pixelArray.x) <= 1e-9
+      && Math.abs(pixelArray.y - state.pixelArray.y) <= 1e-9
+    ) {
+      return state;
+    }
+    const label = axis === 'both'
+      ? 'Center pixel array'
+      : axis === 'x'
+        ? 'Center pixel array horizontally'
+        : 'Center pixel array vertically';
+    return commitProjectPatch(state, label, { pixelArray });
+  }),
+
+  nudgePixelArray: (dx, dy) => set((state) => {
+    if (!state.pixelArray || !state.pixelArray.visible) return state;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return state;
+    const { originX, originY } = getActiveContainerOrigin(state);
+    const pixelArray = normalizePixelArray(
+      { ...state.pixelArray, x: state.pixelArray.x + dx, y: state.pixelArray.y + dy },
+      state.topWidth,
+      state.topHeight,
+      state.gridSize,
+      originX,
+      originY,
+    );
+    if (
+      Math.abs(pixelArray.x - state.pixelArray.x) <= 1e-9
+      && Math.abs(pixelArray.y - state.pixelArray.y) <= 1e-9
+    ) {
+      return state;
+    }
+    return commitProjectPatch(state, 'Nudge pixel array', { pixelArray });
   }),
 
   setPixelArrayVisible: (visible) => set((state) => {
@@ -3706,7 +3795,27 @@ export const useStore = create<ProjectState>((set) => ({
   }),
 
   nudgeSelection: (dx, dy) => set((state) => {
-    if (state.selectedInstanceIds.length === 0) return state;
+    if (state.selectedInstanceIds.length === 0) {
+      if (state.pixelArraySelected && state.pixelArray?.visible && Number.isFinite(dx) && Number.isFinite(dy)) {
+        const { originX, originY } = getActiveContainerOrigin(state);
+        const pixelArray = normalizePixelArray(
+          { ...state.pixelArray, x: state.pixelArray.x + dx, y: state.pixelArray.y + dy },
+          state.topWidth,
+          state.topHeight,
+          state.gridSize,
+          originX,
+          originY,
+        );
+        if (
+          Math.abs(pixelArray.x - state.pixelArray.x) <= 1e-9
+          && Math.abs(pixelArray.y - state.pixelArray.y) <= 1e-9
+        ) {
+          return state;
+        }
+        return commitProjectPatch(state, 'Nudge pixel array', { pixelArray });
+      }
+      return state;
+    }
     const selectedIds = new Set(state.selectedInstanceIds);
     const isSubCellCanvas = state.activeCellId !== null;
     let error = false;
@@ -4239,7 +4348,10 @@ export const useStore = create<ProjectState>((set) => ({
     return applyCanonicalSnapshot(state, result.snapshot, result.history);
   }),
 
-  alignSelectedInstances: (operation) => set((state) => {
+  alignSelectedInstances: (operation, distance = 0) => set((state) => {
+    if (!Number.isFinite(distance)) {
+      throw new RangeError('Alignment distance must be a finite number');
+    }
     if (state.selectedInstanceIds.length < 2) return state;
     const selectedIds = new Set(state.selectedInstanceIds);
     const selected = state.instances.flatMap(instance => {
@@ -4255,12 +4367,14 @@ export const useStore = create<ProjectState>((set) => ({
       gridSize: state.gridSize,
       anchorId: state.selectedInstanceId ?? undefined,
       unbounded: true,
-    });
+    }, distance);
     const positionById = new Map(positions.map(position => [position.id, position]));
+    let anyChanged = false;
     const instances = state.instances.map(instance => {
       const position = positionById.get(instance.id);
       if (!position) return instance;
-      if (instance.locked && (Math.abs(position.x - instance.x) > 1e-9 || Math.abs(position.y - instance.y) > 1e-9)) {
+      const moved = Math.abs(position.x - instance.x) > 1e-9 || Math.abs(position.y - instance.y) > 1e-9;
+      if (instance.locked && moved) {
         throw new Error(`Cannot align because ${instance.name} is locked`);
       }
       const master = state.masterCells[instance.cellId];
@@ -4273,25 +4387,87 @@ export const useStore = create<ProjectState>((set) => ({
           throw new RangeError(`Cannot align because pad ${instance.name} would leave the top-cell perimeter`);
         }
       }
+      if (moved) anyChanged = true;
       return { ...instance, x: position.x, y: position.y };
     });
+    if (!anyChanged) return state;
     const boundsSync = state.activeCellId
       ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
       : null;
-    return commitProjectPatch(state, `Align ${operation.replace('-', ' ')}`, {
+    const distSuffix = Math.abs(distance) > 1e-9 ? ` (${distance} um)` : '';
+    return commitProjectPatch(state, `Align ${operation.replace('-', ' ')}${distSuffix}`, {
       instances,
       ...(boundsSync ?? {}),
     });
   }),
 
-  alignSelectedInstancesToBoundary: (edge) => set((state) => {
+  spaceSelectedInstances: (axis, distance = 0) => set((state) => {
+    if (!Number.isFinite(distance)) {
+      throw new RangeError('Spacing distance must be a finite number');
+    }
+    if (state.selectedInstanceIds.length < 2) return state;
+    const selectedIds = new Set(state.selectedInstanceIds);
+    const selected = state.instances.flatMap(instance => {
+      if (!selectedIds.has(instance.id)) return [];
+      const master = state.masterCells[instance.cellId];
+      if (!master) return [];
+      return [{ ...instance, width: master.width, height: master.height, originX: master.originX, originY: master.originY }];
+    });
+    if (selected.length < 2) return state;
+    const positions = spaceInstances(selected, axis, {
+      topWidth: state.topWidth,
+      topHeight: state.topHeight,
+      gridSize: state.gridSize,
+      anchorId: state.selectedInstanceId ?? undefined,
+      unbounded: true,
+    }, distance);
+    const positionById = new Map(positions.map(position => [position.id, position]));
+    let anyChanged = false;
+    const instances = state.instances.map(instance => {
+      const position = positionById.get(instance.id);
+      if (!position) return instance;
+      const moved = Math.abs(position.x - instance.x) > 1e-9 || Math.abs(position.y - instance.y) > 1e-9;
+      if (instance.locked && moved) {
+        throw new Error(`Cannot space because ${instance.name} is locked`);
+      }
+      const master = state.masterCells[instance.cellId];
+      if (master?.kind === 'pad' && !state.activeCellId) {
+        const bounds = getPhysicalBounds({
+          ...instance, x: position.x, y: position.y, width: master.width, height: master.height,
+          originX: master.originX, originY: master.originY,
+        });
+        if (!isPadTouchingPerimeter(bounds, state.topWidth, state.topHeight, state.padInset)) {
+          throw new RangeError(`Cannot space because pad ${instance.name} would leave the top-cell perimeter`);
+        }
+      }
+      if (moved) anyChanged = true;
+      return { ...instance, x: position.x, y: position.y };
+    });
+    if (!anyChanged) return state;
+    const boundsSync = state.activeCellId
+      ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
+      : null;
+    const label = Math.abs(distance) <= 1e-9
+      ? `Abut ${axis}`
+      : `Space ${axis} (${distance} um)`;
+    return commitProjectPatch(state, label, {
+      instances,
+      ...(boundsSync ?? {}),
+    });
+  }),
+
+  alignSelectedInstancesToBoundary: (edge, distance = 0) => set((state) => {
+    if (!Number.isFinite(distance)) {
+      throw new RangeError('Alignment distance must be a finite number');
+    }
+    const distSuffix = Math.abs(distance) > 1e-9 ? ` (${distance} um)` : '';
     const boxEdgeCoordinate = (box: { minX: number; maxX: number; minY: number; maxY: number }, targetEdge: AlignmentEdge): number => {
-      if (targetEdge === 'left') return box.minX;
-      if (targetEdge === 'right') return box.maxX;
-      if (targetEdge === 'horizontal-center') return (box.minX + box.maxX) / 2;
-      if (targetEdge === 'bottom') return box.minY;
-      if (targetEdge === 'top') return box.maxY;
-      return (box.minY + box.maxY) / 2;
+      if (targetEdge === 'left') return box.minX + distance;
+      if (targetEdge === 'right') return box.maxX - distance;
+      if (targetEdge === 'horizontal-center') return (box.minX + box.maxX) / 2 + distance;
+      if (targetEdge === 'bottom') return box.minY + distance;
+      if (targetEdge === 'top') return box.maxY - distance;
+      return (box.minY + box.maxY) / 2 + distance;
     };
 
     const isEipRootedAtTop = state.activeCellId !== null
@@ -4396,7 +4572,7 @@ export const useStore = create<ProjectState>((set) => ({
       if (Math.abs(pixelArray.x - pa.x) <= 1e-9 && Math.abs(pixelArray.y - pa.y) <= 1e-9) {
         return state;
       }
-      return commitProjectPatch(state, `Align Pixel Array to ${refLabel} ${edge.replace('-', ' ')}`, { pixelArray });
+      return commitProjectPatch(state, `Align Pixel Array to ${refLabel} ${edge.replace('-', ' ')}${distSuffix}`, { pixelArray });
     }
 
     if (state.selectedInstanceIds.length === 0 && state.selectedShapeId) {
@@ -4449,7 +4625,7 @@ export const useStore = create<ProjectState>((set) => ({
       const boundsSync = state.activeCellId
         ? syncMasterBoundsForActiveCell(state, shapes, state.instances, state.pixelArray, false, true)
         : null;
-      return commitProjectPatch(state, `Align rectangle to ${refLabel} ${edge.replace('-', ' ')}`, {
+      return commitProjectPatch(state, `Align rectangle to ${refLabel} ${edge.replace('-', ' ')}${distSuffix}`, {
         shapes,
         ...(boundsSync ?? {}),
       });
@@ -4534,7 +4710,7 @@ export const useStore = create<ProjectState>((set) => ({
     const boundsSync = state.activeCellId
       ? syncMasterBoundsForActiveCell(state, state.shapes, instances, state.pixelArray)
       : null;
-    return commitProjectPatch(state, `Align to ${refLabel} ${edge.replace('-', ' ')}`, {
+    return commitProjectPatch(state, `Align to ${refLabel} ${edge.replace('-', ' ')}${distSuffix}`, {
       instances,
       ...(boundsSync ?? {}),
     });
@@ -4544,7 +4720,7 @@ export const useStore = create<ProjectState>((set) => ({
     edgeAlignmentPatch(state, sourceId, targetId, sourceEdge, targetEdge, offset)
   )),
 
-  startEdgeAlignment: (sourceId) => set((state) => {
+  startEdgeAlignment: (sourceId, initialDistance = '0') => set((state) => {
     const shapeId = parseShapeAlignmentId(sourceId);
     const sourceExists = state.instances.some(instance => instance.id === sourceId)
       || (sourceId === PIXEL_ARRAY_ALIGNMENT_ID && Boolean(state.pixelArray?.visible))
@@ -4555,6 +4731,9 @@ export const useStore = create<ProjectState>((set) => ({
       : state.selectedInstanceIds.includes(sourceId)
         ? state.selectedInstanceIds.filter(id => state.instances.some(instance => instance.id === id))
         : [sourceId];
+    const trimmedInit = initialDistance.trim();
+    const parsedInit = trimmedInit === '' ? Number.NaN : Number(trimmedInit);
+    const resolvedOffset = Number.isFinite(parsedInit) && parsedInit >= 0 ? trimmedInit : '0';
     return {
       edgeAlignmentSession: {
         sourceIds,
@@ -4562,7 +4741,7 @@ export const useStore = create<ProjectState>((set) => ({
         sourceEdge: null,
         targetId: null,
         targetEdge: null,
-        offset: state.lastAlignmentSpacing,
+        offset: resolvedOffset,
       },
     };
   }),
@@ -4591,8 +4770,7 @@ export const useStore = create<ProjectState>((set) => ({
     const edgeAlignmentSession = { ...state.edgeAlignmentSession, offset: value };
     const normalized = value.trim();
     const spacing = Number(normalized);
-    if (normalized !== '' && Number.isFinite(spacing) && spacing >= 0) {
-      storeAlignmentSpacing(normalized);
+    if (normalized !== '' && Number.isFinite(spacing) && spacing > 0) {
       return { edgeAlignmentSession, lastAlignmentSpacing: normalized };
     }
     return { edgeAlignmentSession };

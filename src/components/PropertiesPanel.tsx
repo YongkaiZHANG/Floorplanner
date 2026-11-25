@@ -1,6 +1,6 @@
 import React from 'react';
-import { rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
-import { FiInfo, FiTrash2, FiPaperclip, FiSliders, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiExternalLink, FiCrosshair, FiGrid } from 'react-icons/fi';
+import { PIXEL_ARRAY_ALIGNMENT_ID, rotateOrientationByQuarterTurns, useStore } from '../store/useStore';
+import { FiInfo, FiTrash2, FiPaperclip, FiSliders, FiRotateCcw, FiRotateCw, FiEye, FiEyeOff, FiLock, FiUnlock, FiCornerDownRight, FiExternalLink, FiCrosshair, FiGrid, FiAlignCenter } from 'react-icons/fi';
 import './PropertiesPanel.css';
 import { formatGridValue } from '../utils/grid';
 import { findBoundaryViolations, findOverlapViolations } from '../utils/floorplanMetrics';
@@ -46,8 +46,11 @@ export const PropertiesPanel: React.FC = () => {
     pixelArray,
     pixelArraySelected,
     updatePixelArrayGeometry,
+    centerPixelArray,
     setPixelArrayVisible,
     deletePixelArray,
+    startEdgeAlignment,
+    setAppMode,
     rightSidebarPinned,
     setRightSidebarPinned,
     pushToast,
@@ -87,8 +90,19 @@ export const PropertiesPanel: React.FC = () => {
 
   const [draftArrayX, setDraftArrayX] = React.useState('0');
   const [draftArrayY, setDraftArrayY] = React.useState('0');
+  const [draftArrayCx, setDraftArrayCx] = React.useState('0');
+  const [draftArrayCy, setDraftArrayCy] = React.useState('0');
   const [draftArrayW, setDraftArrayW] = React.useState('0');
   const [draftArrayH, setDraftArrayH] = React.useState('0');
+  const [draftMarginL, setDraftMarginL] = React.useState('0');
+  const [draftMarginR, setDraftMarginR] = React.useState('0');
+  const [draftMarginB, setDraftMarginB] = React.useState('0');
+  const [draftMarginT, setDraftMarginT] = React.useState('0');
+
+  const containerOriginX = activeCellId ? (masterCells[activeCellId]?.originX ?? 0) : -topWidth / 2;
+  const containerOriginY = activeCellId ? (masterCells[activeCellId]?.originY ?? 0) : -topHeight / 2;
+  const containerMaxX = containerOriginX + topWidth;
+  const containerMaxY = containerOriginY + topHeight;
 
   const [draftShapeLayer, setDraftShapeLayer] = React.useState('text');
   const [draftShapePurpose, setDraftShapePurpose] = React.useState('drawing');
@@ -124,13 +138,23 @@ export const PropertiesPanel: React.FC = () => {
     setDraftShapeY2(formatGridValue(selectedShape.y + selectedShape.height, gridSize));
   }, [selectedShape, gridSize]);
 
+  const syncPixelArrayDrafts = React.useCallback((pa: NonNullable<typeof pixelArray>) => {
+    setDraftArrayX(formatGridValue(pa.x, gridSize));
+    setDraftArrayY(formatGridValue(pa.y, gridSize));
+    setDraftArrayCx(formatGridValue(pa.x + pa.width / 2, gridSize));
+    setDraftArrayCy(formatGridValue(pa.y + pa.height / 2, gridSize));
+    setDraftArrayW(formatGridValue(pa.width, gridSize));
+    setDraftArrayH(formatGridValue(pa.height, gridSize));
+    setDraftMarginL(formatGridValue(pa.x - containerOriginX, gridSize));
+    setDraftMarginR(formatGridValue(containerMaxX - (pa.x + pa.width), gridSize));
+    setDraftMarginB(formatGridValue(pa.y - containerOriginY, gridSize));
+    setDraftMarginT(formatGridValue(containerMaxY - (pa.y + pa.height), gridSize));
+  }, [gridSize, containerOriginX, containerOriginY, containerMaxX, containerMaxY]);
+
   React.useEffect(() => {
     if (!pixelArray) return;
-    setDraftArrayX(formatGridValue(pixelArray.x, gridSize));
-    setDraftArrayY(formatGridValue(pixelArray.y, gridSize));
-    setDraftArrayW(formatGridValue(pixelArray.width, gridSize));
-    setDraftArrayH(formatGridValue(pixelArray.height, gridSize));
-  }, [pixelArray, gridSize]);
+    syncPixelArrayDrafts(pixelArray);
+  }, [pixelArray, syncPixelArrayDrafts]);
 
   const skipNextBlurCommitRef = React.useRef(false);
 
@@ -178,33 +202,68 @@ export const PropertiesPanel: React.FC = () => {
     }
   };
 
-  const commitPixelArrayField = (field: 'x' | 'y' | 'width' | 'height') => {
+  type PixelArrayField = 'x' | 'y' | 'cx' | 'cy' | 'width' | 'height' | 'marginL' | 'marginR' | 'marginB' | 'marginT';
+
+  const commitPixelArrayField = (field: PixelArrayField) => {
     if (skipNextBlurCommitRef.current) {
       skipNextBlurCommitRef.current = false;
       return;
     }
     if (!pixelArray) return;
-    const raw = field === 'x' ? draftArrayX : field === 'y' ? draftArrayY : field === 'width' ? draftArrayW : draftArrayH;
-    const value = Number.parseFloat(raw);
+    const rawMap: Record<PixelArrayField, string> = {
+      x: draftArrayX,
+      y: draftArrayY,
+      cx: draftArrayCx,
+      cy: draftArrayCy,
+      width: draftArrayW,
+      height: draftArrayH,
+      marginL: draftMarginL,
+      marginR: draftMarginR,
+      marginB: draftMarginB,
+      marginT: draftMarginT,
+    };
+    const value = Number.parseFloat(rawMap[field]);
     if (!Number.isFinite(value)) {
-      setDraftArrayX(formatGridValue(pixelArray.x, gridSize));
-      setDraftArrayY(formatGridValue(pixelArray.y, gridSize));
-      setDraftArrayW(formatGridValue(pixelArray.width, gridSize));
-      setDraftArrayH(formatGridValue(pixelArray.height, gridSize));
+      syncPixelArrayDrafts(pixelArray);
       return;
     }
+    const curCx = pixelArray.x + pixelArray.width / 2;
+    const curCy = pixelArray.y + pixelArray.height / 2;
+    let nextX = pixelArray.x;
+    let nextY = pixelArray.y;
+    let nextW = pixelArray.width;
+    let nextH = pixelArray.height;
+
+    if (field === 'x') {
+      nextX = value;
+    } else if (field === 'y') {
+      nextY = value;
+    } else if (field === 'cx') {
+      nextX = value - pixelArray.width / 2;
+    } else if (field === 'cy') {
+      nextY = value - pixelArray.height / 2;
+    } else if (field === 'width') {
+      nextW = value;
+      nextX = curCx - value / 2;
+    } else if (field === 'height') {
+      nextH = value;
+      nextY = curCy - value / 2;
+    } else if (field === 'marginL') {
+      nextX = containerOriginX + value;
+    } else if (field === 'marginR') {
+      nextX = containerMaxX - pixelArray.width - value;
+    } else if (field === 'marginB') {
+      nextY = containerOriginY + value;
+    } else if (field === 'marginT') {
+      nextY = containerMaxY - pixelArray.height - value;
+    }
+
     try {
-      updatePixelArrayGeometry(
-        field === 'x' ? value : pixelArray.x,
-        field === 'y' ? value : pixelArray.y,
-        field === 'width' ? value : pixelArray.width,
-        field === 'height' ? value : pixelArray.height,
-      );
+      updatePixelArrayGeometry(nextX, nextY, nextW, nextH);
+      const updated = useStore.getState().pixelArray;
+      if (updated) syncPixelArrayDrafts(updated);
     } catch (error) {
-      setDraftArrayX(formatGridValue(pixelArray.x, gridSize));
-      setDraftArrayY(formatGridValue(pixelArray.y, gridSize));
-      setDraftArrayW(formatGridValue(pixelArray.width, gridSize));
-      setDraftArrayH(formatGridValue(pixelArray.height, gridSize));
+      syncPixelArrayDrafts(pixelArray);
       notifyError(error, 'Unable to update the pixel array.');
     }
   };
@@ -288,14 +347,11 @@ export const PropertiesPanel: React.FC = () => {
     }
   };
 
-  const handlePixelArrayKeyDown = (event: React.KeyboardEvent<HTMLInputElement>, field: 'x' | 'y' | 'width' | 'height') => {
+  const handlePixelArrayKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') event.currentTarget.blur();
     if (event.key === 'Escape' && pixelArray) {
       skipNextBlurCommitRef.current = true;
-      if (field === 'x') setDraftArrayX(formatGridValue(pixelArray.x, gridSize));
-      else if (field === 'y') setDraftArrayY(formatGridValue(pixelArray.y, gridSize));
-      else if (field === 'width') setDraftArrayW(formatGridValue(pixelArray.width, gridSize));
-      else setDraftArrayH(formatGridValue(pixelArray.height, gridSize));
+      syncPixelArrayDrafts(pixelArray);
       event.currentTarget.blur();
     }
   };
@@ -842,55 +898,83 @@ export const PropertiesPanel: React.FC = () => {
                 <h3 className="section-title">Pixel Array</h3>
                 {renderPinButton()}
               </div>
-              <span className="selection-count">Active-array overlay</span>
+              <span className="selection-count selection-count--violet">
+                {formatGridValue(pixelArray.width, gridSize)} × {formatGridValue(pixelArray.height, gridSize)} µm
+              </span>
             </div>
 
             <div className="prop-section">
-              <div className="prop-row">
-                <span className="prop-label">Center (um)</span>
-                <span className="prop-value">
-                  {formatGridValue(pixelArray.x + pixelArray.width / 2, gridSize)}, {formatGridValue(pixelArray.y + pixelArray.height / 2, gridSize)}
-                </span>
-              </div>
-              <div className="prop-row">
-                <span className="prop-label">Area</span>
-                <span className="prop-value">
-                  {(pixelArray.width * pixelArray.height).toFixed(2)} um²
-                </span>
+              <h4 className="sub-title">Quick Position</h4>
+              <div className="pixel-quick-grid">
+                <button
+                  className="btn pixel-quick-btn pixel-quick-btn--primary"
+                  type="button"
+                  onClick={() => centerPixelArray('both')}
+                  title="Center Pixel Array in the die (0, 0)"
+                >
+                  <FiCrosshair /> Center
+                </button>
+                <button
+                  className="btn pixel-quick-btn"
+                  type="button"
+                  onClick={() => centerPixelArray('x')}
+                  title="Center horizontally (CX = 0)"
+                >
+                  Center X
+                </button>
+                <button
+                  className="btn pixel-quick-btn"
+                  type="button"
+                  onClick={() => centerPixelArray('y')}
+                  title="Center vertically (CY = 0)"
+                >
+                  Center Y
+                </button>
+                <button
+                  className="btn pixel-quick-btn"
+                  type="button"
+                  onClick={() => {
+                    setAppMode('select');
+                    startEdgeAlignment(PIXEL_ARRAY_ALIGNMENT_ID);
+                  }}
+                  title="Align Pixel Array edges to any IP, boundary, or ruler (A)"
+                >
+                  <FiAlignCenter /> Align (A)
+                </button>
               </div>
             </div>
 
             <div className="prop-section">
-              <h4 className="sub-title">Geometry (Bottom-Left Origin)</h4>
+              <h4 className="sub-title">Center &amp; Size (µm)</h4>
               <div className="form-row">
                 <div className="form-group">
-                  <label className="label">X (um)</label>
+                  <label className="label">Center X</label>
                   <input
                     type="number"
                     step={gridSize}
                     className="input-field"
-                    value={draftArrayX}
-                    onChange={e => setDraftArrayX(e.target.value)}
-                    onBlur={() => commitPixelArrayField('x')}
-                    onKeyDown={event => handlePixelArrayKeyDown(event, 'x')}
+                    value={draftArrayCx}
+                    onChange={e => setDraftArrayCx(e.target.value)}
+                    onBlur={() => commitPixelArrayField('cx')}
+                    onKeyDown={handlePixelArrayKeyDown}
                   />
                 </div>
                 <div className="form-group">
-                  <label className="label">Y (um)</label>
+                  <label className="label">Center Y</label>
                   <input
                     type="number"
                     step={gridSize}
                     className="input-field"
-                    value={draftArrayY}
-                    onChange={e => setDraftArrayY(e.target.value)}
-                    onBlur={() => commitPixelArrayField('y')}
-                    onKeyDown={event => handlePixelArrayKeyDown(event, 'y')}
+                    value={draftArrayCy}
+                    onChange={e => setDraftArrayCy(e.target.value)}
+                    onBlur={() => commitPixelArrayField('cy')}
+                    onKeyDown={handlePixelArrayKeyDown}
                   />
                 </div>
               </div>
-              <div className="form-row" style={{ marginTop: '10px' }}>
+              <div className="form-row" style={{ marginTop: '8px' }}>
                 <div className="form-group">
-                  <label className="label">Width (um)</label>
+                  <label className="label">Width</label>
                   <input
                     type="number"
                     min={gridSize}
@@ -899,11 +983,11 @@ export const PropertiesPanel: React.FC = () => {
                     value={draftArrayW}
                     onChange={e => setDraftArrayW(e.target.value)}
                     onBlur={() => commitPixelArrayField('width')}
-                    onKeyDown={event => handlePixelArrayKeyDown(event, 'width')}
+                    onKeyDown={handlePixelArrayKeyDown}
                   />
                 </div>
                 <div className="form-group">
-                  <label className="label">Height (um)</label>
+                  <label className="label">Height</label>
                   <input
                     type="number"
                     min={gridSize}
@@ -912,28 +996,131 @@ export const PropertiesPanel: React.FC = () => {
                     value={draftArrayH}
                     onChange={e => setDraftArrayH(e.target.value)}
                     onBlur={() => commitPixelArrayField('height')}
-                    onKeyDown={event => handlePixelArrayKeyDown(event, 'height')}
+                    onKeyDown={handlePixelArrayKeyDown}
                   />
                 </div>
               </div>
             </div>
 
-            <div className="prop-section prop-actions-stack">
+            <div className="prop-section">
+              <h4 className="sub-title">Die Margins (µm)</h4>
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="label">Left</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={gridSize}
+                    className="input-field"
+                    value={draftMarginL}
+                    onChange={e => setDraftMarginL(e.target.value)}
+                    onBlur={() => commitPixelArrayField('marginL')}
+                    onKeyDown={handlePixelArrayKeyDown}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="label">Right</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={gridSize}
+                    className="input-field"
+                    value={draftMarginR}
+                    onChange={e => setDraftMarginR(e.target.value)}
+                    onBlur={() => commitPixelArrayField('marginR')}
+                    onKeyDown={handlePixelArrayKeyDown}
+                  />
+                </div>
+              </div>
+              <div className="form-row" style={{ marginTop: '8px' }}>
+                <div className="form-group">
+                  <label className="label">Bottom</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={gridSize}
+                    className="input-field"
+                    value={draftMarginB}
+                    onChange={e => setDraftMarginB(e.target.value)}
+                    onBlur={() => commitPixelArrayField('marginB')}
+                    onKeyDown={handlePixelArrayKeyDown}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="label">Top</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={gridSize}
+                    className="input-field"
+                    value={draftMarginT}
+                    onChange={e => setDraftMarginT(e.target.value)}
+                    onBlur={() => commitPixelArrayField('marginT')}
+                    onKeyDown={handlePixelArrayKeyDown}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="prop-section">
+              <h4 className="sub-title">Origin (Bottom-Left, µm)</h4>
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="label">X</label>
+                  <input
+                    type="number"
+                    step={gridSize}
+                    className="input-field"
+                    value={draftArrayX}
+                    onChange={e => setDraftArrayX(e.target.value)}
+                    onBlur={() => commitPixelArrayField('x')}
+                    onKeyDown={handlePixelArrayKeyDown}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="label">Y</label>
+                  <input
+                    type="number"
+                    step={gridSize}
+                    className="input-field"
+                    value={draftArrayY}
+                    onChange={e => setDraftArrayY(e.target.value)}
+                    onBlur={() => commitPixelArrayField('y')}
+                    onKeyDown={handlePixelArrayKeyDown}
+                  />
+                </div>
+              </div>
+              <div className="prop-row" style={{ marginTop: '8px' }}>
+                <span className="prop-label">Bounds</span>
+                <span className="prop-value prop-value--mono">
+                  ({formatGridValue(pixelArray.x, gridSize)}, {formatGridValue(pixelArray.y, gridSize)}) → ({formatGridValue(pixelArray.x + pixelArray.width, gridSize)}, {formatGridValue(pixelArray.y + pixelArray.height, gridSize)})
+                </span>
+              </div>
+              <div className="prop-row">
+                <span className="prop-label">Area</span>
+                <span className="prop-value">
+                  {(pixelArray.width * pixelArray.height).toFixed(2)} µm² ({((pixelArray.width * pixelArray.height) / 1e6).toFixed(3)} mm²)
+                </span>
+              </div>
+            </div>
+
+            <div className="prop-section footer-actions-row">
               <button
-                className="btn"
+                className="btn lock-toggle-btn"
                 type="button"
                 onClick={() => setPixelArrayVisible(!pixelArray.visible)}
               >
-                {pixelArray.visible ? <><FiEyeOff /> Hide Pixel Array</> : <><FiEye /> Show Pixel Array</>}
+                {pixelArray.visible ? <><FiEyeOff /> Hide</> : <><FiEye /> Show</>}
               </button>
               <button
                 className="btn btn-danger"
                 type="button"
                 onClick={() => {
-                  if (confirm('Remove the pixel array from this floorplan?')) deletePixelArray();
+                  deletePixelArray();
+                  pushToast('Pixel array deleted (Ctrl+Z to undo)', 'info');
                 }}
               >
-                <FiTrash2 /> Delete Pixel Array
+                <FiTrash2 /> Delete
               </button>
             </div>
           </>

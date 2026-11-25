@@ -35,10 +35,10 @@ export const Sidebar: React.FC = () => {
     selectedShapeId, setSelectedShape,
     setAppMode,
     createEmptyCell, updateMasterCell, deleteMasterCell, placeInstance, placeInstanceMosaic, createPadRow, prepareManualPadPlacement,
-    pixelArray, startPixelArrayPlacement, setPixelArrayVisible, deletePixelArray,
+    pixelArray, pixelArraySelected, startPixelArrayPlacement, createPixelArray, setPixelArrayVisible, setPixelArraySelected, deletePixelArray,
     showCreateModal, setShowCreateModal, 
     showInstantiateModal, setShowInstantiateModal, 
-    setPlacement, leftSidebarPinned, setLeftSidebarPinned, gridSize, pushToast,
+    setPlacement, leftSidebarPinned, setLeftSidebarPinned, setRightSidebarPinned, gridSize, pushToast,
   } = useStore();
   const [isHovered, setIsHovered] = useState(false);
   const [isFocusWithin, setIsFocusWithin] = useState(false);
@@ -109,6 +109,8 @@ export const Sidebar: React.FC = () => {
   const [showPixelArrayModal, setShowPixelArrayModal] = useState(false);
   const [pixelArrayWidth, setPixelArrayWidth] = useState('60');
   const [pixelArrayHeight, setPixelArrayHeight] = useState('60');
+  const [pixelArrayCx, setPixelArrayCx] = useState('0');
+  const [pixelArrayCy, setPixelArrayCy] = useState('0');
   const [instanceQuery, setInstanceQuery] = useState('');
   const [instanceFilter, setInstanceFilter] = useState<'all' | 'ip' | 'pad'>('all');
 
@@ -311,13 +313,32 @@ export const Sidebar: React.FC = () => {
   };
 
   const openPixelArrayModal = () => {
-    setPixelArrayWidth(String(pixelArray?.width ?? Math.max(gridSize, topWidth * 0.6)));
-    setPixelArrayHeight(String(pixelArray?.height ?? Math.max(gridSize, topHeight * 0.6)));
+    setPixelArrayWidth(formatGridValue(pixelArray?.width ?? Math.max(gridSize, topWidth * 0.6), gridSize));
+    setPixelArrayHeight(formatGridValue(pixelArray?.height ?? Math.max(gridSize, topHeight * 0.6), gridSize));
+    setPixelArrayCx(pixelArray ? formatGridValue(pixelArray.x + pixelArray.width / 2, gridSize) : '0');
+    setPixelArrayCy(pixelArray ? formatGridValue(pixelArray.y + pixelArray.height / 2, gridSize) : '0');
     setShowPixelArrayModal(true);
   };
 
   const handlePixelArraySubmit = (event: React.FormEvent) => {
     event.preventDefault();
+    try {
+      const cx = Number.parseFloat(pixelArrayCx);
+      const cy = Number.parseFloat(pixelArrayCy);
+      createPixelArray(
+        Number(pixelArrayWidth),
+        Number(pixelArrayHeight),
+        Number.isFinite(cx) ? cx : 0,
+        Number.isFinite(cy) ? cy : 0,
+      );
+      setRightSidebarPinned(true);
+      setShowPixelArrayModal(false);
+    } catch (error) {
+      notifyError(error, 'Unable to configure the pixel array.');
+    }
+  };
+
+  const handlePixelArrayCursorPlace = () => {
     try {
       startPixelArrayPlacement(Number(pixelArrayWidth), Number(pixelArrayHeight));
       setShowPixelArrayModal(false);
@@ -905,24 +926,60 @@ export const Sidebar: React.FC = () => {
                 </button>
               )}
               {!activeCellId && (
-                <div className={`pixel-array-card${pixelArray?.visible ? ' active' : ''}`}>
+                <div className={`pixel-array-card${pixelArray?.visible ? ' active' : ''}${pixelArraySelected ? ' selected' : ''}`}>
                   <button
                     className="pixel-array-toggle"
                     type="button"
-                    onClick={() => pixelArray ? setPixelArrayVisible(!pixelArray.visible) : openPixelArrayModal()}
+                    onClick={() => {
+                      if (!pixelArray) {
+                        openPixelArrayModal();
+                        return;
+                      }
+                      if (!pixelArray.visible) setPixelArrayVisible(true);
+                      setAppMode('select');
+                      setPixelArraySelected(true);
+                      setRightSidebarPinned(true);
+                    }}
+                    title={pixelArray
+                      ? 'Click to select Pixel Array and open Properties'
+                      : 'Configure and place an active pixel array'}
                   >
-                    {pixelArray?.visible ? <FiEyeOff /> : <FiEye />}
+                    <FiGrid />
                     <span>
-                      <strong>{pixelArray?.visible ? 'Disable Pixel Array' : 'Enable Pixel Array'}</strong>
-                      <small>{pixelArray ? `${formatGridValue(pixelArray.width, gridSize)} × ${formatGridValue(pixelArray.height, gridSize)} µm · optical sensor overlay` : 'Optical sensor region overlay'}</small>
+                      <strong>{pixelArray ? 'Pixel Array' : 'Enable Pixel Array'}</strong>
+                      <small>
+                        {pixelArray
+                          ? `${formatGridValue(pixelArray.width, gridSize)} × ${formatGridValue(pixelArray.height, gridSize)} µm · (${formatGridValue(pixelArray.x + pixelArray.width / 2, gridSize)}, ${formatGridValue(pixelArray.y + pixelArray.height / 2, gridSize)})${pixelArray.visible ? '' : ' · Hidden'}`
+                          : 'Optical sensor active-array region'}
+                      </small>
                     </span>
                   </button>
                   {pixelArray && (
                     <div className="pixel-array-actions">
-                      <button type="button" onClick={() => {
-                        startPixelArrayPlacement(pixelArray.width, pixelArray.height);
-                      }} title="Move Pixel Array"><FiMove /></button>
-                      <button type="button" onClick={openPixelArrayModal} title="Edit Pixel Array"><FiSettings /></button>
+                      <button
+                        type="button"
+                        onClick={() => setPixelArrayVisible(!pixelArray.visible)}
+                        title={pixelArray.visible ? 'Hide Pixel Array' : 'Show Pixel Array'}
+                        aria-label={pixelArray.visible ? 'Hide Pixel Array' : 'Show Pixel Array'}
+                      >
+                        {pixelArray.visible ? <FiEye /> : <FiEyeOff />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startPixelArrayPlacement(pixelArray.width, pixelArray.height)}
+                        title="Relocate Pixel Array with cursor"
+                        aria-label="Relocate Pixel Array"
+                      >
+                        <FiMove />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openPixelArrayModal}
+                        title="Edit Pixel Array dimensions & center"
+                        aria-label="Edit Pixel Array"
+                      >
+                        <FiSettings />
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1761,30 +1818,42 @@ export const Sidebar: React.FC = () => {
             </div>
             <div className="form-row">
               <div className="form-group">
-                <label className="label">Array Width (um)</label>
+                <label className="label">Array Width (µm)</label>
                 <input type="number" min={gridSize} max={topWidth - gridSize} step="any" className="input-field" value={pixelArrayWidth} onChange={event => setPixelArrayWidth(event.target.value)} required autoFocus />
               </div>
               <div className="form-group">
-                <label className="label">Array Height (um)</label>
+                <label className="label">Array Height (µm)</label>
                 <input type="number" min={gridSize} max={topHeight - gridSize} step="any" className="input-field" value={pixelArrayHeight} onChange={event => setPixelArrayHeight(event.target.value)} required />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <div className="field-label-row">
+                  <label className="label">Center X (µm)</label>
+                  <button type="button" className="text-action" onClick={() => { setPixelArrayCx('0'); setPixelArrayCy('0'); }}>Center (0, 0)</button>
+                </div>
+                <input type="number" step="any" className="input-field" value={pixelArrayCx} onChange={event => setPixelArrayCx(event.target.value)} required />
+              </div>
+              <div className="form-group">
+                <label className="label">Center Y (µm)</label>
+                <input type="number" step="any" className="input-field" value={pixelArrayCy} onChange={event => setPixelArrayCy(event.target.value)} required />
               </div>
             </div>
             <div className="pixel-array-place-note">
               <FiMove />
-              <span>After confirming, move the preview over the top cell and click once to place it. You can drag the array later.</span>
+              <span>Save to apply directly, or click <strong>Cursor Place</strong> to position interactively. You can also drag handles or edit margins in Properties.</span>
             </div>
             <div className="modal-actions pixel-array-modal-actions">
               {pixelArray && (
                 <button type="button" className="btn danger-btn" onClick={() => {
-                  if (confirm('Remove the pixel array from this floorplan?')) {
-                    deletePixelArray();
-                    setShowPixelArrayModal(false);
-                  }
+                  deletePixelArray();
+                  pushToast('Pixel array deleted (Ctrl+Z to undo)', 'info');
+                  setShowPixelArrayModal(false);
                 }}><FiTrash2 /> Remove</button>
               )}
               <span />
-              <button type="button" className="btn" onClick={() => setShowPixelArrayModal(false)}>Cancel</button>
-              <button type="submit" className="btn btn-primary"><FiCrosshair /> {pixelArray ? 'Resize & Relocate' : 'Attach to Cursor'}</button>
+              <button type="button" className="btn" onClick={handlePixelArrayCursorPlace}><FiCrosshair /> Cursor Place</button>
+              <button type="submit" className="btn btn-primary">{pixelArray ? 'Apply Changes' : 'Place Pixel Array'}</button>
             </div>
           </form>
         </div>

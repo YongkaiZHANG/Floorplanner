@@ -6,6 +6,7 @@ import {
   alignInstances,
   distributeInstances,
   getPhysicalBounds,
+  spaceInstances,
 } from '../src/utils/alignment.ts';
 
 const options = { topWidth: 100, topHeight: 100, gridSize: 1 };
@@ -222,4 +223,57 @@ test('snaps aligned coordinates canonically without IEEE-754 drift', () => {
   });
   assert.equal(result.x, 0.015);
   assert.equal(String(result.x), '0.015');
+});
+
+test('alignInstances supports optional input distance (default 0)', () => {
+  const source = [
+    block('anchor', -20, -10, 40, 20),
+    block('moved', 10, 20, 10, 5),
+  ];
+  const leftInset = alignInstances(source, 'left', { ...options, anchorId: 'anchor' }, 5);
+  assert.equal(getPhysicalBounds({ ...source[1], ...leftInset[1] }).left, -15);
+  assert.equal(leftInset[0].x, -20);
+
+  const rightInset = alignInstances(source, 'right', { ...options, anchorId: 'anchor' }, 6);
+  assert.equal(getPhysicalBounds({ ...source[1], ...rightInset[1] }).right, 14);
+
+  const topInset = alignInstances(source, 'top', { ...options, anchorId: 'anchor' }, 4);
+  assert.equal(getPhysicalBounds({ ...source[1], ...topInset[1] }).top, 6);
+
+  const bottomInset = alignInstances(source, 'bottom', { ...options, anchorId: 'anchor' }, 3);
+  assert.equal(getPhysicalBounds({ ...source[1], ...bottomInset[1] }).bottom, -7);
+
+  const centerShift = alignInstances(source, 'horizontal-center', { ...options, anchorId: 'anchor' }, 8);
+  assert.equal(getPhysicalBounds({ ...source[1], ...centerShift[1] }).centerX, 8);
+});
+
+test('spaceInstances packs two or more blocks at exact gap (default 0 = abut) around anchor', () => {
+  const source = [
+    block('left', -35, 0, 10, 5),
+    block('mid', 0, 10, 12, 5),
+    block('right', 30, -5, 8, 5),
+  ];
+  // Default gap 0 abuts flush around middle anchor
+  const abutted = spaceInstances(source, 'horizontal', { ...options, anchorId: 'mid' });
+  const abutBounds = abutted.map((pos, i) => getPhysicalBounds({ ...source[i], ...pos }));
+  assert.equal(abutBounds[1].left, 0);
+  assert.equal(abutBounds[0].right, 0);
+  assert.equal(abutBounds[2].left, 12);
+
+  // Explicit gap = 5 um
+  const spaced = spaceInstances(source, 'horizontal', { ...options, anchorId: 'mid' }, 5);
+  const spacedBounds = spaced.map((pos, i) => getPhysicalBounds({ ...source[i], ...pos }));
+  assert.equal(spacedBounds[1].left, 0);
+  assert.equal(spacedBounds[0].right, -5);
+  assert.equal(spacedBounds[2].left, 17);
+
+  // Vertical spacing with 2 blocks
+  const vertPair = [
+    block('a', 0, -20, 10, 6),
+    block('b', 15, 25, 10, 8),
+  ];
+  const vertSpaced = spaceInstances(vertPair, 'vertical', { ...options, anchorId: 'a' }, 4);
+  const vertBounds = vertSpaced.map((pos, i) => getPhysicalBounds({ ...vertPair[i], ...pos }));
+  assert.equal(vertBounds[0].bottom, -20);
+  assert.equal(vertBounds[1].bottom, -10); // -20 + 6 + 4 = -10
 });

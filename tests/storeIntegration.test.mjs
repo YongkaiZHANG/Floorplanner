@@ -559,7 +559,7 @@ test('interactive spacing rejects negative values instead of reversing across th
   );
 });
 
-test('a valid alignment spacing is reused by the next alignment session', () => {
+test('each edge alignment session defaults distance to 0 while tracking last non-zero spacing and supporting explicit initial distance', () => {
   useStore.getState().loadProject(emptyProject);
   useStore.getState().addMasterCell('testLib', 'rememberSpacing', 10, 10, '#fff');
   const master = Object.values(useStore.getState().masterCells)[0];
@@ -567,15 +567,25 @@ test('a valid alignment spacing is reused by the next alignment session', () => 
   const source = useStore.getState().instances[0];
 
   useStore.getState().startEdgeAlignment(source.id);
+  assert.equal(useStore.getState().edgeAlignmentSession?.offset, '0');
   useStore.getState().setEdgeAlignmentOffset('12.5');
+  assert.equal(useStore.getState().lastAlignmentSpacing, '12.5');
   useStore.getState().cancelEdgeAlignment();
+
+  // Next fresh alignment session always defaults back to 0
   useStore.getState().startEdgeAlignment(source.id);
+  assert.equal(useStore.getState().edgeAlignmentSession?.offset, '0');
+
+  // Explicit initial distance from Align menu is honored, while invalid negative values fall back to 0
+  useStore.getState().cancelEdgeAlignment();
+  useStore.getState().startEdgeAlignment(source.id, '12.5');
   assert.equal(useStore.getState().edgeAlignmentSession?.offset, '12.5');
 
   useStore.getState().setEdgeAlignmentOffset('-4');
+  assert.equal(useStore.getState().lastAlignmentSpacing, '12.5');
   useStore.getState().cancelEdgeAlignment();
-  useStore.getState().startEdgeAlignment(source.id);
-  assert.equal(useStore.getState().edgeAlignmentSession?.offset, '12.5');
+  useStore.getState().startEdgeAlignment(source.id, '-4');
+  assert.equal(useStore.getState().edgeAlignmentSession?.offset, '0');
 });
 
 test('pad rows create one reusable master and exact pitched edge instances as one undo step', () => {
@@ -1056,4 +1066,97 @@ test('global pushToast and dismissToast manage transient notifications without m
     useStore.getState().dismissToast(t.id);
   }
   assert.equal(useStore.getState().toasts.length, 0);
+});
+
+test('pixel array supports direct centered creation, axis centering, nudging, and no-op history suppression', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().createPixelArray(60, 40);
+  assert.deepEqual(useStore.getState().pixelArray, {
+    x: -30,
+    y: -20,
+    width: 60,
+    height: 40,
+    visible: true,
+  });
+  assert.equal(useStore.getState().pixelArraySelected, true);
+
+  // Move off-center, then center X only, then Y only, then both
+  useStore.getState().updatePixelArrayPosition(-45, 5);
+  assert.equal(useStore.getState().pixelArray.x, -45);
+  assert.equal(useStore.getState().pixelArray.y, 5);
+
+  useStore.getState().centerPixelArray('x');
+  assert.equal(useStore.getState().pixelArray.x, -30);
+  assert.equal(useStore.getState().pixelArray.y, 5);
+
+  useStore.getState().centerPixelArray('y');
+  assert.equal(useStore.getState().pixelArray.x, -30);
+  assert.equal(useStore.getState().pixelArray.y, -20);
+
+  // Calling center again when already centered does not add a duplicate history entry
+  const historyBeforeNoOp = useStore.getState().history.past.length;
+  useStore.getState().centerPixelArray('both');
+  assert.equal(useStore.getState().history.past.length, historyBeforeNoOp);
+
+  // Nudging selected pixel array (via both nudgePixelArray and nudgeSelection) is bounded and undoable
+  useStore.getState().nudgePixelArray(5, -5);
+  assert.equal(useStore.getState().pixelArray.x, -25);
+  assert.equal(useStore.getState().pixelArray.y, -25);
+  useStore.getState().nudgeSelection(10, 5);
+  assert.equal(useStore.getState().pixelArray.x, -15);
+  assert.equal(useStore.getState().pixelArray.y, -20);
+  useStore.getState().undo();
+  assert.equal(useStore.getState().pixelArray.x, -25);
+  assert.equal(useStore.getState().pixelArray.y, -25);
+});
+
+test('boundary alignment, block alignment, and block spacing accept input distance (default 0) across instances, shapes, and pixel array', () => {
+  useStore.getState().loadProject(emptyProject);
+  useStore.getState().addMasterCell('testLib', 'BLK', 10, 10, '#2563eb');
+  const master = Object.values(useStore.getState().masterCells)[0];
+  useStore.getState().placeInstance(master.id, -20, 0);
+  useStore.getState().placeInstance(master.id, 15, 5);
+  const [a, b] = useStore.getState().instances;
+
+  // Align to boundary with default 0 vs explicit distance 12
+  useStore.getState().setSelection([a.id]);
+  useStore.getState().alignSelectedInstancesToBoundary('left');
+  assert.equal(useStore.getState().instances[0].x, -50);
+  useStore.getState().alignSelectedInstancesToBoundary('left', 12);
+  assert.equal(useStore.getState().instances[0].x, -38);
+  useStore.getState().alignSelectedInstancesToBoundary('right', 15);
+  assert.equal(useStore.getState().instances[0].x + 10, 35);
+  useStore.getState().alignSelectedInstancesToBoundary('top', 8);
+  assert.equal(useStore.getState().instances[0].y + 10, 42);
+  useStore.getState().alignSelectedInstancesToBoundary('bottom', 6);
+  assert.equal(useStore.getState().instances[0].y, -44);
+
+  // Pixel array boundary align with distance = 10 um margin
+  useStore.getState().createPixelArray(40, 30, 0, 0);
+  useStore.getState().alignSelectedInstancesToBoundary('left', 10);
+  assert.equal(useStore.getState().pixelArray.x, -40);
+  useStore.getState().alignSelectedInstancesToBoundary('top', 15);
+  assert.equal(useStore.getState().pixelArray.y + 30, 35);
+
+  // Drawn rectangle boundary align with distance = 5 um
+  const rectId = useStore.getState().addShape({ layer: 'M1', purpose: 'drawing', x: 0, y: 0, width: 10, height: 10 });
+  useStore.getState().setSelectedShape(rectId);
+  useStore.getState().alignSelectedInstancesToBoundary('right', 5);
+  const movedRect = useStore.getState().shapes.find(s => s.id === rectId);
+  assert.equal(movedRect.x + movedRect.width, 45);
+
+  // Align selected blocks with input distance & space selected blocks with input gap
+  useStore.getState().updateInstancePosition(a.id, -20, 0);
+  useStore.getState().updateInstancePosition(b.id, 15, 20);
+  useStore.getState().setSelection([b.id, a.id]); // anchor = a.id
+  useStore.getState().alignSelectedInstances('left', 7);
+  assert.equal(useStore.getState().instances.find(i => i.id === b.id).x, -13);
+
+  // Space horizontally with gap = 0 (default abut) then gap = 8
+  useStore.getState().updateInstancePosition(b.id, 15, 0);
+  useStore.getState().setSelection([b.id, a.id]); // anchor = a.id at x=-20.. -10
+  useStore.getState().spaceSelectedInstances('horizontal');
+  assert.equal(useStore.getState().instances.find(i => i.id === b.id).x, -10);
+  useStore.getState().spaceSelectedInstances('horizontal', 8);
+  assert.equal(useStore.getState().instances.find(i => i.id === b.id).x, -2);
 });

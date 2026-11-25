@@ -101,6 +101,8 @@ export const FloorplanCanvas: React.FC = () => {
   const rectDraftRef = useRef<typeof rectDraft>(null);
   const rectDraggingRef = useRef(false);
   const [shapeResizePreview, setShapeResizePreview] = useState<{ id: string; x: number; y: number; width: number; height: number } | null>(null);
+  const [pixelArrayResizePreview, setPixelArrayResizePreview] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [pixelArrayDragPreview, setPixelArrayDragPreview] = useState<{ x: number; y: number } | null>(null);
   const [partialSelection, setPartialSelection] = useState<PartialShapeSelection>({});
   const partialSelectionRef = useRef<PartialShapeSelection>({});
   const [hoveredStretchHit, setHoveredStretchHit] = useState<StretchHitResult | null>(null);
@@ -217,7 +219,10 @@ export const FloorplanCanvas: React.FC = () => {
     showGrid,
     toggleGrid,
     edgeAlignmentSession,
+    lastAlignmentSpacing,
     setEdgeAlignmentEdge,
+    setEdgeAlignmentOffset,
+    cancelEdgeAlignment,
     completeEdgeAlignment,
     completeEdgeAlignmentToBoundary,
     completeEdgeAlignmentToCoordinate,
@@ -226,6 +231,7 @@ export const FloorplanCanvas: React.FC = () => {
     pendingPixelArraySize,
     placePixelArray,
     updatePixelArrayPosition,
+    updatePixelArrayGeometry,
     pixelArraySelected,
     setPixelArraySelected,
   } = useStore();
@@ -669,7 +675,7 @@ export const FloorplanCanvas: React.FC = () => {
 
       if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key)) {
         e.preventDefault();
-        if (e.altKey && (hasPartialSelection(partialSelectionRef.current) || state.selectedInstanceIds.length > 0 || state.selectedShapeId)) {
+        if (e.altKey && (hasPartialSelection(partialSelectionRef.current) || state.selectedInstanceIds.length > 0 || state.selectedShapeId || (state.pixelArraySelected && Boolean(state.pixelArray?.visible)))) {
           const dxScreen = key === 'arrowright' ? 1 : key === 'arrowleft' ? -1 : 0;
           const dyScreen = key === 'arrowup' ? 1 : key === 'arrowdown' ? -1 : 0;
           const multiplier = e.shiftKey ? 10 : 1;
@@ -691,6 +697,8 @@ export const FloorplanCanvas: React.FC = () => {
             state.batchUpdateShapes(updates);
           } else if (state.selectedShapeId) {
             state.nudgeSelectedShape(delta.dx, delta.dy);
+          } else if (state.pixelArraySelected && state.pixelArray?.visible) {
+            state.nudgePixelArray(delta.dx, delta.dy);
           } else {
             state.nudgeSelection(delta.dx, delta.dy);
           }
@@ -815,6 +823,9 @@ export const FloorplanCanvas: React.FC = () => {
             } catch (error) {
               showErrorToast(error instanceof Error ? error.message : 'Unable to delete the selected shape.');
             }
+          } else if (state.pixelArraySelected && state.pixelArray) {
+            state.deletePixelArray();
+            state.pushToast('Pixel array deleted (Ctrl+Z to undo)', 'info');
           } else if (state.selectedInstanceIds.length > 0) {
             state.deleteSelectedInstances();
           }
@@ -1948,6 +1959,122 @@ export const FloorplanCanvas: React.FC = () => {
     } catch {
       return pos;
     }
+  };
+
+  const pixelArrayPillDragBoundFunc = (pos: { x: number; y: number }) => {
+    if (!pixelArray) return pos;
+    const worldX = (pos.x - stagePos.x) / stageScale;
+    const worldY = (pos.y - stagePos.y) / -stageScale;
+    const editPos = baseToEditPoint(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR);
+    const impliedLeft = editPos.x - pixelArray.width / 2;
+    const impliedBottom = editPos.y - pixelArray.height;
+    const anchor = pixelArrayDragAnchorRef.current;
+    const constrained = anchor
+      ? constrainEditPointFromAnchor(anchor.startX, anchor.startY, impliedLeft, impliedBottom)
+      : { x: impliedLeft, y: impliedBottom, activeAxis: 'free' as const };
+    try {
+      const snapped = clampBoxInsideActiveBoundary(
+        constrained.x,
+        constrained.y,
+        pixelArray.width,
+        pixelArray.height,
+        activeSnapStep,
+      );
+      const pillEditX = snapped.x + pixelArray.width / 2;
+      const pillEditY = snapped.y + pixelArray.height;
+      const baseBack = editToBasePoint(pillEditX, pillEditY);
+      if (anchor && constrained.activeAxis !== 'free') {
+        const bStart = editToBasePoint(anchor.startX + pixelArray.width / 2, anchor.startY + pixelArray.height);
+        setDragGuide({ startX: bStart.x, startY: bStart.y, curX: baseBack.x, curY: baseBack.y, axis: constrained.activeAxis });
+      } else if (dragGuide !== null) {
+        setDragGuide(null);
+      }
+      return {
+        x: baseBack.x * SCALE_FACTOR * stageScale + stagePos.x,
+        y: baseBack.y * SCALE_FACTOR * -stageScale + stagePos.y,
+      };
+    } catch {
+      return pos;
+    }
+  };
+
+  type PixelArrayResizeHandle = 'sw' | 'se' | 'ne' | 'nw' | 'w' | 'e' | 's' | 'n';
+
+  const computeResizedPixelArray = (
+    pa: { x: number; y: number; width: number; height: number },
+    handle: PixelArrayResizeHandle,
+    nx: number,
+    ny: number,
+  ): { x: number; y: number; width: number; height: number } | null => {
+    const maxW = snapToGrid(Math.floor((topWidth - 1e-9) / gridSize) * gridSize, gridSize);
+    const maxH = snapToGrid(Math.floor((topHeight - 1e-9) / gridSize) * gridSize, gridSize);
+    if (maxW <= 0 || maxH <= 0) return null;
+    const minW = Math.min(maxW, Math.max(gridSize, activeSnapStep));
+    const minH = Math.min(maxH, Math.max(gridSize, activeSnapStep));
+    const snapClamp = (val: number, min: number, max: number) => {
+      const clamped = Math.max(min, Math.min(snapToGrid(val, activeSnapStep), max));
+      const finalVal = Math.max(min, Math.min(snapToGrid(clamped, gridSize), max));
+      return Object.is(finalVal, -0) ? 0 : finalVal;
+    };
+
+    let left = pa.x;
+    let right = pa.x + pa.width;
+    let bottom = pa.y;
+    let top = pa.y + pa.height;
+
+    if (handle === 'sw' || handle === 'nw' || handle === 'w') {
+      const minLeft = Math.max(activeBoundaryBox.minX, right - maxW);
+      const maxLeft = right - minW;
+      if (minLeft > maxLeft + 1e-9) return null;
+      left = snapClamp(nx, minLeft, maxLeft);
+    }
+    if (handle === 'se' || handle === 'ne' || handle === 'e') {
+      const minRight = left + minW;
+      const maxRight = Math.min(activeBoundaryBox.maxX, left + maxW);
+      if (minRight > maxRight + 1e-9) return null;
+      right = snapClamp(nx, minRight, maxRight);
+    }
+    if (handle === 'sw' || handle === 'se' || handle === 's') {
+      const minBottom = Math.max(activeBoundaryBox.minY, top - maxH);
+      const maxBottom = top - minH;
+      if (minBottom > maxBottom + 1e-9) return null;
+      bottom = snapClamp(ny, minBottom, maxBottom);
+    }
+    if (handle === 'nw' || handle === 'ne' || handle === 'n') {
+      const minTop = bottom + minH;
+      const maxTop = Math.min(activeBoundaryBox.maxY, bottom + maxH);
+      if (minTop > maxTop + 1e-9) return null;
+      top = snapClamp(ny, minTop, maxTop);
+    }
+
+    const width = snapToGrid(right - left, gridSize);
+    const height = snapToGrid(top - bottom, gridSize);
+    if (width <= 0 || height <= 0 || width >= topWidth || height >= topHeight) return null;
+    return { x: left, y: bottom, width, height };
+  };
+
+  const pixelArrayHandleDragBoundFunc = (handle: PixelArrayResizeHandle) => (pos: { x: number; y: number }) => {
+    if (!pixelArray) return pos;
+    const worldX = (pos.x - stagePos.x) / stageScale;
+    const worldY = (pos.y - stagePos.y) / -stageScale;
+    const editPos = baseToEditPoint(worldX / SCALE_FACTOR, worldY / SCALE_FACTOR);
+    const next = computeResizedPixelArray(pixelArray, handle, editPos.x, editPos.y);
+    if (!next) return pos;
+    const hx = handle === 'sw' || handle === 'nw' || handle === 'w'
+      ? next.x
+      : handle === 'se' || handle === 'ne' || handle === 'e'
+        ? next.x + next.width
+        : next.x + next.width / 2;
+    const hy = handle === 'sw' || handle === 'se' || handle === 's'
+      ? next.y
+      : handle === 'nw' || handle === 'ne' || handle === 'n'
+        ? next.y + next.height
+        : next.y + next.height / 2;
+    const baseBack = editToBasePoint(hx, hy);
+    return {
+      x: baseBack.x * SCALE_FACTOR * stageScale + stagePos.x,
+      y: baseBack.y * SCALE_FACTOR * -stageScale + stagePos.y,
+    };
   };
 
   const handleDragEnd = (e: KonvaEventObject<DragEvent>, instanceId: string) => {
@@ -3727,78 +3854,109 @@ export const FloorplanCanvas: React.FC = () => {
               </Group>
             )}
 
-            {pixelArray?.visible && (
-              <Group
-                name="pixel-array"
-                x={pixelArray.x * SCALE_FACTOR}
-                y={pixelArray.y * SCALE_FACTOR}
-                draggable={appMode === 'select' && !partialSelectMode && !edgeAlignmentSession}
-                dragBoundFunc={pixelArrayDragBoundFunc}
-                onClick={(event) => {
-                  if (appMode !== 'select' || partialSelectMode || Boolean(edgeAlignmentSession)) return;
-                  event.cancelBubble = true;
-                  setPixelArraySelected(true);
-                }}
-                onDragStart={() => {
-                  pixelArrayDragAnchorRef.current = { startX: pixelArray.x, startY: pixelArray.y };
-                  setPixelArraySelected(true);
-                }}
-                onDragEnd={(event) => {
-                  pixelArrayDragAnchorRef.current = null;
-                  setDragGuide(null);
-                  try {
-                    updatePixelArrayPosition(
-                      event.target.x() / SCALE_FACTOR,
-                      event.target.y() / SCALE_FACTOR,
-                    );
-                  } catch (error) {
-                    showErrorToast(error instanceof Error ? error.message : 'Unable to move the pixel array.');
-                  }
-                }}
-              >
-                <Rect
-                  name="overlay"
-                  width={pixelArray.width * SCALE_FACTOR}
-                  height={pixelArray.height * SCALE_FACTOR}
-                  fill="rgba(139, 92, 246, 0.1)"
-                  stroke={pixelArraySelected ? '#f59e0b' : '#8b5cf6'}
-                  strokeWidth={(pixelArraySelected ? 3 : 2) / stageScale}
-                  dash={[7 / stageScale, 5 / stageScale]}
-                />
-                {[1, 2, 3, 4, 5].map(index => (
-                  <React.Fragment key={index}>
-                    <Line
-                      points={[pixelArray.width * SCALE_FACTOR * index / 6, 0, pixelArray.width * SCALE_FACTOR * index / 6, pixelArray.height * SCALE_FACTOR]}
-                      stroke="#8b5cf6"
-                      strokeWidth={0.6 / stageScale}
-                      opacity={0.3}
-                      listening={false}
-                    />
-                    <Line
-                      points={[0, pixelArray.height * SCALE_FACTOR * index / 6, pixelArray.width * SCALE_FACTOR, pixelArray.height * SCALE_FACTOR * index / 6]}
-                      stroke="#8b5cf6"
-                      strokeWidth={0.6 / stageScale}
-                      opacity={0.3}
-                      listening={false}
-                    />
-                  </React.Fragment>
-                ))}
-                <Text
-                  text={`PIXEL ARRAY\n${formatGridValue(pixelArray.width, gridSize)} × ${formatGridValue(pixelArray.height, gridSize)} um`}
-                  width={pixelArray.width * SCALE_FACTOR}
-                  y={pixelArray.height * SCALE_FACTOR / 2}
-                  offsetY={14 / stageScale}
-                  align="center"
-                  fill="#6d28d9"
-                  fontSize={11 / stageScale}
-                  fontFamily={CANVAS_FONT_SANS}
-                  fontStyle="bold"
-                  lineHeight={1.35}
-                  scaleY={-1}
-                  listening={false}
-                />
-              </Group>
-            )}
+            {pixelArray?.visible && (() => {
+              const curPa = pixelArrayResizePreview
+                ?? (pixelArrayDragPreview ? { ...pixelArray, ...pixelArrayDragPreview } : pixelArray);
+              const paW = curPa.width * SCALE_FACTOR;
+              const paH = curPa.height * SCALE_FACTOR;
+              const crossLen = Math.min(10 / stageScale, Math.min(paW, paH) * 0.14);
+              return (
+                <Group
+                  name="pixel-array"
+                  x={curPa.x * SCALE_FACTOR}
+                  y={curPa.y * SCALE_FACTOR}
+                  draggable={appMode === 'select' && !partialSelectMode && !edgeAlignmentSession}
+                  dragBoundFunc={pixelArrayDragBoundFunc}
+                  onClick={(event) => {
+                    if (appMode !== 'select' || partialSelectMode || Boolean(edgeAlignmentSession)) return;
+                    event.cancelBubble = true;
+                    setPixelArraySelected(true);
+                  }}
+                  onDragStart={() => {
+                    pixelArrayDragAnchorRef.current = { startX: pixelArray.x, startY: pixelArray.y };
+                    setPixelArraySelected(true);
+                  }}
+                  onDragMove={(event) => {
+                    setPixelArrayDragPreview({
+                      x: event.target.x() / SCALE_FACTOR,
+                      y: event.target.y() / SCALE_FACTOR,
+                    });
+                  }}
+                  onDragEnd={(event) => {
+                    pixelArrayDragAnchorRef.current = null;
+                    setPixelArrayDragPreview(null);
+                    setDragGuide(null);
+                    try {
+                      updatePixelArrayPosition(
+                        event.target.x() / SCALE_FACTOR,
+                        event.target.y() / SCALE_FACTOR,
+                      );
+                    } catch (error) {
+                      showErrorToast(error instanceof Error ? error.message : 'Unable to move the pixel array.');
+                    }
+                  }}
+                >
+                  <Rect
+                    name="overlay"
+                    width={paW}
+                    height={paH}
+                    fill={pixelArraySelected ? 'rgba(139, 92, 246, 0.13)' : 'rgba(139, 92, 246, 0.09)'}
+                    stroke={pixelArraySelected ? '#f59e0b' : '#8b5cf6'}
+                    strokeWidth={(pixelArraySelected ? 2.5 : 2) / stageScale}
+                    dash={[7 / stageScale, 5 / stageScale]}
+                  />
+                  {[1, 2, 3, 4, 5].map(index => (
+                    <React.Fragment key={index}>
+                      <Line
+                        points={[paW * index / 6, 0, paW * index / 6, paH]}
+                        stroke="#8b5cf6"
+                        strokeWidth={0.6 / stageScale}
+                        opacity={0.3}
+                        listening={false}
+                      />
+                      <Line
+                        points={[0, paH * index / 6, paW, paH * index / 6]}
+                        stroke="#8b5cf6"
+                        strokeWidth={0.6 / stageScale}
+                        opacity={0.3}
+                        listening={false}
+                      />
+                    </React.Fragment>
+                  ))}
+                  {/* Optical center crosshair */}
+                  {crossLen > 0 && (
+                    <Group listening={false}>
+                      <Line
+                        points={[paW / 2 - crossLen, paH / 2, paW / 2 + crossLen, paH / 2]}
+                        stroke={pixelArraySelected ? '#d97706' : '#7c3aed'}
+                        strokeWidth={1.2 / stageScale}
+                        opacity={0.7}
+                      />
+                      <Line
+                        points={[paW / 2, paH / 2 - crossLen, paW / 2, paH / 2 + crossLen]}
+                        stroke={pixelArraySelected ? '#d97706' : '#7c3aed'}
+                        strokeWidth={1.2 / stageScale}
+                        opacity={0.7}
+                      />
+                    </Group>
+                  )}
+                  <Text
+                    text={`PIXEL ARRAY\n${formatGridValue(curPa.width, gridSize)} × ${formatGridValue(curPa.height, gridSize)} µm`}
+                    width={paW}
+                    y={paH / 2 - 12 / stageScale}
+                    offsetY={12 / stageScale}
+                    align="center"
+                    fill="#6d28d9"
+                    fontSize={11 / stageScale}
+                    fontFamily={CANVAS_FONT_SANS}
+                    fontStyle="bold"
+                    lineHeight={1.35}
+                    scaleY={-1}
+                    listening={false}
+                  />
+                </Group>
+              );
+            })()}
 
             {appMode === 'pixel-array' && pendingPixelArraySize && snappedMousePos && (() => {
               const editPos = isEditInPlace
@@ -4565,6 +4723,248 @@ export const FloorplanCanvas: React.FC = () => {
               </Group>
             );
           })}
+
+          {/* Top-layer Pixel Array interactive handle pill, resize handles & live die-margin annotations (never blocked by overlapping IPs) */}
+          {pixelArray?.visible && appMode === 'select' && !partialSelectMode && !edgeAlignmentSession && (() => {
+            const curPa = pixelArrayResizePreview
+              ?? (pixelArrayDragPreview ? { ...pixelArray, ...pixelArrayDragPreview } : pixelArray);
+            const px1 = curPa.x * SCALE_FACTOR;
+            const py1 = curPa.y * SCALE_FACTOR;
+            const pw = curPa.width * SCALE_FACTOR;
+            const ph = curPa.height * SCALE_FACTOR;
+            const px2 = px1 + pw;
+            const py2 = py1 + ph;
+            const pillFontSize = 10.5 / stageScale;
+            const pillText = pixelArraySelected
+              ? `PIXEL ARRAY · ${formatGridValue(curPa.width, gridSize)} × ${formatGridValue(curPa.height, gridSize)} µm`
+              : 'PIXEL ARRAY';
+            const pillPadX = 8 / stageScale;
+            const pillW = Math.max(72 / stageScale, pillText.length * pillFontSize * 0.62 + pillPadX * 2);
+            const pillH = 19 / stageScale;
+            const pillGap = 5 / stageScale;
+            const cornerSize = 8 / stageScale;
+            const edgeLong = 14 / stageScale;
+            const edgeShort = 6 / stageScale;
+
+            const handles: Array<{
+              key: PixelArrayResizeHandle;
+              hx: number;
+              hy: number;
+              w: number;
+              h: number;
+              isCorner: boolean;
+            }> = [
+              { key: 'sw', hx: curPa.x, hy: curPa.y, w: cornerSize, h: cornerSize, isCorner: true },
+              { key: 'se', hx: curPa.x + curPa.width, hy: curPa.y, w: cornerSize, h: cornerSize, isCorner: true },
+              { key: 'ne', hx: curPa.x + curPa.width, hy: curPa.y + curPa.height, w: cornerSize, h: cornerSize, isCorner: true },
+              { key: 'nw', hx: curPa.x, hy: curPa.y + curPa.height, w: cornerSize, h: cornerSize, isCorner: true },
+              { key: 'w', hx: curPa.x, hy: curPa.y + curPa.height / 2, w: edgeShort, h: edgeLong, isCorner: false },
+              { key: 'e', hx: curPa.x + curPa.width, hy: curPa.y + curPa.height / 2, w: edgeShort, h: edgeLong, isCorner: false },
+              { key: 's', hx: curPa.x + curPa.width / 2, hy: curPa.y, w: edgeLong, h: edgeShort, isCorner: false },
+              { key: 'n', hx: curPa.x + curPa.width / 2, hy: curPa.y + curPa.height, w: edgeLong, h: edgeShort, isCorner: false },
+            ];
+
+            const renderMarginAnnotation = (
+              key: string,
+              x1: number,
+              y1: number,
+              x2: number,
+              y2: number,
+              prefix: string,
+              distUm: number,
+            ) => {
+              const spanPx = Math.hypot(x2 - x1, y2 - y1) * stageScale;
+              if (distUm <= 1e-6 || spanPx < 22) return null;
+              const midX = (x1 + x2) / 2;
+              const midY = (y1 + y2) / 2;
+              const label = `${prefix} ${formatGridValue(distUm, gridSize)}`;
+              const fs = 10 / stageScale;
+              const bw = Math.max(36 / stageScale, label.length * fs * 0.62 + 10 / stageScale);
+              const bh = 16 / stageScale;
+              return (
+                <Group key={key} listening={false}>
+                  <Line
+                    points={[x1, y1, x2, y2]}
+                    stroke="#a855f7"
+                    strokeWidth={1.3 / stageScale}
+                    dash={[4 / stageScale, 3 / stageScale]}
+                    opacity={0.9}
+                  />
+                  <Group x={midX} y={midY} scaleY={-1}>
+                    <Rect
+                      x={-bw / 2}
+                      y={-bh / 2}
+                      width={bw}
+                      height={bh}
+                      fill="rgba(255, 255, 255, 0.94)"
+                      stroke="rgba(139, 92, 246, 0.55)"
+                      strokeWidth={1 / stageScale}
+                      cornerRadius={bh / 2}
+                    />
+                    <Text
+                      text={label}
+                      x={-bw / 2}
+                      y={-bh / 2 + (bh - fs) / 2 - 0.5 / stageScale}
+                      width={bw}
+                      align="center"
+                      fill="#5b21b6"
+                      fontSize={fs}
+                      fontFamily={CANVAS_FONT_MONO}
+                      fontStyle="bold"
+                    />
+                  </Group>
+                </Group>
+              );
+            };
+
+            const marginL = curPa.x - activeBoundaryBox.minX;
+            const marginR = activeBoundaryBox.maxX - (curPa.x + curPa.width);
+            const marginB = curPa.y - activeBoundaryBox.minY;
+            const marginT = activeBoundaryBox.maxY - (curPa.y + curPa.height);
+            const midX = px1 + pw / 2;
+            const midY = py1 + ph / 2;
+
+            return (
+              <Group>
+                {pixelArraySelected && (
+                  <>
+                    <Rect
+                      x={px1}
+                      y={py1}
+                      width={pw}
+                      height={ph}
+                      fillEnabled={false}
+                      stroke="#f59e0b"
+                      strokeWidth={2.4 / stageScale}
+                      dash={[7 / stageScale, 4 / stageScale]}
+                      listening={false}
+                    />
+                    {renderMarginAnnotation('pa-margin-l', activeBoundaryBox.minX * SCALE_FACTOR, midY, px1, midY, 'L', marginL)}
+                    {renderMarginAnnotation('pa-margin-r', px2, midY, activeBoundaryBox.maxX * SCALE_FACTOR, midY, 'R', marginR)}
+                    {renderMarginAnnotation('pa-margin-b', midX, activeBoundaryBox.minY * SCALE_FACTOR, midX, py1, 'B', marginB)}
+                    {renderMarginAnnotation('pa-margin-t', midX, py2, midX, activeBoundaryBox.maxY * SCALE_FACTOR, 'T', marginT)}
+                    {handles.map(handle => (
+                      <Rect
+                        key={`pa-handle-${handle.key}`}
+                        x={handle.hx * SCALE_FACTOR}
+                        y={handle.hy * SCALE_FACTOR}
+                        offsetX={handle.w / 2}
+                        offsetY={handle.h / 2}
+                        width={handle.w}
+                        height={handle.h}
+                        cornerRadius={(handle.isCorner ? 1.5 : 3) / stageScale}
+                        fill="#ffffff"
+                        stroke="#f59e0b"
+                        strokeWidth={1.8 / stageScale}
+                        draggable
+                        dragBoundFunc={pixelArrayHandleDragBoundFunc(handle.key)}
+                        onClick={event => { event.cancelBubble = true; }}
+                        onDragMove={event => {
+                          const nx = event.target.x() / SCALE_FACTOR;
+                          const ny = event.target.y() / SCALE_FACTOR;
+                          const next = computeResizedPixelArray(pixelArray, handle.key, nx, ny);
+                          if (next) setPixelArrayResizePreview(next);
+                        }}
+                        onDragEnd={event => {
+                          const nx = event.target.x() / SCALE_FACTOR;
+                          const ny = event.target.y() / SCALE_FACTOR;
+                          const next = computeResizedPixelArray(pixelArray, handle.key, nx, ny);
+                          setPixelArrayResizePreview(null);
+                          if (next) {
+                            try {
+                              updatePixelArrayGeometry(next.x, next.y, next.width, next.height);
+                            } catch (error) {
+                              showErrorToast(error instanceof Error ? error.message : 'Unable to resize the pixel array.');
+                            }
+                          }
+                          const latest = useStore.getState().pixelArray;
+                          if (latest) {
+                            const resetX = handle.key === 'sw' || handle.key === 'nw' || handle.key === 'w'
+                              ? latest.x
+                              : handle.key === 'se' || handle.key === 'ne' || handle.key === 'e'
+                                ? latest.x + latest.width
+                                : latest.x + latest.width / 2;
+                            const resetY = handle.key === 'sw' || handle.key === 'se' || handle.key === 's'
+                              ? latest.y
+                              : handle.key === 'nw' || handle.key === 'ne' || handle.key === 'n'
+                                ? latest.y + latest.height
+                                : latest.y + latest.height / 2;
+                            event.target.x(resetX * SCALE_FACTOR);
+                            event.target.y(resetY * SCALE_FACTOR);
+                          }
+                        }}
+                      />
+                    ))}
+                  </>
+                )}
+
+                {/* Always-reachable top-edge handle pill for clicking, double-clicking, or dragging the Pixel Array */}
+                <Group
+                  name="pixel-array"
+                  x={midX}
+                  y={py2}
+                  draggable
+                  dragBoundFunc={pixelArrayPillDragBoundFunc}
+                  onClick={event => {
+                    event.cancelBubble = true;
+                    setPixelArraySelected(true);
+                  }}
+                  onDragStart={() => {
+                    pixelArrayDragAnchorRef.current = { startX: pixelArray.x, startY: pixelArray.y };
+                    setPixelArraySelected(true);
+                  }}
+                  onDragMove={event => {
+                    setPixelArrayDragPreview({
+                      x: event.target.x() / SCALE_FACTOR - pixelArray.width / 2,
+                      y: event.target.y() / SCALE_FACTOR - pixelArray.height,
+                    });
+                  }}
+                  onDragEnd={event => {
+                    pixelArrayDragAnchorRef.current = null;
+                    setPixelArrayDragPreview(null);
+                    setDragGuide(null);
+                    const nextX = event.target.x() / SCALE_FACTOR - pixelArray.width / 2;
+                    const nextY = event.target.y() / SCALE_FACTOR - pixelArray.height;
+                    try {
+                      updatePixelArrayPosition(nextX, nextY);
+                    } catch (error) {
+                      showErrorToast(error instanceof Error ? error.message : 'Unable to move the pixel array.');
+                    }
+                    const latest = useStore.getState().pixelArray;
+                    if (latest) {
+                      event.target.x((latest.x + latest.width / 2) * SCALE_FACTOR);
+                      event.target.y((latest.y + latest.height) * SCALE_FACTOR);
+                    }
+                  }}
+                >
+                  <Group scaleY={-1}>
+                    <Rect
+                      x={-pillW / 2}
+                      y={-pillH - pillGap}
+                      width={pillW}
+                      height={pillH}
+                      fill={pixelArraySelected ? '#d97706' : 'rgba(109, 40, 217, 0.92)'}
+                      stroke={pixelArraySelected ? '#fef3c7' : 'rgba(233, 213, 255, 0.7)'}
+                      strokeWidth={1.1 / stageScale}
+                      cornerRadius={pillH / 2}
+                    />
+                    <Text
+                      text={pillText}
+                      x={-pillW / 2}
+                      y={-pillH - pillGap + (pillH - pillFontSize) / 2 - 0.5 / stageScale}
+                      width={pillW}
+                      align="center"
+                      fill="#ffffff"
+                      fontSize={pillFontSize}
+                      fontFamily={CANVAS_FONT_MONO}
+                      fontStyle="bold"
+                      listening={false}
+                    />
+                  </Group>
+                </Group>
+              </Group>
+            );
+          })()}
 
           {/* Cadence-style edge picker: source edge first, then ANY target edge across same-level, lower-level sub-cells, higher-level EIP context, shapes, boundary, or rulers. */}
           {edgeAlignmentSession && (() => {
@@ -6077,6 +6477,90 @@ export const FloorplanCanvas: React.FC = () => {
           Pixel Array {formatGridValue(pendingPixelArraySize.width, gridSize)} × {formatGridValue(pendingPixelArraySize.height, gridSize)} µm · Click to place · Esc cancels
         </div>
       )}
+      {edgeAlignmentSession && (() => {
+        const trimmedOffset = edgeAlignmentSession.offset.trim();
+        const parsedOffset = trimmedOffset === '' ? Number.NaN : Number(trimmedOffset);
+        const offsetInvalid = trimmedOffset !== '' && (!Number.isFinite(parsedOffset) || parsedOffset < 0);
+        const hasTargetStep = Boolean(edgeAlignmentSession.sourceEdge);
+        return (
+          <div
+            className={`lpp-palette-bar lpp-palette-bar--align${isEditInPlace ? ' lpp-palette-bar--below-eip' : ''}`}
+            role="toolbar"
+            aria-label="Edge alignment controls"
+          >
+            <span className={`align-pill-dot${hasTargetStep ? ' is-target' : ''}`} aria-hidden="true" />
+            <span className="align-pill-step">
+              {hasTargetStep
+                ? 'Click green/cyan target edge'
+                : 'Click amber source edge'}
+            </span>
+            <span className="lpp-palette-bar__divider" aria-hidden="true" />
+            <label className="align-pill-distance">
+              <span>Distance</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                className={`lpp-input lpp-input--size${offsetInvalid ? ' is-invalid' : ''}`}
+                value={edgeAlignmentSession.offset}
+                onChange={e => setEdgeAlignmentOffset(e.target.value)}
+                onFocus={e => e.currentTarget.select()}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelEdgeAlignment();
+                  } else if (e.key === 'Enter') {
+                    e.currentTarget.blur();
+                  }
+                }}
+                title="Edge-to-edge alignment distance in µm (default 0)"
+                aria-label="Alignment distance in micrometers"
+              />
+              <span className="lpp-unit">µm</span>
+            </label>
+            {trimmedOffset !== '0' ? (
+              <button
+                type="button"
+                className="lpp-chip"
+                onClick={() => setEdgeAlignmentOffset('0')}
+                title="Reset alignment distance to 0 µm"
+              >
+                0
+              </button>
+            ) : lastAlignmentSpacing !== '0' ? (
+              <button
+                type="button"
+                className="lpp-chip"
+                onClick={() => setEdgeAlignmentOffset(lastAlignmentSpacing)}
+                title={`Reuse last distance (${lastAlignmentSpacing} µm)`}
+              >
+                {lastAlignmentSpacing}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="lpp-close-btn"
+              onClick={cancelEdgeAlignment}
+              title="Cancel alignment (Esc)"
+              aria-label="Cancel edge alignment"
+            >
+              <FiX />
+            </button>
+          </div>
+        );
+      })()}
+      {appMode === 'select' && pixelArraySelected && pixelArray?.visible && !edgeAlignmentSession && (() => {
+        const curPa = pixelArrayResizePreview
+          ?? (pixelArrayDragPreview ? { ...pixelArray, ...pixelArrayDragPreview } : pixelArray);
+        const cx = curPa.x + curPa.width / 2;
+        const cy = curPa.y + curPa.height / 2;
+        return (
+          <div className="coordinate-overlay pixel-array-placement-hint">
+            {pixelArrayResizePreview
+              ? `Pixel Array ${formatGridValue(curPa.width, gridSize)} × ${formatGridValue(curPa.height, gridSize)} µm · Center (${formatGridValue(cx, gridSize)}, ${formatGridValue(cy, gridSize)})`
+              : `Pixel Array · Drag pill or handles · Alt+Arrows nudge · A align · Q properties`}
+          </div>
+        );
+      })()}
       {isEditInPlace && (
         <div className="eip-context-banner" role="status" aria-label="Edit in Place context">
           <span className="eip-context-banner__badge">EDIT IN PLACE</span>

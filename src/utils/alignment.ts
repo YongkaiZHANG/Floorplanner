@@ -339,15 +339,23 @@ export const alignInstanceToCoordinate = (
 };
 
 /**
- * Aligns displayed (transformed) block bounds to one fixed reference block.
+ * Aligns displayed (transformed) block bounds to one fixed reference block,
+ * optionally offset by `distance` (default 0):
+ * - `left` / `bottom`: target = anchorEdge + distance (inward / positive)
+ * - `right` / `top`: target = anchorEdge - distance (inward from max edge)
+ * - `horizontal-center` / `vertical-center`: target = anchorCenter + distance
  * The explicit anchorId is used when provided; otherwise the first item is the anchor.
  */
 export const alignInstances = (
   instances: readonly AlignableInstance[],
   operation: AlignmentOperation,
   options: ArrangementOptions,
+  distance = 0,
 ): InstancePosition[] => {
   validateOptions(options);
+  if (!Number.isFinite(distance)) {
+    throw new RangeError('Alignment distance must be a finite number');
+  }
   if (instances.length < 2) return instances.map(({ id, x, y }) => ({ id, x, y }));
 
   const entries = instances.map(instance => ({ instance, bounds: getPhysicalBounds(instance) }));
@@ -355,12 +363,12 @@ export const alignInstances = (
   // Validate that the fixed reference itself is physically compatible with the top cell.
   placeInsideTop(anchor.instance, anchor.instance.x, anchor.instance.y, options);
   let target = 0;
-  if (operation === 'left') target = anchor.bounds.left;
-  else if (operation === 'right') target = anchor.bounds.right;
-  else if (operation === 'bottom') target = anchor.bounds.bottom;
-  else if (operation === 'top') target = anchor.bounds.top;
-  else if (operation === 'horizontal-center') target = anchor.bounds.centerX;
-  else target = anchor.bounds.centerY;
+  if (operation === 'left') target = anchor.bounds.left + distance;
+  else if (operation === 'right') target = anchor.bounds.right - distance;
+  else if (operation === 'bottom') target = anchor.bounds.bottom + distance;
+  else if (operation === 'top') target = anchor.bounds.top - distance;
+  else if (operation === 'horizontal-center') target = anchor.bounds.centerX + distance;
+  else target = anchor.bounds.centerY + distance;
 
   return entries.map(({ instance, bounds }) => {
     if (instance.id === anchor.instance.id) {
@@ -387,6 +395,93 @@ export const alignInstances = (
     }
     return position;
   });
+};
+
+/**
+ * Places two or more blocks sequentially along `axis` with an exact edge-to-edge
+ * spacing `gap` (default 0 = abut flush). The anchor block (`options.anchorId`,
+ * or the leading block if omitted) remains fixed while neighbors pack cleanly
+ * outward on both sides of it.
+ */
+export const spaceInstances = (
+  instances: readonly AlignableInstance[],
+  axis: DistributionAxis,
+  options: ArrangementOptions,
+  gap = 0,
+): InstancePosition[] => {
+  validateOptions(options);
+  if (!Number.isFinite(gap)) {
+    throw new RangeError('Spacing distance must be a finite number');
+  }
+  if (instances.length < 2) return instances.map(({ id, x, y }) => ({ id, x, y }));
+
+  const horizontal = axis === 'horizontal';
+  const entries = instances
+    .map(instance => ({ instance, bounds: getPhysicalBounds(instance) }))
+    .sort((a, b) => {
+      const aMin = horizontal ? a.bounds.left : a.bounds.bottom;
+      const bMin = horizontal ? b.bounds.left : b.bounds.bottom;
+      if (Math.abs(aMin - bMin) > EPSILON) return aMin - bMin;
+      const aCenter = horizontal ? a.bounds.centerX : a.bounds.centerY;
+      const bCenter = horizontal ? b.bounds.centerX : b.bounds.centerY;
+      return aCenter - bCenter || a.instance.id.localeCompare(b.instance.id);
+    });
+
+  const anchorIndex = Math.max(
+    0,
+    entries.findIndex(entry => entry.instance.id === options.anchorId),
+  );
+  const anchor = entries[anchorIndex];
+  placeInsideTop(anchor.instance, anchor.instance.x, anchor.instance.y, options);
+
+  const positions = new Map<string, InstancePosition>();
+  positions.set(anchor.instance.id, { id: anchor.instance.id, x: anchor.instance.x, y: anchor.instance.y });
+
+  // Place blocks after anchor moving forward (+X / +Y)
+  let prevMax = horizontal ? anchor.bounds.right : anchor.bounds.top;
+  for (let i = anchorIndex + 1; i < entries.length; i += 1) {
+    const { instance, bounds } = entries[i];
+    const desiredMin = prevMax + gap;
+    const currentMin = horizontal ? bounds.left : bounds.bottom;
+    const delta = desiredMin - currentMin;
+    const position = placeInsideTop(
+      instance,
+      horizontal ? instance.x + delta : instance.x,
+      horizontal ? instance.y : instance.y + delta,
+      options,
+    );
+    const movedBounds = getPhysicalBounds({ ...instance, ...position });
+    const actualMin = horizontal ? movedBounds.left : movedBounds.bottom;
+    if (Math.abs(actualMin - desiredMin) > 1e-6) {
+      throw new RangeError(`Cannot space ${instance.id} at ${gap} um while keeping it on-grid and inside the top cell`);
+    }
+    positions.set(instance.id, position);
+    prevMax = horizontal ? movedBounds.right : movedBounds.top;
+  }
+
+  // Place blocks before anchor moving backward (-X / -Y)
+  let nextMin = horizontal ? anchor.bounds.left : anchor.bounds.bottom;
+  for (let i = anchorIndex - 1; i >= 0; i -= 1) {
+    const { instance, bounds } = entries[i];
+    const desiredMax = nextMin - gap;
+    const currentMax = horizontal ? bounds.right : bounds.top;
+    const delta = desiredMax - currentMax;
+    const position = placeInsideTop(
+      instance,
+      horizontal ? instance.x + delta : instance.x,
+      horizontal ? instance.y : instance.y + delta,
+      options,
+    );
+    const movedBounds = getPhysicalBounds({ ...instance, ...position });
+    const actualMax = horizontal ? movedBounds.right : movedBounds.top;
+    if (Math.abs(actualMax - desiredMax) > 1e-6) {
+      throw new RangeError(`Cannot space ${instance.id} at ${gap} um while keeping it on-grid and inside the top cell`);
+    }
+    positions.set(instance.id, position);
+    nextMin = horizontal ? movedBounds.left : movedBounds.bottom;
+  }
+
+  return instances.map(instance => positions.get(instance.id)!);
 };
 
 /**
